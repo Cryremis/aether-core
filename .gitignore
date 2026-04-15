@@ -1,0 +1,20 @@
+# AetherCore/.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+.runtime/
+.env
+backend/.env
+*.egg-info/
+node_modules/
+dist/
+.DS_Store
+Thumbs.db
+storage/sessions/
+storage/uploads/
+frontend/.vite/
+frontend/dist/
