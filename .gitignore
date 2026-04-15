@@ -16,5 +16,7 @@ dist/
 Thumbs.db
 storage/sessions/
 storage/uploads/
+backend/storage/sessions/
+backend/storage/uploads/
 frontend/.vite/
 frontend/dist/
