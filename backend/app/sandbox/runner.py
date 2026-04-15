@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -49,8 +51,8 @@ class SandboxRunner:
             raise RuntimeError(f"沙箱命令执行超时，超过 {settings.sandbox_command_timeout_seconds} 秒。") from None
 
         duration_ms = int((time.perf_counter() - started_at) * 1000)
-        stdout = self._truncate(stdout_bytes.decode("utf-8", errors="replace"))
-        stderr = self._truncate(stderr_bytes.decode("utf-8", errors="replace"))
+        stdout = self._truncate(self._decode_output(stdout_bytes))
+        stderr = self._truncate(self._decode_output(stderr_bytes))
 
         log_payload = {
             "command": command,
@@ -75,30 +77,62 @@ class SandboxRunner:
     def _build_shell_command(self, shell: str, command: str) -> tuple[str, list[str]]:
         if shell == "powershell":
             return (
-                "powershell",
+                shutil.which("powershell.exe") or "powershell.exe",
                 ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
             )
         if shell == "bash":
-            return ("bash", ["-lc", command])
+            bash_path = self._resolve_bash()
+            if not bash_path:
+                raise RuntimeError("当前沙箱不可用 bash，请改用 powershell，或在宿主环境安装 Git Bash / WSL。")
+            return (bash_path, ["-lc", command])
         raise RuntimeError(f"暂不支持的 shell 类型: {shell}")
 
+    def _resolve_bash(self) -> str | None:
+        candidates = [
+            shutil.which("bash"),
+            shutil.which("bash.exe"),
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+        ]
+        for candidate in candidates:
+            if candidate and Path(candidate).exists():
+                return candidate
+        return None
+
     def _build_env(self, workspace: SandboxWorkspace) -> dict[str, str]:
-        return {
-            "AETHER_SESSION_ID": workspace.session_id,
-            "AETHER_SANDBOX_ROOT": str(workspace.root),
-            "AETHER_INPUT_DIR": str(workspace.input_dir),
-            "AETHER_SKILLS_DIR": str(workspace.skills_dir),
-            "AETHER_WORK_DIR": str(workspace.work_dir),
-            "AETHER_OUTPUT_DIR": str(workspace.output_dir),
-            "AETHER_LOGS_DIR": str(workspace.logs_dir),
-            "PYTHONIOENCODING": "utf-8",
-        }
+        env = dict(os.environ)
+        env.update(
+            {
+                "AETHER_SESSION_ID": workspace.session_id,
+                "AETHER_SANDBOX_ROOT": str(workspace.root),
+                "AETHER_INPUT_DIR": str(workspace.input_dir),
+                "AETHER_SKILLS_DIR": str(workspace.skills_dir),
+                "AETHER_WORK_DIR": str(workspace.work_dir),
+                "AETHER_OUTPUT_DIR": str(workspace.output_dir),
+                "AETHER_LOGS_DIR": str(workspace.logs_dir),
+                "PYTHONIOENCODING": "utf-8",
+            }
+        )
+        return env
 
     def _validate_command(self, command: str) -> None:
         normalized = f"{command.lower()} "
         for keyword in settings.sandbox_blocked_command_keywords:
             if keyword.lower() in normalized:
                 raise RuntimeError(f"命令触发沙箱拦截规则: {keyword.strip()}")
+
+    def _decode_output(self, value: bytes) -> str:
+        if not value:
+            return ""
+        for encoding in ("utf-8", "utf-16-le", "utf-16", "gbk"):
+            try:
+                decoded = value.decode(encoding)
+                if "\x00" in decoded:
+                    decoded = decoded.replace("\x00", "")
+                return decoded
+            except UnicodeDecodeError:
+                continue
+        return value.decode("utf-8", errors="replace").replace("\x00", "")
 
     def _truncate(self, value: str) -> str:
         if len(value) <= settings.sandbox_output_char_limit:
