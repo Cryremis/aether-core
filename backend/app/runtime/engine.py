@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from app.core.config import settings
 from app.runtime.event_protocol import make_event
@@ -30,9 +31,10 @@ class AgentEngine:
             *session.messages,
         ]
         tools = tool_service.list_tool_schemas(session)
-        final_answer = ""
+        turn_count = 0
+        last_stop_reason: str | None = None
 
-        for round_index in range(1, settings.llm_max_steps + 1):
+        for turn_count in range(1, settings.agent_max_turns + 1):
             assistant_content = ""
             tool_calls: dict[int, dict[str, str]] = {}
             finish_reason = ""
@@ -44,15 +46,17 @@ class AgentEngine:
                 choice = choices[0]
                 delta = choice.get("delta") or {}
                 finish_reason = choice.get("finish_reason") or finish_reason
+                if finish_reason:
+                    last_stop_reason = str(finish_reason)
 
                 reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning") or ""
                 if reasoning_delta:
-                    yield make_event(session, "reasoning_delta", round=round_index, delta=reasoning_delta)
+                    yield make_event(session, "reasoning_delta", round=turn_count, delta=reasoning_delta)
 
                 content_delta = delta.get("content") or ""
                 if content_delta:
                     assistant_content += content_delta
-                    yield make_event(session, "content_delta", round=round_index, delta=content_delta)
+                    yield make_event(session, "content_delta", round=turn_count, delta=content_delta)
 
                 for tool_call in delta.get("tool_calls") or []:
                     index = int(tool_call.get("index", 0))
@@ -75,7 +79,7 @@ class AgentEngine:
                     yield make_event(
                         session,
                         "tool_call_delta",
-                        round=round_index,
+                        round=turn_count,
                         index=index,
                         id=current["id"],
                         tool_name=current["name"],
@@ -84,12 +88,12 @@ class AgentEngine:
                     )
 
             if assistant_content:
-                yield make_event(session, "content_completed", round=round_index)
+                yield make_event(session, "content_completed", round=turn_count)
             for index, tool_call in tool_calls.items():
                 yield make_event(
                     session,
                     "tool_call_completed",
-                    round=round_index,
+                    round=turn_count,
                     index=index,
                     id=tool_call["id"],
                     tool_name=tool_call["name"],
@@ -151,16 +155,62 @@ class AgentEngine:
                 continue
 
             final_answer = assistant_content.strip()
-            if not final_answer and finish_reason != "tool_calls":
-                final_answer = "当前没有拿到明确结论，请补充更具体的任务目标后再试。"
-            break
+            if final_answer:
+                session.messages.append({"role": "assistant", "content": final_answer})
+                yield make_event(session, "message", summary=final_answer)
+                yield make_event(
+                    session,
+                    "result",
+                    subtype="success",
+                    is_error=False,
+                    turn_count=turn_count,
+                    stop_reason=last_stop_reason,
+                    result=final_answer,
+                )
+                yield make_event(
+                    session,
+                    "completed",
+                    elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                    subtype="success",
+                    stop_reason=last_stop_reason,
+                )
+                return
 
-        if not final_answer:
-            final_answer = "我已尝试多轮规划和工具调用，但仍不足以给出可靠结论。"
+            yield make_event(
+                session,
+                "result",
+                subtype="error_empty_response",
+                is_error=True,
+                turn_count=turn_count,
+                stop_reason=last_stop_reason,
+                errors=["模型本轮未返回可用正文。"],
+            )
+            yield make_event(
+                session,
+                "completed",
+                elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                subtype="error_empty_response",
+                stop_reason=last_stop_reason,
+            )
+            return
 
-        session.messages.append({"role": "assistant", "content": final_answer})
-        yield make_event(session, "message", summary=final_answer)
-        yield make_event(session, "completed", elapsed_ms=int((time.perf_counter() - started_at) * 1000))
+        yield make_event(
+            session,
+            "result",
+            subtype="error_max_turns",
+            is_error=True,
+            turn_count=turn_count,
+            max_turns=settings.agent_max_turns,
+            stop_reason=last_stop_reason,
+            errors=[f"已达到最大轮次限制（{settings.agent_max_turns}）。"],
+        )
+        yield make_event(
+            session,
+            "completed",
+            elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+            subtype="error_max_turns",
+            stop_reason=last_stop_reason,
+        )
 
     def _build_system_message(self, session: AgentSession) -> str:
         return self._safe_prompt(session)

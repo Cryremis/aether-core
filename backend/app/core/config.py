@@ -23,8 +23,9 @@ class Settings(BaseSettings):
     llm_model: str = "ep-20260214160206-k72dd"
     llm_api_key: str = ""
     llm_timeout_seconds: int = 180
-    llm_max_steps: int = 8
     llm_max_tokens: int = 4000
+
+    agent_max_turns: int = 24
 
     storage_root: Path = Path("storage")
     sessions_dir_name: str = "sessions"

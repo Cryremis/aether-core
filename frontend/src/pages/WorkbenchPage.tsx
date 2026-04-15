@@ -266,6 +266,17 @@ export function WorkbenchPage() {
           return;
         }
 
+        if (event.type === "result") {
+          const subtype = String(payload.subtype ?? "");
+          if (subtype && subtype !== "success") {
+            const errors = Array.isArray(payload.errors) ? payload.errors.map((item) => String(item)) : [];
+            if (errors.length > 0) {
+              setError(errors[0] ?? "执行失败");
+            }
+          }
+          return;
+        }
+
         if (event.type === "error") {
           const traceText = typeof payload.traceback === "string" ? `\n\n${payload.traceback}` : "";
           appendAssistantBlock(assistantId, {

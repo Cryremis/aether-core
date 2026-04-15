@@ -28,6 +28,7 @@ class AgentEvent(BaseModel):
         "tool_finished",
         "artifact_created",
         "message",
+        "result",
         "completed",
         "error",
     ]
