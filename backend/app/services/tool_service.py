@@ -8,11 +8,11 @@ from typing import Any
 
 import httpx
 
+from app.sandbox.runner import sandbox_runner
 from app.services.artifact_service import artifact_service
 from app.services.file_service import file_service
 from app.services.session_service import AgentSession
 from app.services.skill_service import skill_service
-from app.sandbox.runner import sandbox_runner
 
 
 class ToolService:
@@ -57,7 +57,7 @@ class ToolService:
             ),
             self._schema(
                 "sandbox_shell",
-                "在受限沙箱内执行命令。当前默认 shell 为 powershell，也支持 bash。",
+                "在受限容器沙箱内执行命令，支持 bash 与 powershell。",
                 {
                     "type": "object",
                     "properties": {
@@ -83,7 +83,12 @@ class ToolService:
         if tool_name == "list_skills":
             return {"items": [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]}
         if tool_name == "list_files":
-            return {"items": [item.model_dump(mode="json") for item in artifact_service.list_artifacts(session) + file_service.list_uploads(session)]}
+            return {
+                "items": [
+                    item.model_dump(mode="json")
+                    for item in artifact_service.list_artifacts(session) + file_service.list_uploads(session)
+                ]
+            }
         if tool_name == "read_workspace_file":
             return {
                 "content": file_service.read_text(
@@ -101,7 +106,7 @@ class ToolService:
             return {"artifact": artifact.model_dump(mode="json")}
         if tool_name == "sandbox_shell":
             if session.workspace is None:
-                raise RuntimeError("会话沙箱未初始化。")
+                raise RuntimeError("会话沙箱尚未初始化。")
             result = await sandbox_runner.run_shell(
                 workspace=session.workspace,
                 command=str(arguments["command"]),
@@ -111,6 +116,7 @@ class ToolService:
             return {
                 "command": result.command,
                 "shell": result.shell,
+                "executor": result.executor,
                 "exit_code": result.exit_code,
                 "stdout": result.stdout,
                 "stderr": result.stderr,

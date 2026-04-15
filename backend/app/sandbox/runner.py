@@ -1,21 +1,26 @@
 # backend/app/sandbox/runner.py
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import shutil
 import time
 import uuid
-from pathlib import Path
+from typing import Any
 
 from app.core.config import settings
+from app.sandbox.docker_executor import DockerSandboxExecutor
+from app.sandbox.local_executor import LocalSandboxExecutor
 from app.sandbox.manager import sandbox_manager
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 
 
 class SandboxRunner:
-    """受限子进程执行器。"""
+    """沙箱命令统一入口。"""
+
+    def __init__(self) -> None:
+        self._executors = {
+            "docker": DockerSandboxExecutor(),
+            "local": LocalSandboxExecutor(),
+        }
 
     async def run_shell(
         self,
@@ -26,94 +31,40 @@ class SandboxRunner:
         active_shell = (shell or settings.sandbox_shell).lower()
         self._validate_command(command)
 
-        program, args = self._build_shell_command(active_shell, command)
         log_name = f"cmd_{uuid.uuid4().hex}.json"
         log_path = sandbox_manager.ensure_within_workspace(workspace, workspace.logs_dir / log_name)
+        executor = self._require_executor()
+        available, detail = await executor.check_availability()
+        if not available:
+            if settings.sandbox_fail_closed:
+                raise RuntimeError(f"沙箱执行器不可用，且当前配置为 fail-closed: {detail}")
+            raise RuntimeError(f"沙箱执行器不可用: {detail}")
 
         started_at = time.perf_counter()
-        process = await asyncio.create_subprocess_exec(
-            program,
-            *args,
-            cwd=str(workspace.work_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._build_env(workspace),
-        )
-
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
-                timeout=settings.sandbox_command_timeout_seconds,
+        result = await executor.run_shell(workspace, command, active_shell)
+        if result.duration_ms <= 0:
+            result = SandboxCommandResult(
+                command=result.command,
+                shell=result.shell,
+                executor=result.executor,
+                exit_code=result.exit_code,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                duration_ms=int((time.perf_counter() - started_at) * 1000),
+                log_path=result.log_path,
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
-            raise RuntimeError(f"沙箱命令执行超时，超过 {settings.sandbox_command_timeout_seconds} 秒。") from None
+        return self._write_log(workspace, log_path, result, extra={"availability": detail})
 
-        duration_ms = int((time.perf_counter() - started_at) * 1000)
-        stdout = self._truncate(self._decode_output(stdout_bytes))
-        stderr = self._truncate(self._decode_output(stderr_bytes))
-
-        log_payload = {
-            "command": command,
-            "shell": active_shell,
-            "exit_code": process.returncode,
-            "duration_ms": duration_ms,
-            "stdout": stdout,
-            "stderr": stderr,
+    async def check_status(self) -> dict[str, Any]:
+        executor = self._require_executor()
+        available, detail = await executor.check_availability()
+        return {
+            "executor": settings.sandbox_executor,
+            "available": available,
+            "detail": detail,
+            "fail_closed": settings.sandbox_fail_closed,
+            "allow_network": settings.sandbox_allow_network,
         }
-        log_path.write_text(json.dumps(log_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        return SandboxCommandResult(
-            command=command,
-            shell=active_shell,
-            exit_code=process.returncode or 0,
-            stdout=stdout,
-            stderr=stderr,
-            duration_ms=duration_ms,
-            log_path=str(log_path.relative_to(workspace.root)),
-        )
-
-    def _build_shell_command(self, shell: str, command: str) -> tuple[str, list[str]]:
-        if shell == "powershell":
-            return (
-                shutil.which("powershell.exe") or "powershell.exe",
-                ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
-            )
-        if shell == "bash":
-            bash_path = self._resolve_bash()
-            if not bash_path:
-                raise RuntimeError("当前沙箱不可用 bash，请改用 powershell，或在宿主环境安装 Git Bash / WSL。")
-            return (bash_path, ["-lc", command])
-        raise RuntimeError(f"暂不支持的 shell 类型: {shell}")
-
-    def _resolve_bash(self) -> str | None:
-        candidates = [
-            shutil.which("bash"),
-            shutil.which("bash.exe"),
-            r"C:\Program Files\Git\bin\bash.exe",
-            r"C:\Program Files\Git\usr\bin\bash.exe",
-        ]
-        for candidate in candidates:
-            if candidate and Path(candidate).exists():
-                return candidate
-        return None
-
-    def _build_env(self, workspace: SandboxWorkspace) -> dict[str, str]:
-        env = dict(os.environ)
-        env.update(
-            {
-                "AETHER_SESSION_ID": workspace.session_id,
-                "AETHER_SANDBOX_ROOT": str(workspace.root),
-                "AETHER_INPUT_DIR": str(workspace.input_dir),
-                "AETHER_SKILLS_DIR": str(workspace.skills_dir),
-                "AETHER_WORK_DIR": str(workspace.work_dir),
-                "AETHER_OUTPUT_DIR": str(workspace.output_dir),
-                "AETHER_LOGS_DIR": str(workspace.logs_dir),
-                "PYTHONIOENCODING": "utf-8",
-            }
-        )
-        return env
 
     def _validate_command(self, command: str) -> None:
         normalized = f"{command.lower()} "
@@ -121,23 +72,42 @@ class SandboxRunner:
             if keyword.lower() in normalized:
                 raise RuntimeError(f"命令触发沙箱拦截规则: {keyword.strip()}")
 
-    def _decode_output(self, value: bytes) -> str:
-        if not value:
-            return ""
-        for encoding in ("utf-8", "utf-16-le", "utf-16", "gbk"):
-            try:
-                decoded = value.decode(encoding)
-                if "\x00" in decoded:
-                    decoded = decoded.replace("\x00", "")
-                return decoded
-            except UnicodeDecodeError:
-                continue
-        return value.decode("utf-8", errors="replace").replace("\x00", "")
+    def _require_executor(self):
+        executor = self._executors.get(settings.sandbox_executor.lower())
+        if executor is None:
+            raise RuntimeError(f"未知沙箱执行器: {settings.sandbox_executor}")
+        return executor
 
-    def _truncate(self, value: str) -> str:
-        if len(value) <= settings.sandbox_output_char_limit:
-            return value
-        return f"{value[:settings.sandbox_output_char_limit]}\n\n[输出已截断]"
+    def _write_log(
+        self,
+        workspace: SandboxWorkspace,
+        log_path,
+        result: SandboxCommandResult,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> SandboxCommandResult:
+        log_payload = {
+            "command": result.command,
+            "shell": result.shell,
+            "executor": result.executor,
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+        if extra:
+            log_payload["extra"] = extra
+        log_path.write_text(json.dumps(log_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return SandboxCommandResult(
+            command=result.command,
+            shell=result.shell,
+            executor=result.executor,
+            exit_code=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            duration_ms=result.duration_ms,
+            log_path=str(log_path.relative_to(workspace.root)),
+        )
 
 
 sandbox_runner = SandboxRunner()

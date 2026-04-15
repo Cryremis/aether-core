@@ -30,11 +30,17 @@ class Settings(BaseSettings):
     sessions_dir_name: str = "sessions"
     built_in_skills_dir: Path = Path("storage/built_in_skills")
 
-    sandbox_shell: str = "powershell"
+    sandbox_executor: str = "docker"
+    sandbox_fail_closed: bool = True
+    sandbox_local_enabled: bool = False
+    sandbox_shell: str = "bash"
     sandbox_command_timeout_seconds: int = 120
     sandbox_output_char_limit: int = 12000
     sandbox_file_read_limit_bytes: int = 131072
     sandbox_allow_network: bool = False
+    sandbox_env_whitelist: list[str] = Field(
+        default_factory=lambda: ["PATH", "PATHEXT", "SYSTEMROOT", "COMSPEC"]
+    )
     sandbox_blocked_command_keywords: list[str] = Field(
         default_factory=lambda: [
             "curl ",
@@ -54,6 +60,25 @@ class Settings(BaseSettings):
             "format-volume",
             "mount ",
             "dism ",
+        ]
+    )
+    sandbox_docker_command: str = "docker"
+    sandbox_docker_image: str = "aethercore-sandbox:latest"
+    sandbox_docker_workspace_mount: str = "/workspace"
+    sandbox_docker_work_dir: str = "/workspace/work"
+    sandbox_docker_input_dir: str = "/workspace/input"
+    sandbox_docker_output_dir: str = "/workspace/output"
+    sandbox_docker_skills_dir: str = "/workspace/skills"
+    sandbox_docker_logs_dir: str = "/workspace/logs"
+    sandbox_docker_user: str = "sandbox"
+    sandbox_docker_memory: str = "1g"
+    sandbox_docker_cpus: str = "1.0"
+    sandbox_docker_pids_limit: int = 128
+    sandbox_docker_read_only_rootfs: bool = True
+    sandbox_docker_tmpfs: list[str] = Field(
+        default_factory=lambda: [
+            "/tmp:size=256m",
+            "/var/tmp:size=64m",
         ]
     )
 

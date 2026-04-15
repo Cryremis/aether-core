@@ -23,6 +23,7 @@ class SandboxCommandResult:
 
     command: str
     shell: str
+    executor: str
     exit_code: int
     stdout: str
     stderr: str
