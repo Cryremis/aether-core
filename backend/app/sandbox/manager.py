@@ -1,4 +1,5 @@
 # backend/app/sandbox/manager.py
+import os
 from pathlib import Path
 
 from app.core.config import settings
@@ -39,9 +40,10 @@ class SandboxManager:
         )
 
     def ensure_within_workspace(self, workspace: SandboxWorkspace, target: Path) -> Path:
-        resolved = target.resolve()
-        root = workspace.root.resolve()
-        if resolved != root and root not in resolved.parents:
+        resolved = target.resolve(strict=False)
+        root = workspace.root.resolve(strict=False)
+        common = Path(os.path.commonpath([str(root), str(resolved)]))
+        if common != root:
             raise ValueError("目标路径超出沙箱范围。")
         return resolved
 

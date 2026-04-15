@@ -85,7 +85,7 @@ a {
 .sidebar-card__header p {
   margin: 6px 0 0;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.5;
   color: #64748b;
 }
 
@@ -110,9 +110,9 @@ a {
 }
 
 .sidebar-item p {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   color: #64748b;
-  line-height: 1.6;
+  line-height: 1.5;
   font-size: 13px;
 }
 
@@ -175,7 +175,7 @@ a {
 
 .skill-badge {
   display: inline-flex;
-  margin-top: 10px;
+  margin-top: 8px;
   padding: 4px 10px;
   border-radius: 999px;
   background: rgba(37, 99, 235, 0.08);
@@ -205,12 +205,12 @@ a {
 .assistant-stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .chat-row {
   display: flex;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .chat-row.is-user {
@@ -222,16 +222,15 @@ a {
 }
 
 .chat-bubble {
-  max-width: 100%;
-  min-width: 180px;
-  padding: 16px 18px;
+  max-width: min(100%, 920px);
+  padding: 14px 16px;
   border-radius: 24px;
-  line-height: 1.72;
-  white-space: pre-wrap;
   word-break: break-word;
 }
 
 .chat-bubble.is-user {
+  width: fit-content;
+  max-width: min(100%, 920px);
   background: linear-gradient(135deg, #2563eb, #1d4ed8);
   color: #fff;
   border-top-right-radius: 8px;
@@ -246,77 +245,110 @@ a {
 }
 
 .chat-bubble.is-tool {
-  width: min(100%, 920px);
-}
-
-.chat-bubble.is-reasoning {
-  background: rgba(239, 246, 255, 0.88);
-  color: #1d4ed8;
-  border-style: dashed;
+  width: min(100%, 560px);
+  padding: 12px 14px;
 }
 
 .chat-bubble__content {
   font-size: 14px;
+  line-height: 1.65;
 }
 
-.trace-block {
-  margin-top: 14px;
-  border-top: 1px solid rgba(148, 163, 184, 0.18);
-  padding-top: 12px;
+.bubble-reasoning {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.07), rgba(37, 99, 235, 0.02));
+  border: 1px dashed rgba(37, 99, 235, 0.18);
+  color: rgba(37, 99, 235, 0.92);
+}
+
+.bubble-reasoning:last-child {
+  margin-bottom: 0;
+}
+
+.bubble-reasoning__label {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(37, 99, 235, 0.68);
 }
 
 .chat-bubble pre {
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   padding: 12px 13px;
   border-radius: 14px;
   background: #0f172a;
   color: #dbeafe;
   overflow: auto;
   font-size: 12px;
-  line-height: 1.65;
+  line-height: 1.6;
   white-space: pre-wrap;
+}
+
+.markdown-body :first-child {
+  margin-top: 0;
+}
+
+.markdown-body :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body pre,
+.markdown-body blockquote {
+  margin: 0;
+}
+
+.markdown-body p + p,
+.markdown-body p + ul,
+.markdown-body p + ol,
+.markdown-body ul + p,
+.markdown-body ol + p,
+.markdown-body blockquote + p,
+.markdown-body p + blockquote {
+  margin-top: 8px;
+}
+
+.markdown-body code {
+  padding: 0 4px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.16);
+  font-family: Consolas, monospace;
+  font-size: 0.95em;
+}
+
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
 }
 
 .tool-summary {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  justify-content: space-between;
+  gap: 14px;
   cursor: pointer;
   list-style: none;
-  color: #0f172a;
-  font-size: 14px;
-  font-weight: 600;
 }
 
 .tool-summary::-webkit-details-marker {
   display: none;
 }
 
-.tool-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 10px;
-}
-
-.tool-item {
-  padding: 12px;
-  border-radius: 16px;
-  background: rgba(239, 246, 255, 0.7);
-  border: 1px solid rgba(59, 130, 246, 0.12);
-}
-
-.tool-item__header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+.tool-summary__title {
+  font-size: 14px;
+  font-weight: 700;
   color: #0f172a;
-  font-size: 13px;
 }
 
-.tool-item__header span {
-  color: #2563eb;
+.tool-summary__meta {
+  font-size: 12px;
+  color: #64748b;
 }
 
 .chat-composer {
@@ -409,7 +441,9 @@ a {
     padding: 16px;
   }
 
-  .chat-bubble {
+  .chat-bubble,
+  .chat-bubble.is-user,
+  .chat-bubble.is-tool {
     width: 100%;
     min-width: 0;
   }

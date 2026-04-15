@@ -1,4 +1,5 @@
 // frontend/src/pages/WorkbenchPage.tsx
+import { marked } from "marked";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -25,39 +26,32 @@ type SkillItem = {
 };
 
 type AssistantBlock =
-  | {
-      id: string;
-      kind: "reasoning";
-      content: string;
-    }
-  | {
-      id: string;
-      kind: "content";
-      content: string;
-      status: "streaming" | "done";
-    }
+  | { id: string; kind: "reasoning"; content: string }
+  | { id: string; kind: "content"; content: string; status: "streaming" | "done" }
   | {
       id: string;
       kind: "tool";
-      name: string;
+      title: string;
+      meta: string;
       argumentsText: string;
       outputText: string;
       status: "running" | "done";
     };
 
+type AssistantSegment =
+  | { id: string; kind: "bubble"; blocks: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" }>> }
+  | { id: string; kind: "tool"; block: Extract<AssistantBlock, { kind: "tool" }> };
+
 type ChatMessage =
-  | {
-      id: string;
-      role: "user";
-      content: string;
-    }
-  | {
-      id: string;
-      role: "assistant";
-      blocks: AssistantBlock[];
-    };
+  | { id: string; role: "user"; content: string }
+  | { id: string; role: "assistant"; blocks: AssistantBlock[] };
 
 type SidebarView = "files" | "skills";
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
 
 export function WorkbenchPage() {
   const [sessionId, setSessionId] = useState("");
@@ -94,20 +88,6 @@ export function WorkbenchPage() {
         const nextSessionId = result.data.session_id as string;
         setSessionId(nextSessionId);
         await refreshSession(nextSessionId);
-        setMessages([
-          {
-            id: "welcome-assistant",
-            role: "assistant",
-            blocks: [
-              {
-                id: "welcome-content",
-                kind: "content",
-                content: "已进入工作台。你可以上传文件、安装技能，或直接让我在沙箱里处理任务。",
-                status: "done",
-              },
-            ],
-          },
-        ]);
       } catch (bootError) {
         setError(bootError instanceof Error ? bootError.message : "初始化失败");
       }
@@ -145,13 +125,20 @@ export function WorkbenchPage() {
     setMessages((current) =>
       current.map((item) =>
         item.id === messageId && item.role === "assistant"
-          ? {
-              ...item,
-              blocks: item.blocks.map((block) => (block.id === blockId ? updater(block) : block)),
-            }
+          ? { ...item, blocks: item.blocks.map((block) => (block.id === blockId ? updater(block) : block)) }
           : item,
       ),
     );
+  };
+
+  const getToolDisplay = (toolName: string, inputValue: Record<string, unknown>) => {
+    if (toolName === "sandbox_shell") {
+      const rawCommand = String(inputValue.command ?? "").trim();
+      const firstToken = rawCommand.split(/\s+/)[0] || "shell";
+      const shellName = String(inputValue.shell ?? "powershell");
+      return { title: firstToken, meta: shellName };
+    }
+    return { title: toolName, meta: "tool" };
   };
 
   const handleSend = async () => {
@@ -164,20 +151,13 @@ export function WorkbenchPage() {
     setInput("");
     setMessages((current) => [
       ...current,
-      {
-        id: `user-${Date.now()}`,
-        role: "user",
-        content: userText,
-      },
-      {
-        id: assistantId,
-        role: "assistant",
-        blocks: [],
-      },
+      { id: `user-${Date.now()}`, role: "user", content: userText },
+      { id: assistantId, role: "assistant", blocks: [] },
     ]);
 
     let activeReasoningId = "";
     let activeContentId = "";
+    let activeContentText = "";
 
     try {
       await streamChat(sessionId, userText, (event) => {
@@ -202,19 +182,19 @@ export function WorkbenchPage() {
         }
 
         if (event.type === "content_delta") {
-          activeReasoningId = "";
+          activeContentText += String(payload.delta ?? "");
           if (!activeContentId) {
             activeContentId = `content-${Date.now()}-${Math.random()}`;
             appendAssistantBlock(assistantId, {
               id: activeContentId,
               kind: "content",
-              content: String(payload.delta ?? ""),
+              content: activeContentText,
               status: "streaming",
             });
           } else {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
               block.kind === "content"
-                ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` }
+                ? { ...block, content: activeContentText, status: "streaming" }
                 : block,
             );
           }
@@ -222,23 +202,29 @@ export function WorkbenchPage() {
         }
 
         if (event.type === "content_completed") {
-          if (activeContentId) {
+          if (activeContentId && activeContentText) {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, status: "done" } : block,
+              block.kind === "content"
+                ? { ...block, content: activeContentText, status: "done" }
+                : block,
             );
           }
-          activeContentId = "";
+          activeReasoningId = "";
           return;
         }
 
         if (event.type === "tool_started") {
           activeReasoningId = "";
           activeContentId = "";
+          activeContentText = "";
+          const toolInput = (payload.input ?? {}) as Record<string, unknown>;
+          const display = getToolDisplay(String(payload.tool_name ?? "tool"), toolInput);
           appendAssistantBlock(assistantId, {
             id: String(payload.id ?? `tool-${Date.now()}`),
             kind: "tool",
-            name: String(payload.tool_name ?? "未命名工具"),
-            argumentsText: JSON.stringify(payload.input ?? {}, null, 2),
+            title: display.title,
+            meta: display.meta,
+            argumentsText: JSON.stringify(toolInput ?? {}, null, 2),
             outputText: "",
             status: "running",
           });
@@ -248,11 +234,7 @@ export function WorkbenchPage() {
         if (event.type === "tool_finished") {
           updateAssistantBlock(assistantId, String(payload.id), (block) =>
             block.kind === "tool"
-              ? {
-                  ...block,
-                  outputText: JSON.stringify(payload.output ?? {}, null, 2),
-                  status: "done",
-                }
+              ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" }
               : block,
           );
           void refreshSession(sessionId);
@@ -260,6 +242,7 @@ export function WorkbenchPage() {
         }
 
         if (event.type === "message" && typeof payload.summary === "string") {
+          activeContentText = payload.summary;
           if (activeContentId) {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
               block.kind === "content"
@@ -267,10 +250,11 @@ export function WorkbenchPage() {
                 : block,
             );
           } else {
+            activeContentId = `content-${Date.now()}-${Math.random()}`;
             appendAssistantBlock(assistantId, {
-              id: `content-final-${Date.now()}`,
+              id: activeContentId,
               kind: "content",
-              content: payload.summary as string,
+              content: payload.summary,
               status: "done",
             });
           }
@@ -283,12 +267,12 @@ export function WorkbenchPage() {
         }
 
         if (event.type === "error") {
-          const traceText =
-            typeof payload.traceback === "string" ? `\n\n${payload.traceback}` : "";
+          const traceText = typeof payload.traceback === "string" ? `\n\n${payload.traceback}` : "";
           appendAssistantBlock(assistantId, {
             id: `tool-error-${Date.now()}`,
             kind: "tool",
-            name: "错误",
+            title: "执行错误",
+            meta: "error",
             argumentsText: "",
             outputText: `${String(payload.message ?? "执行失败")}${traceText}`,
             status: "done",
@@ -334,24 +318,39 @@ export function WorkbenchPage() {
     }
   };
 
+  const renderMarkdown = (value: string) => ({ __html: marked.parse(value) as string });
+
+  const renderAssistantSegments = (blocks: AssistantBlock[]): AssistantSegment[] => {
+    const segments: AssistantSegment[] = [];
+    let currentBubble: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" }>> = [];
+
+    for (const block of blocks) {
+      if (block.kind === "tool") {
+        if (currentBubble.length > 0) {
+          segments.push({ id: `bubble-${currentBubble[0].id}`, kind: "bubble", blocks: currentBubble });
+          currentBubble = [];
+        }
+        segments.push({ id: `tool-${block.id}`, kind: "tool", block });
+        continue;
+      }
+      currentBubble.push(block);
+    }
+
+    if (currentBubble.length > 0) {
+      segments.push({ id: `bubble-${currentBubble[0].id}`, kind: "bubble", blocks: currentBubble });
+    }
+
+    return segments;
+  };
+
   return (
     <main className="chat-workbench">
       <aside className="chat-sidebar">
         <div className="chat-sidebar__desktop">
           <section className="sidebar-card">
             <div className="sidebar-switcher">
-              <button
-                className={`sidebar-tab ${sidebarView === "files" ? "is-active" : ""}`}
-                onClick={() => setSidebarView("files")}
-              >
-                文件
-              </button>
-              <button
-                className={`sidebar-tab ${sidebarView === "skills" ? "is-active" : ""}`}
-                onClick={() => setSidebarView("skills")}
-              >
-                技能
-              </button>
+              <button className={`sidebar-tab ${sidebarView === "files" ? "is-active" : ""}`} onClick={() => setSidebarView("files")}>文件</button>
+              <button className={`sidebar-tab ${sidebarView === "skills" ? "is-active" : ""}`} onClick={() => setSidebarView("skills")}>技能</button>
             </div>
 
             {sidebarView === "files" ? (
@@ -359,18 +358,11 @@ export function WorkbenchPage() {
                 <div className="sidebar-card__header">
                   <div>
                     <h2>会话文件</h2>
-                    <p>当前生命周期内上传与产出的所有文件</p>
+                    <p>当前会话生命周期内上传与产出的所有文件</p>
                   </div>
                   <label className="sidebar-button">
                     <span>上传</span>
-                    <input
-                      type="file"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        void handleUpload(file);
-                        event.currentTarget.value = "";
-                      }}
-                    />
+                    <input type="file" onChange={(event) => { const file = event.target.files?.[0]; void handleUpload(file); event.currentTarget.value = ""; }} />
                   </label>
                 </div>
                 <div className="sidebar-list">
@@ -379,9 +371,7 @@ export function WorkbenchPage() {
                     <article key={item.file_id} className="sidebar-item">
                       <strong>{item.name}</strong>
                       <p>{item.category} · {item.size} bytes</p>
-                      <a className="download-link" href={getDownloadUrl(sessionId, item.file_id)} target="_blank" rel="noreferrer">
-                        下载
-                      </a>
+                      <a className="download-link" href={getDownloadUrl(sessionId, item.file_id)} target="_blank" rel="noreferrer">下载</a>
                     </article>
                   ))}
                 </div>
@@ -397,15 +387,8 @@ export function WorkbenchPage() {
                 <div className="skill-form">
                   <input value={skillName} onChange={(event) => setSkillName(event.target.value)} placeholder="技能名称" />
                   <input value={skillDescription} onChange={(event) => setSkillDescription(event.target.value)} placeholder="技能描述" />
-                  <textarea
-                    className="composer-textarea skill-textarea"
-                    value={skillContent}
-                    onChange={(event) => setSkillContent(event.target.value)}
-                    placeholder="输入 SKILL.md 主体内容"
-                  />
-                  <button className="sidebar-button sidebar-button--solid" disabled={!canUploadSkill} onClick={handleUploadSkill}>
-                    上传技能
-                  </button>
+                  <textarea className="composer-textarea skill-textarea" value={skillContent} onChange={(event) => setSkillContent(event.target.value)} placeholder="输入 SKILL.md 主体内容" />
+                  <button className="sidebar-button sidebar-button--solid" disabled={!canUploadSkill} onClick={handleUploadSkill}>上传技能</button>
                 </div>
                 <div className="sidebar-list">
                   {skills.length === 0 ? <span className="empty-text">暂无技能</span> : null}
@@ -423,18 +406,8 @@ export function WorkbenchPage() {
         </div>
 
         <div className="chat-sidebar__mobile">
-          <button
-            className={`sidebar-tab ${sidebarView === "files" ? "is-active" : ""}`}
-            onClick={() => setSidebarView("files")}
-          >
-            文件
-          </button>
-          <button
-            className={`sidebar-tab ${sidebarView === "skills" ? "is-active" : ""}`}
-            onClick={() => setSidebarView("skills")}
-          >
-            技能
-          </button>
+          <button className={`sidebar-tab ${sidebarView === "files" ? "is-active" : ""}`} onClick={() => setSidebarView("files")}>文件</button>
+          <button className={`sidebar-tab ${sidebarView === "skills" ? "is-active" : ""}`} onClick={() => setSidebarView("skills")}>技能</button>
         </div>
       </aside>
 
@@ -445,36 +418,41 @@ export function WorkbenchPage() {
           {messages.map((message) =>
             message.role === "user" ? (
               <article key={message.id} className="chat-row is-user">
-                <div className="chat-bubble is-user">
-                  <div className="chat-bubble__content">{message.content}</div>
+                <div className="chat-bubble is-user user-bubble">
+                  <div className="chat-bubble__content markdown-body" dangerouslySetInnerHTML={renderMarkdown(message.content)} />
                 </div>
               </article>
             ) : (
               <article key={message.id} className="assistant-stack">
-                {message.blocks.map((block) => {
-                  if (block.kind === "tool") {
-                    return (
-                      <article key={block.id} className="chat-row is-assistant">
-                        <details className="chat-bubble is-assistant is-tool">
-                          <summary className="tool-summary">
-                            <span>{block.name}</span>
-                            <span>{block.status === "running" ? "执行中" : "查看详情"}</span>
-                          </summary>
-                          {block.argumentsText ? <pre>{block.argumentsText}</pre> : null}
-                          {block.outputText ? <pre>{block.outputText}</pre> : null}
-                        </details>
-                      </article>
-                    );
-                  }
-
-                  return (
-                    <article key={block.id} className="chat-row is-assistant">
-                      <div className={`chat-bubble is-assistant ${block.kind === "reasoning" ? "is-reasoning" : ""}`}>
-                        <div className="chat-bubble__content">{block.content}</div>
+                {renderAssistantSegments(message.blocks).map((segment) =>
+                  segment.kind === "tool" ? (
+                    <article key={segment.id} className="chat-row is-assistant">
+                      <details className="chat-bubble is-assistant is-tool">
+                        <summary className="tool-summary">
+                          <span className="tool-summary__title">{segment.block.title}</span>
+                          <span className="tool-summary__meta">{segment.block.meta} · {segment.block.status === "running" ? "执行中" : "详情"}</span>
+                        </summary>
+                        {segment.block.argumentsText ? <pre>{segment.block.argumentsText}</pre> : null}
+                        {segment.block.outputText ? <pre>{segment.block.outputText}</pre> : null}
+                      </details>
+                    </article>
+                  ) : (
+                    <article key={segment.id} className="chat-row is-assistant">
+                      <div className="chat-bubble is-assistant">
+                        {segment.blocks.map((block) =>
+                          block.kind === "reasoning" ? (
+                            <div key={block.id} className="bubble-reasoning">
+                              <div className="bubble-reasoning__label">Thinking</div>
+                              <div className="markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
+                            </div>
+                          ) : (
+                            <div key={block.id} className="chat-bubble__content markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
+                          ),
+                        )}
                       </div>
                     </article>
-                  );
-                })}
+                  ),
+                )}
               </article>
             ),
           )}
@@ -486,13 +464,17 @@ export function WorkbenchPage() {
             className="composer-textarea"
             value={input}
             onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void handleSend();
+              }
+            }}
             placeholder="输入任务，例如：读取上传文件，执行脚本，并生成可下载结果。"
           />
           <div className="composer-actions">
-            <span className="composer-tip">{busy ? "正在处理，请稍候" : "Enter 发送，支持连续多轮聊天"}</span>
-            <button className="send-button" disabled={!canSend} onClick={handleSend}>
-              {busy ? "处理中" : "发送"}
-            </button>
+            <span className="composer-tip">{busy ? "正在处理，请稍候" : "Enter 发送，Shift + Enter 换行"}</span>
+            <button className="send-button" disabled={!canSend} onClick={handleSend}>{busy ? "处理中" : "发送"}</button>
           </div>
         </footer>
       </section>
@@ -505,14 +487,7 @@ export function WorkbenchPage() {
                 <h2>会话文件</h2>
                 <label className="sidebar-button">
                   <span>上传</span>
-                  <input
-                    type="file"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      void handleUpload(file);
-                      event.currentTarget.value = "";
-                    }}
-                  />
+                  <input type="file" onChange={(event) => { const file = event.target.files?.[0]; void handleUpload(file); event.currentTarget.value = ""; }} />
                 </label>
               </div>
               <div className="sidebar-list">
@@ -521,30 +496,19 @@ export function WorkbenchPage() {
                   <article key={item.file_id} className="sidebar-item">
                     <strong>{item.name}</strong>
                     <p>{item.category} · {item.size} bytes</p>
-                    <a className="download-link" href={getDownloadUrl(sessionId, item.file_id)} target="_blank" rel="noreferrer">
-                      下载
-                    </a>
+                    <a className="download-link" href={getDownloadUrl(sessionId, item.file_id)} target="_blank" rel="noreferrer">下载</a>
                   </article>
                 ))}
               </div>
             </>
           ) : (
             <>
-              <div className="sidebar-card__header">
-                <h2>技能管理</h2>
-              </div>
+              <div className="sidebar-card__header"><h2>技能管理</h2></div>
               <div className="skill-form">
                 <input value={skillName} onChange={(event) => setSkillName(event.target.value)} placeholder="技能名称" />
                 <input value={skillDescription} onChange={(event) => setSkillDescription(event.target.value)} placeholder="技能描述" />
-                <textarea
-                  className="composer-textarea skill-textarea"
-                  value={skillContent}
-                  onChange={(event) => setSkillContent(event.target.value)}
-                  placeholder="输入 SKILL.md 主体内容"
-                />
-                <button className="sidebar-button sidebar-button--solid" disabled={!canUploadSkill} onClick={handleUploadSkill}>
-                  上传技能
-                </button>
+                <textarea className="composer-textarea skill-textarea" value={skillContent} onChange={(event) => setSkillContent(event.target.value)} placeholder="输入 SKILL.md 主体内容" />
+                <button className="sidebar-button sidebar-button--solid" disabled={!canUploadSkill} onClick={handleUploadSkill}>上传技能</button>
               </div>
               <div className="sidebar-list">
                 {skills.length === 0 ? <span className="empty-text">暂无技能</span> : null}

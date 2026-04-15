@@ -5,11 +5,9 @@ import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from typing import Any
 
 from app.core.config import settings
 from app.runtime.event_protocol import make_event
-from app.services.artifact_service import artifact_service
 from app.services.llm_client import llm_client
 from app.services.session_service import AgentSession
 from app.services.tool_service import tool_service
@@ -27,13 +25,7 @@ class AgentEngine:
         session.messages.append({"role": "user", "content": message})
         session.touch()
 
-        yield make_event(
-            session,
-            "reasoning_delta",
-            delta="已接收请求，正在整理宿主上下文、技能提示词与工具清单。",
-        )
-
-        messages: list[dict[str, Any]] = [
+        messages: list[dict[str, object]] = [
             {"role": "system", "content": self._build_system_message(session)},
             *session.messages,
         ]
@@ -42,7 +34,7 @@ class AgentEngine:
 
         for round_index in range(1, settings.llm_max_steps + 1):
             assistant_content = ""
-            tool_calls: dict[int, dict[str, Any]] = {}
+            tool_calls: dict[int, dict[str, str]] = {}
             finish_reason = ""
 
             async for chunk in llm_client.stream_chat_completion(messages=messages, tools=tools):
@@ -104,7 +96,7 @@ class AgentEngine:
                     arguments=tool_call["arguments"],
                 )
 
-            assistant_message: dict[str, Any] = {"role": "assistant"}
+            assistant_message: dict[str, object] = {"role": "assistant"}
             if assistant_content:
                 assistant_message["content"] = assistant_content
 
@@ -132,7 +124,13 @@ class AgentEngine:
                         tool_name=tool_name,
                         input=tool_input,
                     )
-                    result = await tool_service.execute(session, tool_name, tool_input)
+                    try:
+                        result = await tool_service.execute(session, tool_name, tool_input)
+                    except Exception as exc:  # noqa: BLE001
+                        result = {
+                            "error": str(exc),
+                            "summary": f"工具执行失败: {exc}",
+                        }
                     yield make_event(
                         session,
                         "tool_finished",
@@ -140,7 +138,7 @@ class AgentEngine:
                         tool_name=tool_name,
                         output=result,
                     )
-                    artifact_payload = result.get("artifact")
+                    artifact_payload = result.get("artifact") if isinstance(result, dict) else None
                     if artifact_payload:
                         yield make_event(session, "artifact_created", artifact=artifact_payload)
                     messages.append(
@@ -159,13 +157,6 @@ class AgentEngine:
 
         if not final_answer:
             final_answer = "我已尝试多轮规划和工具调用，但仍不足以给出可靠结论。"
-
-        answer_artifact = artifact_service.create_text_artifact(
-            session=session,
-            name="assistant-latest.md",
-            content=final_answer,
-        )
-        yield make_event(session, "artifact_created", artifact=answer_artifact.model_dump(mode="json"))
 
         session.messages.append({"role": "assistant", "content": final_answer})
         yield make_event(session, "message", summary=final_answer)
