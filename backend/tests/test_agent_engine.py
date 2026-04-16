@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 from app.core.config import settings
 from app.runtime.engine import agent_engine
 from app.services.session_service import AgentSession
+from app.services.store import store_service
 
 
 async def collect_stream(session: AgentSession, message: str) -> list[dict]:
@@ -16,7 +18,17 @@ async def collect_stream(session: AgentSession, message: str) -> list[dict]:
     return events
 
 
-def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypatch):
+def initialize_store(tmp_path: Path) -> None:
+    storage_root = tmp_path / "storage"
+    store_service._db_path = storage_root / "aethercore-test.db"
+    store_service._db_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.storage_root = storage_root
+    store_service.initialize()
+
+
+def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+
     async def fake_stream_chat_completion(messages, tools) -> AsyncGenerator[dict, None]:
         yield {
             "choices": [
@@ -41,9 +53,12 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
     assert result_events[0]["payload"]["subtype"] == "success"
     assert result_events[0]["payload"]["result"] == "这是模型真实返回的最终答案"
     assert session.messages[-1]["content"] == "这是模型真实返回的最终答案"
+    assert session.messages[-1]["blocks"][-1]["kind"] == "content"
 
 
-def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monkeypatch):
+def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+
     rounds = [
         {
             "choices": [
@@ -126,3 +141,4 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
     assert result_events[0]["payload"]["subtype"] == "success"
     assert result_events[0]["payload"]["result"] == "重复工具调用后仍然继续完成任务"
     assert all(item["payload"].get("subtype") != "error_stalled" for item in result_events)
+    assert any(block["kind"] == "tool" for block in session.messages[-1]["blocks"])

@@ -1,18 +1,37 @@
 # backend/app/api/routes/skills.py
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.api.deps import AuthContext, get_auth_context
 from app.schemas.common import ApiResponse
 from app.services.session_service import session_service
 from app.services.skill_service import skill_service
+from app.services.store import store_service
 
 router = APIRouter(prefix="/api/v1/agent/skills", tags=["skills"])
 
 
-@router.get("")
-def list_skills(session_id: str | None = None) -> ApiResponse:
-    """列出内置技能、宿主注入技能与上传技能。"""
+def _ensure_session_access(session_id: str, auth: AuthContext):
+    conversation = store_service.get_conversation_by_session(session_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if auth.kind == "admin":
+        if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
+            raise HTTPException(status_code=403, detail="无权访问该会话")
+    elif auth.kind == "embed":
+        if (
+            conversation.get("conversation_id") != auth.conversation_id
+            or conversation.get("platform_id") != auth.platform_id
+            or conversation.get("external_user_id") != auth.external_user_id
+        ):
+            raise HTTPException(status_code=403, detail="无权访问该会话")
+    else:
+        raise HTTPException(status_code=401, detail="未授权")
+    return session_service.get_or_create(session_id)
 
-    session = session_service.get_or_create(session_id)
+
+@router.get("")
+def list_skills(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    session = _ensure_session_access(session_id, auth)
     items = [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]
     return ApiResponse(message="技能列表", data=items)
 
@@ -26,10 +45,9 @@ async def upload_skill(
     allowed_tools: str = Form(default=""),
     tags: str = Form(default="upload"),
     skill_file: UploadFile | None = File(default=None),
+    auth: AuthContext = Depends(get_auth_context),
 ) -> ApiResponse:
-    """上传并安装用户自定义技能。"""
-
-    session = session_service.get_or_create(session_id)
+    session = _ensure_session_access(session_id, auth)
     raw_content = content or ""
     if skill_file is not None:
         raw_content = (await skill_file.read()).decode("utf-8", errors="replace")

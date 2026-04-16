@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.schemas.files import FileRecord
 from app.sandbox.manager import sandbox_manager
-from app.services.session_service import AgentSession
+from app.services.session_service import AgentSession, session_service
 
 
 class ArtifactService:
@@ -64,7 +64,7 @@ class ArtifactService:
             category="artifact",
         )
         session.artifacts.append(record.model_dump(mode="json"))
-        session.touch()
+        session_service.persist(session)
         return record
 
 

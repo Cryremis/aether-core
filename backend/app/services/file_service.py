@@ -10,7 +10,7 @@ from fastapi import UploadFile
 from app.core.config import settings
 from app.schemas.files import FileRecord
 from app.sandbox.manager import sandbox_manager
-from app.services.session_service import AgentSession
+from app.services.session_service import AgentSession, session_service
 
 
 class FileService:
@@ -39,7 +39,7 @@ class FileService:
             category="upload",
         )
         session.uploads.append(record.model_dump(mode="json"))
-        session.touch()
+        session_service.persist(session)
         return record
 
     def list_uploads(self, session: AgentSession) -> list[FileRecord]:

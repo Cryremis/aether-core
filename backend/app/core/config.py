@@ -25,6 +25,21 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 180
     llm_max_tokens: int = 4000
 
+    auth_secret_key: str = "aethercore-dev-secret-key"
+    auth_algorithm: str = "HS256"
+    auth_access_token_expire_minutes: int = 60 * 24 * 7
+    auth_embed_token_expire_minutes: int = 60 * 24
+    auth_system_admin_username: str = "admin"
+    auth_system_admin_password: str = "admin123456"
+    auth_debug_username: str = "debug"
+    auth_debug_password: str = "debug123456"
+    auth_w3_client_id: str = ""
+    auth_w3_client_secret: str = ""
+    auth_w3_base_url: str = ""
+    auth_w3_authorize_path: str = "/oauth2/authorize"
+    auth_w3_token_path: str = "/oauth2/accesstoken"
+    auth_w3_userinfo_path: str = "/oauth2/userinfo"
+
     agent_max_turns: int = 0
     agent_max_runtime_seconds: int = 1800
     agent_max_stall_rounds: int = 0
@@ -32,6 +47,7 @@ class Settings(BaseSettings):
     storage_root: Path = Path("storage")
     sessions_dir_name: str = "sessions"
     built_in_skills_dir: Path = Path("storage/built_in_skills")
+    metadata_db_name: str = "aethercore.db"
 
     sandbox_executor: str = "docker"
     sandbox_fail_closed: bool = True
@@ -106,6 +122,10 @@ class Settings(BaseSettings):
     @property
     def sessions_root(self) -> Path:
         return self.storage_root / self.sessions_dir_name
+
+    @property
+    def metadata_db_path(self) -> Path:
+        return self.storage_root / self.metadata_db_name
 
 
 settings = Settings()

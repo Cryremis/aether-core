@@ -1,4 +1,5 @@
 # backend/tests/test_sandbox_runner.py
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -41,8 +42,7 @@ def test_docker_executor_builds_isolated_run_args(tmp_path):
     assert settings.sandbox_docker_image in args
 
 
-@pytest.mark.asyncio
-async def test_runner_fails_closed_when_executor_unavailable(tmp_path, monkeypatch):
+def test_runner_fails_closed_when_executor_unavailable(tmp_path, monkeypatch):
     runner = SandboxRunner()
 
     class FakeExecutor:
@@ -58,5 +58,8 @@ async def test_runner_fails_closed_when_executor_unavailable(tmp_path, monkeypat
 
     workspace = build_workspace(tmp_path / "sandbox")
 
-    with pytest.raises(RuntimeError, match="fail-closed"):
-        await runner.run_shell(workspace, "echo hello", "bash")
+    async def execute():
+        with pytest.raises(RuntimeError, match="fail-closed"):
+            await runner.run_shell(workspace, "echo hello", "bash")
+
+    asyncio.run(execute())

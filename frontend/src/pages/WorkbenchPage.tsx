@@ -5,8 +5,8 @@ import "highlight.js/styles/github-dark-dimmed.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  bindHost,
   getDownloadUrl,
+  getSessionSummary,
   listFiles,
   listSkills,
   streamChat,
@@ -25,6 +25,12 @@ type SkillItem = {
   name: string;
   description: string;
   source: string;
+};
+
+type SessionMessage = {
+  role: string;
+  content: string;
+  blocks?: AssistantBlock[];
 };
 
 type AssistantBlock =
@@ -50,6 +56,11 @@ type ChatMessage =
 
 type SidebarView = "files" | "skills";
 
+type WorkbenchPageProps = {
+  sessionId: string;
+  onSessionRefresh?: () => void;
+};
+
 const RESULT_MESSAGES: Record<string, string> = {
   error_empty_response: "模型未返回可用正文",
   error_max_turns: "执行达到轮次上限",
@@ -60,7 +71,6 @@ marked.setOptions({ breaks: true, gfm: true });
 
 marked.use({
   renderer: {
-    // 拦截代码块渲染，注入语法高亮和复制按钮结构。
     code(codeArg: any, langArg?: string) {
       const text = typeof codeArg === "object" ? codeArg.text : codeArg;
       const language = (typeof codeArg === "object" ? codeArg.lang : langArg) || "plaintext";
@@ -84,7 +94,6 @@ marked.use({
   },
 });
 
-// SVG Icons 扩充与优化
 const Icons = {
   Menu: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>,
   SidebarClose: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>,
@@ -98,19 +107,44 @@ const Icons = {
   Sparkles: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>,
 };
 
-export function WorkbenchPage() {
-  const [sessionId, setSessionId] = useState("");
+function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
+  return items.map((item, index) =>
+    item.role === "assistant"
+      ? {
+          id: `history-assistant-${index}`,
+          role: "assistant",
+          blocks: item.blocks?.length
+            ? item.blocks
+            : [
+                {
+                  id: `history-content-${index}`,
+                  kind: "content",
+                  content: item.content,
+                  status: "done",
+                },
+              ],
+        }
+      : {
+          id: `history-user-${index}`,
+          role: "user",
+          content: item.content,
+        },
+  );
+}
+
+export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  
+
   const [skillName, setSkillName] = useState("");
   const [skillDescription, setSkillDescription] = useState("");
   const [skillContent, setSkillContent] = useState("");
-  
+
   const [sidebarView, setSidebarView] = useState<SidebarView>("files");
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 1024);
@@ -164,35 +198,40 @@ export function WorkbenchPage() {
     }
   }, [input]);
 
-  const refreshSession = async (nextSessionId: string) => {
-    const [skillResult, fileResult] = await Promise.all([listSkills(nextSessionId), listFiles(nextSessionId)]);
+  useEffect(() => {
+    const node = historyRef.current;
+    if (!node) return;
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+  }, [messages, loading]);
+
+  const refreshResources = async (nextSessionId: string) => {
+    const [skillResult, fileResult] = await Promise.all([
+      listSkills(nextSessionId),
+      listFiles(nextSessionId),
+    ]);
     setSkills((skillResult.data ?? []) as SkillItem[]);
     setFiles((fileResult.items ?? []) as FileItem[]);
   };
 
-  useEffect(() => {
-    const boot = async () => {
-      try {
-        const result = await bindHost({
-          host_name: "standalone-workbench",
-          host_type: "custom",
-          context: { user: { display_name: "本地用户" }, page: { name: "workbench" }, extras: {} },
-        });
-        const nextSessionId = result.data.session_id as string;
-        setSessionId(nextSessionId);
-        await refreshSession(nextSessionId);
-      } catch (bootError) {
-        setError(bootError instanceof Error ? bootError.message : "初始化失败");
-      }
-    };
-    void boot();
-  }, []);
+  const loadSession = async (nextSessionId: string) => {
+    const summaryResult = await getSessionSummary(nextSessionId);
+    const summary = (summaryResult.data ?? {}) as { messages?: SessionMessage[] };
+    setMessages(createHistoryMessages(summary.messages ?? []));
+    await refreshResources(nextSessionId);
+  };
 
   useEffect(() => {
-    const node = historyRef.current;
-    if (!node) return;
-    node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
-  }, [messages]);
+    setLoading(true);
+    setError("");
+    void loadSession(sessionId)
+      .catch((loadError) => {
+        setError(loadError instanceof Error ? loadError.message : "初始化失败");
+        setMessages([]);
+        setSkills([]);
+        setFiles([]);
+      })
+      .finally(() => setLoading(false));
+  }, [sessionId]);
 
   const canSend = useMemo(() => input.trim().length > 0 && !!sessionId && !busy, [busy, input, sessionId]);
   const canUploadSkill = useMemo(
@@ -241,8 +280,8 @@ export function WorkbenchPage() {
     setBusy(true);
     setError("");
     setInput("");
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+
     setMessages((current) => [
       ...current,
       { id: `user-${Date.now()}`, role: "user", content: userText },
@@ -263,7 +302,7 @@ export function WorkbenchPage() {
             appendAssistantBlock(assistantId, { id: activeReasoningId, kind: "reasoning", content: String(payload.delta ?? "") });
           } else {
             updateAssistantBlock(assistantId, activeReasoningId, (block) =>
-              block.kind === "reasoning" ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` } : block
+              block.kind === "reasoning" ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` } : block,
             );
           }
           return;
@@ -276,7 +315,7 @@ export function WorkbenchPage() {
             appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: activeContentText, status: "streaming" });
           } else {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: activeContentText, status: "streaming" } : block
+              block.kind === "content" ? { ...block, content: activeContentText, status: "streaming" } : block,
             );
           }
           return;
@@ -285,7 +324,7 @@ export function WorkbenchPage() {
         if (event.type === "content_completed") {
           if (activeContentId && activeContentText) {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: activeContentText, status: "done" } : block
+              block.kind === "content" ? { ...block, content: activeContentText, status: "done" } : block,
             );
           }
           activeReasoningId = "";
@@ -293,23 +332,29 @@ export function WorkbenchPage() {
         }
 
         if (event.type === "tool_started") {
-          activeReasoningId = ""; activeContentId = ""; activeContentText = "";
+          activeReasoningId = "";
+          activeContentId = "";
+          activeContentText = "";
           const toolInput = (payload.input ?? {}) as Record<string, unknown>;
           const display = getToolDisplay(String(payload.tool_name ?? "tool"), toolInput);
           appendAssistantBlock(assistantId, {
             id: String(payload.id ?? `tool-${Date.now()}`),
-            kind: "tool", title: display.title, meta: display.meta,
+            kind: "tool",
+            title: display.title,
+            meta: display.meta,
             argumentsText: JSON.stringify(toolInput ?? {}, null, 2),
-            outputText: "", status: "running",
+            outputText: "",
+            status: "running",
           });
           return;
         }
 
         if (event.type === "tool_finished") {
           updateAssistantBlock(assistantId, String(payload.id), (block) =>
-            block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block
+            block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block,
           );
-          void refreshSession(sessionId);
+          void refreshResources(sessionId);
+          void onSessionRefresh?.();
           return;
         }
 
@@ -317,7 +362,7 @@ export function WorkbenchPage() {
           activeContentText = payload.summary;
           if (activeContentId) {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: payload.summary as string, status: "done" } : block
+              block.kind === "content" ? { ...block, content: payload.summary as string, status: "done" } : block,
             );
           } else {
             activeContentId = `content-${Date.now()}`;
@@ -327,7 +372,8 @@ export function WorkbenchPage() {
         }
 
         if (event.type === "artifact_created" || event.type === "completed") {
-          void refreshSession(sessionId);
+          void refreshResources(sessionId);
+          void onSessionRefresh?.();
           return;
         }
 
@@ -339,8 +385,13 @@ export function WorkbenchPage() {
 
         if (event.type === "error") {
           appendAssistantBlock(assistantId, {
-            id: `tool-error-${Date.now()}`, kind: "tool", title: "执行错误", meta: "error",
-            argumentsText: "", outputText: `${String(payload.message ?? "执行失败")}${payload.traceback ? `\n\n${payload.traceback}` : ""}`, status: "done",
+            id: `tool-error-${Date.now()}`,
+            kind: "tool",
+            title: "执行错误",
+            meta: "error",
+            argumentsText: "",
+            outputText: `${String(payload.message ?? "执行失败")}${payload.traceback ? `\n\n${payload.traceback}` : ""}`,
+            status: "done",
           });
           setError(typeof payload.message === "string" ? payload.message : "执行失败");
         }
@@ -349,6 +400,8 @@ export function WorkbenchPage() {
       setError(chatError instanceof Error ? chatError.message : "对话执行失败");
     } finally {
       setBusy(false);
+      void refreshResources(sessionId);
+      void onSessionRefresh?.();
     }
   };
 
@@ -357,7 +410,8 @@ export function WorkbenchPage() {
     try {
       setError("");
       await uploadFile(sessionId, file);
-      await refreshSession(sessionId);
+      await refreshResources(sessionId);
+      void onSessionRefresh?.();
       setSidebarView("files");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "文件上传失败");
@@ -369,8 +423,11 @@ export function WorkbenchPage() {
     try {
       setError("");
       await uploadSkill(sessionId, { name: skillName.trim(), description: skillDescription.trim(), content: skillContent.trim() });
-      setSkillName(""); setSkillDescription(""); setSkillContent("");
-      await refreshSession(sessionId);
+      setSkillName("");
+      setSkillDescription("");
+      setSkillContent("");
+      await refreshResources(sessionId);
+      void onSessionRefresh?.();
       setSidebarView("skills");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "技能上传失败");
@@ -404,14 +461,13 @@ export function WorkbenchPage() {
 
   return (
     <main className="app-layout">
-      {/* 侧边栏 */}
       <aside className={`sidebar ${isSidebarOpen ? "is-open" : "is-closed"}`}>
         <div className="sidebar-inner">
           <div className="sidebar-header">
             <h1 className="brand-title">AetherCore</h1>
             {isMobile && <button className="icon-button" onClick={() => setIsSidebarOpen(false)}><Icons.Menu /></button>}
           </div>
-          
+
           <div className="segment-control">
             <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => setSidebarView("files")}>文件库</button>
             <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => setSidebarView("skills")}>技能组</button>
@@ -450,7 +506,7 @@ export function WorkbenchPage() {
                   <textarea className="input-field textarea" value={skillContent} onChange={(e) => setSkillContent(e.target.value)} placeholder="在这里输入完整的 Markdown 定义..." />
                   <button className="action-button primary w-full" disabled={!canUploadSkill} onClick={handleUploadSkill}>保存并上传</button>
                 </div>
-                
+
                 <h3 className="sub-title">已加载技能 ({skills.length})</h3>
                 <div className="item-list">
                   {skills.length === 0 ? <div className="empty-state">暂无已加载技能</div> : null}
@@ -472,7 +528,6 @@ export function WorkbenchPage() {
 
       {isMobile && isSidebarOpen && <div className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)}></div>}
 
-      {/* 主工作区 */}
       <section className="main-content">
         <header className="top-nav">
           <div className="nav-left">
@@ -487,14 +542,22 @@ export function WorkbenchPage() {
 
         <div className="chat-area" ref={historyRef}>
           <div className="chat-container">
-            {messages.length === 0 && (
+            {loading ? (
+              <div className="welcome-screen anim-enter">
+                <div className="welcome-icon"><Icons.Sparkles /></div>
+                <h2>AetherCore Workbench</h2>
+                <p>正在加载会话内容...</p>
+              </div>
+            ) : null}
+
+            {!loading && messages.length === 0 && (
               <div className="welcome-screen anim-enter">
                 <div className="welcome-icon"><Icons.Sparkles /></div>
                 <h2>AetherCore Workbench</h2>
                 <p>输入任务指令，或在左侧上传文件与技能定义</p>
               </div>
             )}
-            
+
             {messages.map((message) =>
               message.role === "user" ? (
                 <div key={message.id} className="message-row user msg-anim">
@@ -569,7 +632,7 @@ export function WorkbenchPage() {
                 <input type="file" onChange={(e) => { void handleUpload(e.target.files?.[0]); e.currentTarget.value = ""; }} />
                 <Icons.Attach />
               </label>
-              <button className={`icon-button send-btn ${canSend ? 'active' : ''}`} disabled={!canSend} onClick={handleSend} title="发送">
+              <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
                 <Icons.Send />
               </button>
             </div>

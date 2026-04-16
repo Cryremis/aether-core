@@ -15,6 +15,7 @@ class AgentSession:
     """AetherCore 会话状态。"""
 
     session_id: str
+    conversation_id: str | None = None
     host_name: str = ""
     host_type: str = "custom"
     messages: list[dict[str, Any]] = field(default_factory=list)
@@ -46,7 +47,7 @@ class SessionService:
             return session
 
         new_id = session_id or f"sess_{uuid.uuid4().hex}"
-        session = AgentSession(session_id=new_id)
+        session = self._load_from_disk(new_id) or AgentSession(session_id=new_id)
         session.workspace = sandbox_manager.ensure_workspace(new_id)
         self._sessions[new_id] = session
         self._write_metadata(session)
@@ -72,11 +73,37 @@ class SessionService:
         self._write_metadata(session)
         return session
 
+    def persist(self, session: AgentSession) -> None:
+        session.touch()
+        self._write_metadata(session)
+
     def save_uploaded_skill(self, session: AgentSession, skill: dict[str, Any]) -> None:
         session.uploaded_skills = [item for item in session.uploaded_skills if item["name"] != skill["name"]]
         session.uploaded_skills.append(skill)
-        session.touch()
-        self._write_metadata(session)
+        self.persist(session)
+
+    def _load_from_disk(self, session_id: str) -> AgentSession | None:
+        metadata_path = sandbox_manager.ensure_workspace(session_id).metadata_dir / "session.json"
+        if not metadata_path.exists():
+            return None
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        return AgentSession(
+            session_id=session_id,
+            conversation_id=payload.get("conversation_id"),
+            host_name=payload.get("host_name", ""),
+            host_type=payload.get("host_type", "custom"),
+            messages=payload.get("messages", []),
+            host_context=payload.get("host_context", {}),
+            host_tools=payload.get("host_tools", []),
+            host_skills=payload.get("host_skills", []),
+            uploaded_skills=payload.get("uploaded_skills", []),
+            host_apis=payload.get("host_apis", []),
+            artifacts=payload.get("artifacts", []),
+            uploads=payload.get("uploads", []),
+            created_at=payload.get("created_at", time.time()),
+            last_access=payload.get("last_access", time.time()),
+            workspace=sandbox_manager.ensure_workspace(session_id),
+        )
 
     def _write_metadata(self, session: AgentSession) -> None:
         if session.workspace is None:
@@ -84,13 +111,17 @@ class SessionService:
         metadata_path = Path(session.workspace.metadata_dir) / "session.json"
         payload = {
             "session_id": session.session_id,
+            "conversation_id": session.conversation_id,
             "host_name": session.host_name,
             "host_type": session.host_type,
+            "messages": session.messages,
             "host_context": session.host_context,
             "host_tools": session.host_tools,
             "host_skills": session.host_skills,
             "uploaded_skills": session.uploaded_skills,
             "host_apis": session.host_apis,
+            "artifacts": session.artifacts,
+            "uploads": session.uploads,
             "created_at": session.created_at,
             "last_access": session.last_access,
         }
