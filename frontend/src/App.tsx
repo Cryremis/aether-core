@@ -145,7 +145,7 @@ export default function App() {
       <div className="workspace-shell">
         <section className="workspace-shell__main">
           {page === "admin" && currentUser ? (
-            <AdminPage role={currentUser.role} />
+            <AdminPage role={currentUser.role} onBack={() => setPage("workbench")} />
           ) : sessionId ? (
             <WorkbenchPage
               conversations={conversations}

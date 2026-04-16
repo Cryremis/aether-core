@@ -1,5 +1,5 @@
 // frontend/src/components/AdminPanel.tsx
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   createAdminWhitelist,
@@ -17,6 +17,7 @@ type PlatformItem = {
   platform_key: string;
   display_name: string;
   host_type: string;
+  description: string;
   owner_name: string;
   host_secret: string;
 };
@@ -33,18 +34,21 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const [platforms, setPlatforms] = useState<PlatformItem[]>([]);
   const [whitelist, setWhitelist] = useState<WhitelistItem[]>([]);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
 
   const [providerUserId, setProviderUserId] = useState("");
   const [whitelistRole, setWhitelistRole] = useState("platform_admin");
 
   const [platformKey, setPlatformKey] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [hostType, setHostType] = useState("custom");
+  const [hostType, setHostType] = useState("embedded");
   const [description, setDescription] = useState("");
 
+  const existingPlatformKeys = useMemo(
+    () => new Set(platforms.map((item) => item.platform_key)),
+    [platforms],
+  );
+
   const loadData = async () => {
-    setLoading(true);
     setError("");
     try {
       const [platformResult, whitelistResult] = await Promise.all([
@@ -55,8 +59,6 @@ export function AdminPanel({ role }: AdminPanelProps) {
       setWhitelist((whitelistResult.data ?? []) as WhitelistItem[]);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "加载管理数据失败");
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -82,17 +84,23 @@ export function AdminPanel({ role }: AdminPanelProps) {
 
   const handleCreatePlatform = async (event: FormEvent) => {
     event.preventDefault();
+    const normalizedPlatformKey = platformKey.trim().toLowerCase();
+    if (existingPlatformKeys.has(normalizedPlatformKey)) {
+      setError(`platform_key "${normalizedPlatformKey}" 已存在，请更换`);
+      return;
+    }
+
     try {
       setError("");
       await createPlatform({
-        platform_key: platformKey.trim(),
+        platform_key: normalizedPlatformKey,
         display_name: displayName.trim(),
-        host_type: hostType,
+        host_type: hostType as "embedded" | "standalone",
         description: description.trim(),
       });
       setPlatformKey("");
       setDisplayName("");
-      setHostType("custom");
+      setHostType("embedded");
       setDescription("");
       await loadData();
     } catch (submitError) {
@@ -104,9 +112,6 @@ export function AdminPanel({ role }: AdminPanelProps) {
     <section className="admin-panel">
       <div className="admin-panel__header">
         <h3>管理配置</h3>
-        <button type="button" onClick={() => void loadData()} disabled={loading}>
-          {loading ? "刷新中..." : "刷新"}
-        </button>
       </div>
 
       {error ? <div className="admin-panel__error">{error}</div> : null}
@@ -136,20 +141,22 @@ export function AdminPanel({ role }: AdminPanelProps) {
       {role === "system_admin" ? (
         <form className="admin-panel__form" onSubmit={handleCreatePlatform}>
           <h4>平台注册</h4>
+          <p className="admin-panel__hint">
+            AetherCore 自身已内置一个默认平台，可用于直接对话、debug 调试和平台能力自验证。这里新增的是外部接入平台。
+          </p>
           <input
             value={platformKey}
             onChange={(event) => setPlatformKey(event.target.value)}
-            placeholder="platform_key"
+            placeholder="platform_key，例如 atk-assistant"
           />
           <input
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
-            placeholder="平台显示名"
+            placeholder="平台显示名称"
           />
           <select value={hostType} onChange={(event) => setHostType(event.target.value)}>
-            <option value="custom">custom</option>
-            <option value="dash">dash</option>
-            <option value="poc">poc</option>
+            <option value="embedded">嵌入式平台</option>
+            <option value="standalone">独立平台</option>
           </select>
           <textarea
             value={description}
@@ -170,6 +177,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
             <strong>{item.display_name}</strong>
             <p>{item.platform_key}</p>
             <p>{item.host_type}</p>
+            <p>{item.description || "未填写平台说明"}</p>
             <p>初始管理员：{item.owner_name}</p>
             <code>{item.host_secret}</code>
           </article>

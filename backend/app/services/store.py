@@ -150,12 +150,18 @@ class StoreService:
         if not admin:
             return
         if self.get_platform_by_key("standalone") is not None:
+            self.update_platform_basics(
+                platform_key="standalone",
+                display_name="AetherCore",
+                host_type="standalone",
+                description="AetherCore 内置默认平台，用于直接登录、debug 调试与平台能力自验证。",
+            )
             return
         self.create_platform(
             platform_key="standalone",
-            display_name="AetherCore 工作台",
-            host_type="custom",
-            description="AetherCore 内置工作台",
+            display_name="AetherCore",
+            host_type="standalone",
+            description="AetherCore 内置默认平台，用于直接登录、debug 调试与平台能力自验证。",
             owner_user_id=admin.user_id,
         )
 
@@ -310,6 +316,24 @@ class StoreService:
                 (platform["platform_id"], owner_user_id, now),
             )
         return dict(platform) if platform else {}
+
+    def update_platform_basics(
+        self,
+        *,
+        platform_key: str,
+        display_name: str,
+        host_type: str,
+        description: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE platforms
+                SET display_name = ?, host_type = ?, description = ?, updated_at = ?
+                WHERE platform_key = ?
+                """,
+                (display_name, host_type, description, utcnow_iso(), platform_key),
+            )
 
     def add_platform_admin(self, *, platform_id: int, user_id: int) -> None:
         with self._connect() as conn:

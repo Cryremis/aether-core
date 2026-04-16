@@ -15,7 +15,7 @@ export type AdminWhitelistPayload = {
 export type PlatformCreatePayload = {
   platform_key: string;
   display_name: string;
-  host_type: "dash" | "poc" | "custom";
+  host_type: "embedded" | "standalone";
   description: string;
   owner_user_id?: number;
 };

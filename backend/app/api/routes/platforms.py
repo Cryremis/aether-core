@@ -1,4 +1,6 @@
 # backend/app/api/routes/platforms.py
+import sqlite3
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import AuthContext, require_admin, require_platform_secret, require_system_admin
@@ -26,13 +28,17 @@ def create_platform(
     owner = store_service.get_user_by_id(owner_user_id)
     if owner is None:
         raise HTTPException(status_code=404, detail="负责人管理员不存在")
-    row = store_service.create_platform(
-        platform_key=request.platform_key,
-        display_name=request.display_name,
-        host_type=request.host_type,
-        description=request.description,
-        owner_user_id=owner_user_id,
-    )
+    normalized_platform_key = request.platform_key.strip().lower()
+    try:
+        row = store_service.create_platform(
+            platform_key=normalized_platform_key,
+            display_name=request.display_name,
+            host_type=request.host_type,
+            description=request.description,
+            owner_user_id=owner_user_id,
+        )
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail=f'platform_key "{normalized_platform_key}" 已存在') from exc
     return ApiResponse(
         message="平台注册成功",
         data=PlatformSummary(

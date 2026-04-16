@@ -57,7 +57,7 @@ def test_conversations_are_isolated_for_admins_and_host_users(tmp_path):
     platform = store_service.create_platform(
         platform_key="dash-test",
         display_name="Dash Test",
-        host_type="dash",
+        host_type="embedded",
         description="测试平台",
         owner_user_id=admin.user_id,
     )
@@ -70,7 +70,7 @@ def test_conversations_are_isolated_for_admins_and_host_users(tmp_path):
         conversation_id=None,
         conversation_key="conversation-a",
         host_name="Dash",
-        host_type="dash",
+        host_type="embedded",
     )
     second_session, _ = conversation_service.bootstrap_host_workbench(
         platform_key=platform["platform_key"],
@@ -80,7 +80,7 @@ def test_conversations_are_isolated_for_admins_and_host_users(tmp_path):
         conversation_id=None,
         conversation_key="conversation-b",
         host_name="Dash",
-        host_type="dash",
+        host_type="embedded",
     )
 
     first_user_items = conversation_service.list_for_host_user(
@@ -105,7 +105,7 @@ def test_embed_bootstrap_rejects_platform_key_mismatch(tmp_path):
     platform = store_service.create_platform(
         platform_key="dash-embed",
         display_name="Dash Embed",
-        host_type="dash",
+        host_type="embedded",
         description="嵌入测试平台",
         owner_user_id=admin.user_id,
     )
@@ -122,7 +122,7 @@ def test_embed_bootstrap_rejects_platform_key_mismatch(tmp_path):
             "conversation_id": None,
             "conversation_key": "embed-conversation",
             "host_name": "Dash",
-            "host_type": "dash",
+            "host_type": "embedded",
         },
     )
 

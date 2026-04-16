@@ -10,7 +10,7 @@ class PlatformCreateRequest(BaseModel):
 
     platform_key: str
     display_name: str
-    host_type: Literal["dash", "poc", "custom"] = "custom"
+    host_type: Literal["embedded", "standalone"] = "embedded"
     description: str = ""
     owner_user_id: int | None = None
 
@@ -45,7 +45,7 @@ class EmbedBootstrapRequest(BaseModel):
     conversation_id: str | None = None
     conversation_key: str | None = None
     host_name: str | None = None
-    host_type: Literal["dash", "poc", "custom"] | None = None
+    host_type: str | None = None
 
 
 class EmbedBootstrapResponse(BaseModel):

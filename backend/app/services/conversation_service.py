@@ -27,15 +27,15 @@ class ConversationService:
         conversation = store_service.create_conversation(
             session_id=session.session_id,
             title="新对话",
-            host_name="standalone-workbench",
-            host_type="custom",
+            host_name="AetherCore",
+            host_type="standalone",
             platform_id=platform["platform_id"],
             owner_user_id=user.user_id,
             metadata={"owner_name": user.full_name},
         )
         session.conversation_id = conversation["conversation_id"]
-        session.host_name = "standalone-workbench"
-        session.host_type = "custom"
+        session.host_name = "AetherCore"
+        session.host_type = "standalone"
         session_service.persist(session)
         return session
 
