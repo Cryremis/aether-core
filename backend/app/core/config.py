@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 180
     llm_max_tokens: int = 4000
 
-    agent_max_turns: int = 24
+    agent_max_turns: int = 0
+    agent_max_runtime_seconds: int = 1800
+    agent_max_stall_rounds: int = 0
 
     storage_root: Path = Path("storage")
     sessions_dir_name: str = "sessions"

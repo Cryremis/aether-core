@@ -1,6 +1,7 @@
 # backend/app/runtime/engine.py
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -33,8 +34,51 @@ class AgentEngine:
         tools = tool_service.list_tool_schemas(session)
         turn_count = 0
         last_stop_reason: str | None = None
+        last_tool_fingerprint: str | None = None
+        stall_rounds = 0
+        max_turns = settings.agent_max_turns if settings.agent_max_turns > 0 else None
 
-        for turn_count in range(1, settings.agent_max_turns + 1):
+        while True:
+            turn_count += 1
+            runtime_seconds = int(time.perf_counter() - started_at)
+            if settings.agent_max_runtime_seconds > 0 and runtime_seconds >= settings.agent_max_runtime_seconds:
+                yield make_event(
+                    session,
+                    "result",
+                    subtype="error_runtime_limit",
+                    is_error=True,
+                    turn_count=turn_count - 1,
+                    runtime_seconds=runtime_seconds,
+                    stop_reason=last_stop_reason,
+                )
+                yield make_event(
+                    session,
+                    "completed",
+                    elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                    subtype="error_runtime_limit",
+                    stop_reason=last_stop_reason,
+                )
+                return
+
+            if max_turns is not None and turn_count > max_turns:
+                yield make_event(
+                    session,
+                    "result",
+                    subtype="error_max_turns",
+                    is_error=True,
+                    turn_count=turn_count,
+                    max_turns=max_turns,
+                    stop_reason=last_stop_reason,
+                )
+                yield make_event(
+                    session,
+                    "completed",
+                    elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                    subtype="error_max_turns",
+                    stop_reason=last_stop_reason,
+                )
+                return
+
             assistant_content = ""
             tool_calls: dict[int, dict[str, str]] = {}
             finish_reason = ""
@@ -105,6 +149,32 @@ class AgentEngine:
                 assistant_message["content"] = assistant_content
 
             if tool_calls:
+                tool_fingerprint = self._fingerprint_tool_calls(tool_calls)
+                if tool_fingerprint == last_tool_fingerprint:
+                    stall_rounds += 1
+                else:
+                    stall_rounds = 0
+                last_tool_fingerprint = tool_fingerprint
+
+                if settings.agent_max_stall_rounds > 0 and stall_rounds >= settings.agent_max_stall_rounds:
+                    yield make_event(
+                        session,
+                        "result",
+                        subtype="error_stalled",
+                        is_error=True,
+                        turn_count=turn_count,
+                        repeated_rounds=stall_rounds + 1,
+                        stop_reason=last_stop_reason,
+                    )
+                    yield make_event(
+                        session,
+                        "completed",
+                        elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                        subtype="error_stalled",
+                        stop_reason=last_stop_reason,
+                    )
+                    return
+
                 assistant_message["tool_calls"] = [
                     {
                         "id": tool_call["id"],
@@ -154,6 +224,8 @@ class AgentEngine:
                     )
                 continue
 
+            last_tool_fingerprint = None
+            stall_rounds = 0
             final_answer = assistant_content.strip()
             if final_answer:
                 session.messages.append({"role": "assistant", "content": final_answer})
@@ -183,7 +255,6 @@ class AgentEngine:
                 is_error=True,
                 turn_count=turn_count,
                 stop_reason=last_stop_reason,
-                errors=["模型本轮未返回可用正文。"],
             )
             yield make_event(
                 session,
@@ -194,23 +265,16 @@ class AgentEngine:
             )
             return
 
-        yield make_event(
-            session,
-            "result",
-            subtype="error_max_turns",
-            is_error=True,
-            turn_count=turn_count,
-            max_turns=settings.agent_max_turns,
-            stop_reason=last_stop_reason,
-            errors=[f"已达到最大轮次限制（{settings.agent_max_turns}）。"],
-        )
-        yield make_event(
-            session,
-            "completed",
-            elapsed_ms=int((time.perf_counter() - started_at) * 1000),
-            subtype="error_max_turns",
-            stop_reason=last_stop_reason,
-        )
+    def _fingerprint_tool_calls(self, tool_calls: dict[int, dict[str, str]]) -> str:
+        payload = [
+            {
+                "name": item["name"],
+                "arguments": item["arguments"],
+            }
+            for _, item in sorted(tool_calls.items())
+        ]
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
 
     def _build_system_message(self, session: AgentSession) -> str:
         return self._safe_prompt(session)

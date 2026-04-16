@@ -48,6 +48,12 @@ type ChatMessage =
 
 type SidebarView = "files" | "skills";
 
+const RESULT_MESSAGES: Record<string, string> = {
+  error_empty_response: "模型未返回可用正文",
+  error_max_turns: "执行达到轮次上限",
+  error_runtime_limit: "执行达到运行时限",
+};
+
 marked.setOptions({
   breaks: true,
   gfm: true,
@@ -269,10 +275,7 @@ export function WorkbenchPage() {
         if (event.type === "result") {
           const subtype = String(payload.subtype ?? "");
           if (subtype && subtype !== "success") {
-            const errors = Array.isArray(payload.errors) ? payload.errors.map((item) => String(item)) : [];
-            if (errors.length > 0) {
-              setError(errors[0] ?? "执行失败");
-            }
+            setError(RESULT_MESSAGES[subtype] ?? "执行失败");
           }
           return;
         }
