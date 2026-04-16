@@ -1,5 +1,7 @@
 // frontend/src/pages/WorkbenchPage.tsx
 import { marked } from "marked";
+import hljs from "highlight.js";
+import "highlight.js/styles/github-dark-dimmed.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -54,9 +56,32 @@ const RESULT_MESSAGES: Record<string, string> = {
   error_runtime_limit: "执行达到运行时限",
 };
 
-marked.setOptions({
-  breaks: true,
-  gfm: true,
+marked.setOptions({ breaks: true, gfm: true });
+
+marked.use({
+  renderer: {
+    // 拦截代码块渲染，注入语法高亮和复制按钮结构。
+    code(codeArg: any, langArg?: string) {
+      const text = typeof codeArg === "object" ? codeArg.text : codeArg;
+      const language = (typeof codeArg === "object" ? codeArg.lang : langArg) || "plaintext";
+      const validLang = hljs.getLanguage(language) ? language : "plaintext";
+      const highlighted = hljs.highlight(text, { language: validLang }).value;
+      const encodedCode = encodeURIComponent(text);
+
+      return `
+        <div class="code-block-wrapper">
+          <div class="code-header">
+            <span class="code-lang">${validLang}</span>
+            <button class="copy-button" data-code="${encodedCode}" type="button">
+              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              <span>复制</span>
+            </button>
+          </div>
+          <pre><code class="hljs language-${validLang}">${highlighted}</code></pre>
+        </div>
+      `;
+    },
+  },
 });
 
 // SVG Icons 扩充与优化
@@ -92,6 +117,34 @@ export function WorkbenchPage() {
 
   const historyRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const handleCopy = async (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const btn = target.closest(".copy-button") as HTMLButtonElement | null;
+      if (!btn) return;
+
+      const rawCode = decodeURIComponent(btn.getAttribute("data-code") || "");
+      try {
+        await navigator.clipboard.writeText(rawCode);
+        const span = btn.querySelector("span");
+        if (span) {
+          const originalText = span.innerText;
+          span.innerText = "已复制!";
+          btn.classList.add("copied");
+          window.setTimeout(() => {
+            span.innerText = originalText;
+            btn.classList.remove("copied");
+          }, 2000);
+        }
+      } catch (err) {
+        console.error("复制失败", err);
+      }
+    };
+
+    document.addEventListener("click", handleCopy);
+    return () => document.removeEventListener("click", handleCopy);
+  }, []);
 
   useEffect(() => {
     const handleResize = () => {

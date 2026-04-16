@@ -281,17 +281,10 @@ a { text-decoration: none; color: var(--accent); }
   font-size: 0.85em; background: #f1f5f9; padding: 0.2em 0.4em; border-radius: 6px; color: #db2777; border: 1px solid #e2e8f0;
 }
 
-/* 核心特效：带有 Mac 视窗按钮的深色代码块 */
-.markdown-body pre {
-  background: #0d1117; padding: 40px 16px 16px; border-radius: 12px; overflow-x: auto; margin-bottom: 18px;
-  position: relative; box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 4px 12px rgba(0,0,0,0.1);
-}
-.markdown-body pre::before {
-  content: ""; position: absolute; top: 14px; left: 16px; width: 12px; height: 12px; border-radius: 50%;
-  background: #ff5f56; box-shadow: 20px 0 0 #ffbd2e, 40px 0 0 #27c93f;
-}
 .markdown-body pre code {
-  background: transparent; padding: 0; color: #e6edf3; border: none; font-size: 13px; line-height: 1.6;
+  background: transparent;
+  padding: 0;
+  border: none;
 }
 
 .markdown-body blockquote { border-left: 4px solid var(--border-color); padding-left: 16px; color: var(--text-secondary); margin: 0 0 16px 0; font-style: italic; }
@@ -303,4 +296,73 @@ a { text-decoration: none; color: var(--accent); }
   .bubble { max-width: 95%; }
   .composer-area { padding: 0 14px 16px; }
   .composer-box { border-radius: 16px; padding: 8px 8px 8px 14px; }
+}
+
+/* ================= 现代版代码块 (优雅极简风) ================= */
+.code-block-wrapper {
+  background: #22272e;
+  border-radius: 8px;
+  border: 1px solid #444c56;
+  overflow: hidden;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  background: #2d333b;
+  border-bottom: 1px solid #444c56;
+}
+
+.code-lang {
+  font-size: 12px;
+  color: #adbac7;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.copy-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: #adbac7;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.copy-button:hover {
+  background: rgba(173, 186, 199, 0.15);
+  color: #cdd9e5;
+}
+
+.copy-button.copied {
+  color: #57ab5a;
+}
+
+.markdown-body pre {
+  margin: 0 !important;
+  padding: 16px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  overflow-x: auto;
+}
+
+.markdown-body pre code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important;
+  font-size: 13.5px !important;
+  line-height: 1.6 !important;
+  background: transparent !important;
+  border: none !important;
+  color: #cdd9e5;
 }
