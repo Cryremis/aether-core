@@ -54,11 +54,25 @@ type ChatMessage =
   | { id: string; role: "user"; content: string }
   | { id: string; role: "assistant"; blocks: AssistantBlock[] };
 
-type SidebarView = "files" | "skills";
+type SidebarView = "sessions" | "files" | "skills";
 
 type WorkbenchPageProps = {
+  conversations: Array<{
+    conversation_id: string;
+    session_id: string;
+    title: string;
+  }>;
+  currentUser?: {
+    full_name: string;
+    role: string;
+  } | null;
+  isEmbedMode?: boolean;
   sessionId: string;
+  onAdminToggle?: () => void;
+  onLogout?: () => void;
+  onNewConversation?: () => void;
   onSessionRefresh?: () => void;
+  onSessionSelect?: (sessionId: string) => void;
 };
 
 const RESULT_MESSAGES: Record<string, string> = {
@@ -71,9 +85,9 @@ marked.setOptions({ breaks: true, gfm: true });
 
 marked.use({
   renderer: {
-    code(codeArg: any, langArg?: string) {
-      const text = typeof codeArg === "object" ? codeArg.text : codeArg;
-      const language = (typeof codeArg === "object" ? codeArg.lang : langArg) || "plaintext";
+    code(codeArg: unknown, langArg?: string) {
+      const text = typeof codeArg === "object" && codeArg && "text" in codeArg ? String((codeArg as { text: unknown }).text ?? "") : String(codeArg ?? "");
+      const language = typeof codeArg === "object" && codeArg && "lang" in codeArg ? String((codeArg as { lang: unknown }).lang ?? "") : (langArg ?? "plaintext");
       const validLang = hljs.getLanguage(language) ? language : "plaintext";
       const highlighted = hljs.highlight(text, { language: validLang }).value;
       const encodedCode = encodeURIComponent(text);
@@ -115,24 +129,23 @@ function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
           role: "assistant",
           blocks: item.blocks?.length
             ? item.blocks
-            : [
-                {
-                  id: `history-content-${index}`,
-                  kind: "content",
-                  content: item.content,
-                  status: "done",
-                },
-              ],
+            : [{ id: `history-content-${index}`, kind: "content", content: item.content, status: "done" }],
         }
-      : {
-          id: `history-user-${index}`,
-          role: "user",
-          content: item.content,
-        },
+      : { id: `history-user-${index}`, role: "user", content: item.content },
   );
 }
 
-export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProps) {
+export function WorkbenchPage({
+  conversations,
+  currentUser,
+  isEmbedMode = false,
+  sessionId,
+  onAdminToggle,
+  onLogout,
+  onNewConversation,
+  onSessionRefresh,
+  onSessionSelect,
+}: WorkbenchPageProps) {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [skills, setSkills] = useState<SkillItem[]>([]);
@@ -140,12 +153,10 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
   const [skillName, setSkillName] = useState("");
   const [skillDescription, setSkillDescription] = useState("");
   const [skillContent, setSkillContent] = useState("");
-
-  const [sidebarView, setSidebarView] = useState<SidebarView>("files");
+  const [sidebarView, setSidebarView] = useState<SidebarView>("sessions");
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 1024);
 
@@ -185,17 +196,16 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
       const mobile = window.innerWidth <= 1024;
       setIsMobile(mobile);
       if (mobile && isSidebarOpen) setIsSidebarOpen(false);
-      else if (!mobile && !isSidebarOpen) setIsSidebarOpen(true);
+      if (!mobile && !isSidebarOpen) setIsSidebarOpen(true);
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [isSidebarOpen]);
 
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
-    }
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = "auto";
+    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
   }, [input]);
 
   useEffect(() => {
@@ -205,10 +215,7 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
   }, [messages, loading]);
 
   const refreshResources = async (nextSessionId: string) => {
-    const [skillResult, fileResult] = await Promise.all([
-      listSkills(nextSessionId),
-      listFiles(nextSessionId),
-    ]);
+    const [skillResult, fileResult] = await Promise.all([listSkills(nextSessionId), listFiles(nextSessionId)]);
     setSkills((skillResult.data ?? []) as SkillItem[]);
     setFiles((fileResult.items ?? []) as FileItem[]);
   };
@@ -234,26 +241,15 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
   }, [sessionId]);
 
   const canSend = useMemo(() => input.trim().length > 0 && !!sessionId && !busy, [busy, input, sessionId]);
-  const canUploadSkill = useMemo(
-    () => !!sessionId && !!skillName.trim() && !!skillDescription.trim() && !busy,
-    [busy, sessionId, skillDescription, skillName],
-  );
+  const canUploadSkill = useMemo(() => !!sessionId && !!skillName.trim() && !!skillDescription.trim() && !busy, [busy, sessionId, skillDescription, skillName]);
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
     setMessages((current) =>
-      current.map((item) =>
-        item.id === messageId && item.role === "assistant"
-          ? { ...item, blocks: [...item.blocks, block] }
-          : item,
-      ),
+      current.map((item) => (item.id === messageId && item.role === "assistant" ? { ...item, blocks: [...item.blocks, block] } : item)),
     );
   };
 
-  const updateAssistantBlock = (
-    messageId: string,
-    blockId: string,
-    updater: (block: AssistantBlock) => AssistantBlock,
-  ) => {
+  const updateAssistantBlock = (messageId: string, blockId: string, updater: (block: AssistantBlock) => AssistantBlock) => {
     setMessages((current) =>
       current.map((item) =>
         item.id === messageId && item.role === "assistant"
@@ -464,17 +460,53 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
       <aside className={`sidebar ${isSidebarOpen ? "is-open" : "is-closed"}`}>
         <div className="sidebar-inner">
           <div className="sidebar-header">
-            <h1 className="brand-title">AetherCore</h1>
-            {isMobile && <button className="icon-button" onClick={() => setIsSidebarOpen(false)}><Icons.Menu /></button>}
+            <div className="sidebar-header__title">
+              <h1 className="brand-title">AetherCore</h1>
+              {!isEmbedMode && currentUser ? (
+                <p className="sidebar-user-meta">
+                  {currentUser.full_name}
+                  <span>{currentUser.role}</span>
+                </p>
+              ) : (
+                <p className="sidebar-user-meta">嵌入工作台</p>
+              )}
+            </div>
+            {isMobile ? <button className="icon-button" onClick={() => setIsSidebarOpen(false)}><Icons.Menu /></button> : null}
           </div>
 
           <div className="segment-control">
-            <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => setSidebarView("files")}>文件库</button>
-            <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => setSidebarView("skills")}>技能组</button>
+            <button className={`segment-btn ${sidebarView === "sessions" ? "active" : ""}`} onClick={() => setSidebarView("sessions")}>会话</button>
+            <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => setSidebarView("files")}>文件</button>
+            <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => setSidebarView("skills")}>技能</button>
           </div>
 
           <div className="sidebar-content">
-            {sidebarView === "files" ? (
+            {sidebarView === "sessions" ? (
+              <div className="tab-pane">
+                <div className="pane-header">
+                  <h3>历史会话</h3>
+                  {!isEmbedMode ? (
+                    <button type="button" className="action-button small" onClick={onNewConversation}>
+                      新建
+                    </button>
+                  ) : null}
+                </div>
+                <div className="item-list">
+                  {conversations.length === 0 ? <div className="empty-state">暂无历史会话</div> : null}
+                  {conversations.map((item) => (
+                    <button
+                      key={item.conversation_id}
+                      type="button"
+                      className={`history-item history-item--compact ${item.session_id === sessionId ? "is-active" : ""}`}
+                      onClick={() => onSessionSelect?.(item.session_id)}
+                    >
+                      <strong>{item.title || "新对话"}</strong>
+                      <span>{item.session_id}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : sidebarView === "files" ? (
               <div className="tab-pane">
                 <div className="pane-header">
                   <h3>会话文件</h3>
@@ -499,7 +531,9 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
               </div>
             ) : (
               <div className="tab-pane">
-                <div className="pane-header"><h3>新建技能</h3></div>
+                <div className="pane-header">
+                  <h3>新建技能</h3>
+                </div>
                 <div className="form-group anim-enter" style={{ animationDelay: "0s" }}>
                   <input className="input-field" value={skillName} onChange={(e) => setSkillName(e.target.value)} placeholder="技能名称" />
                   <input className="input-field" value={skillDescription} onChange={(e) => setSkillDescription(e.target.value)} placeholder="一句话描述" />
@@ -523,10 +557,21 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
               </div>
             )}
           </div>
+
+          {!isEmbedMode ? (
+            <div className="sidebar-footer">
+              <button type="button" className="action-button sidebar-footer__button" onClick={onAdminToggle}>
+                管理配置
+              </button>
+              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onLogout}>
+                退出登录
+              </button>
+            </div>
+          ) : null}
         </div>
       </aside>
 
-      {isMobile && isSidebarOpen && <div className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)}></div>}
+      {isMobile && isSidebarOpen ? <div className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)}></div> : null}
 
       <section className="main-content">
         <header className="top-nav">
@@ -550,13 +595,13 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
               </div>
             ) : null}
 
-            {!loading && messages.length === 0 && (
+            {!loading && messages.length === 0 ? (
               <div className="welcome-screen anim-enter">
                 <div className="welcome-icon"><Icons.Sparkles /></div>
                 <h2>AetherCore Workbench</h2>
-                <p>输入任务指令，或在左侧上传文件与技能定义</p>
+                <p>输入任务指令，或在左侧上传文件与技能定义。</p>
               </div>
-            )}
+            ) : null}
 
             {messages.map((message) =>
               message.role === "user" ? (
@@ -578,18 +623,18 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
                             </div>
                           </summary>
                           <div className="tool-body">
-                            {segment.block.argumentsText && (
+                            {segment.block.argumentsText ? (
                               <div className="tool-section">
                                 <div className="section-label">Input Args</div>
                                 <pre className="code-block input">{segment.block.argumentsText}</pre>
                               </div>
-                            )}
-                            {segment.block.outputText && (
+                            ) : null}
+                            {segment.block.outputText ? (
                               <div className="tool-section">
                                 <div className="section-label">Output Result</div>
                                 <pre className="code-block output">{segment.block.outputText}</pre>
                               </div>
-                            )}
+                            ) : null}
                           </div>
                         </details>
                       ) : (
@@ -597,7 +642,7 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
                           {segment.blocks.map((block) =>
                             block.kind === "reasoning" ? (
                               <details key={block.id} className="reasoning-block" open>
-                                <summary><Icons.Sparkles /> 思考过程</summary>
+                                <summary><Icons.Sparkles /> Thinking</summary>
                                 <div className="reasoning-content markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
                               </details>
                             ) : (
@@ -622,7 +667,10 @@ export function WorkbenchPage({ sessionId, onSessionRefresh }: WorkbenchPageProp
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSend(); }
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSend();
+                }
               }}
               placeholder="发送指令，与系统深度交互..."
               rows={1}

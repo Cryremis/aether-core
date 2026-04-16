@@ -143,66 +143,20 @@ export default function App() {
 
     return (
       <div className="workspace-shell">
-        <aside className="history-sidebar">
-          <div className="history-sidebar__header">
-            <div>
-              <h2>历史会话</h2>
-              {!isEmbedMode && currentUser ? (
-                <p>
-                  {currentUser.full_name}
-                  <span>{currentUser.role}</span>
-                </p>
-              ) : (
-                <p>嵌入工作台</p>
-              )}
-            </div>
-            {!isEmbedMode ? (
-              <div className="history-sidebar__actions">
-                <button type="button" onClick={() => void handleNewConversation()}>
-                  新建会话
-                </button>
-                <button
-                  type="button"
-                  className={page === "admin" ? "history-secondary is-active" : "history-secondary"}
-                  onClick={() => setPage(page === "admin" ? "workbench" : "admin")}
-                >
-                  {page === "admin" ? "返回工作台" : "管理配置"}
-                </button>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="history-sidebar__list">
-            {conversations.length === 0 ? <div className="history-empty">暂无历史会话</div> : null}
-            {conversations.map((item) => (
-              <button
-                key={item.conversation_id}
-                type="button"
-                className={`history-item ${item.session_id === sessionId ? "is-active" : ""}`}
-                onClick={() => setSessionId(item.session_id)}
-              >
-                <strong>{item.title || "新对话"}</strong>
-                <span>{item.session_id}</span>
-              </button>
-            ))}
-          </div>
-
-          {!isEmbedMode ? (
-            <div className="history-sidebar__footer">
-              <button type="button" className="history-logout" onClick={handleLogout}>
-                退出登录
-              </button>
-            </div>
-          ) : null}
-        </aside>
-
         <section className="workspace-shell__main">
           {page === "admin" && currentUser ? (
             <AdminPage role={currentUser.role} />
           ) : sessionId ? (
             <WorkbenchPage
+              conversations={conversations}
+              currentUser={currentUser}
+              isEmbedMode={isEmbedMode}
               sessionId={sessionId}
+              onAdminToggle={() => setPage("admin")}
+              onLogout={handleLogout}
+              onNewConversation={() => void handleNewConversation()}
               onSessionRefresh={() => void refreshConversations(sessionId)}
+              onSessionSelect={setSessionId}
             />
           ) : null}
         </section>
