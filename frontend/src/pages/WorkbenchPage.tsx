@@ -59,6 +59,20 @@ marked.setOptions({
   gfm: true,
 });
 
+// SVG Icons 扩充与优化
+const Icons = {
+  Menu: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>,
+  SidebarClose: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>,
+  Send: () => <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>,
+  Attach: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>,
+  File: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>,
+  Download: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>,
+  Terminal: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>,
+  Loader: () => <svg className="spin-anim" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>,
+  Check: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="#10b981" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>,
+  Sparkles: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>,
+};
+
 export function WorkbenchPage() {
   const [sessionId, setSessionId] = useState("");
   const [input, setInput] = useState("");
@@ -67,11 +81,35 @@ export function WorkbenchPage() {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  
   const [skillName, setSkillName] = useState("");
   const [skillDescription, setSkillDescription] = useState("");
   const [skillContent, setSkillContent] = useState("");
+  
   const [sidebarView, setSidebarView] = useState<SidebarView>("files");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 1024);
+
   const historyRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 1024;
+      setIsMobile(mobile);
+      if (mobile && isSidebarOpen) setIsSidebarOpen(false);
+      else if (!mobile && !isSidebarOpen) setIsSidebarOpen(true);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isSidebarOpen]);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [input]);
 
   const refreshSession = async (nextSessionId: string) => {
     const [skillResult, fileResult] = await Promise.all([listSkills(nextSessionId), listFiles(nextSessionId)]);
@@ -85,11 +123,7 @@ export function WorkbenchPage() {
         const result = await bindHost({
           host_name: "standalone-workbench",
           host_type: "custom",
-          context: {
-            user: { display_name: "本地工作台用户" },
-            page: { name: "workbench" },
-            extras: {},
-          },
+          context: { user: { display_name: "本地用户" }, page: { name: "workbench" }, extras: {} },
         });
         const nextSessionId = result.data.session_id as string;
         setSessionId(nextSessionId);
@@ -104,7 +138,7 @@ export function WorkbenchPage() {
   useEffect(() => {
     const node = historyRef.current;
     if (!node) return;
-    node.scrollTop = node.scrollHeight;
+    node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
   const canSend = useMemo(() => input.trim().length > 0 && !!sessionId && !busy, [busy, input, sessionId]);
@@ -141,8 +175,7 @@ export function WorkbenchPage() {
     if (toolName === "sandbox_shell") {
       const rawCommand = String(inputValue.command ?? "").trim();
       const firstToken = rawCommand.split(/\s+/)[0] || "shell";
-      const shellName = String(inputValue.shell ?? "powershell");
-      return { title: firstToken, meta: shellName };
+      return { title: firstToken, meta: String(inputValue.shell ?? "powershell") };
     }
     return { title: toolName, meta: "tool" };
   };
@@ -155,6 +188,8 @@ export function WorkbenchPage() {
     setBusy(true);
     setError("");
     setInput("");
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    
     setMessages((current) => [
       ...current,
       { id: `user-${Date.now()}`, role: "user", content: userText },
@@ -171,17 +206,11 @@ export function WorkbenchPage() {
 
         if (event.type === "reasoning_delta") {
           if (!activeReasoningId) {
-            activeReasoningId = `reasoning-${Date.now()}-${Math.random()}`;
-            appendAssistantBlock(assistantId, {
-              id: activeReasoningId,
-              kind: "reasoning",
-              content: String(payload.delta ?? ""),
-            });
+            activeReasoningId = `reasoning-${Date.now()}`;
+            appendAssistantBlock(assistantId, { id: activeReasoningId, kind: "reasoning", content: String(payload.delta ?? "") });
           } else {
             updateAssistantBlock(assistantId, activeReasoningId, (block) =>
-              block.kind === "reasoning"
-                ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` }
-                : block,
+              block.kind === "reasoning" ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` } : block
             );
           }
           return;
@@ -190,18 +219,11 @@ export function WorkbenchPage() {
         if (event.type === "content_delta") {
           activeContentText += String(payload.delta ?? "");
           if (!activeContentId) {
-            activeContentId = `content-${Date.now()}-${Math.random()}`;
-            appendAssistantBlock(assistantId, {
-              id: activeContentId,
-              kind: "content",
-              content: activeContentText,
-              status: "streaming",
-            });
+            activeContentId = `content-${Date.now()}`;
+            appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: activeContentText, status: "streaming" });
           } else {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content"
-                ? { ...block, content: activeContentText, status: "streaming" }
-                : block,
+              block.kind === "content" ? { ...block, content: activeContentText, status: "streaming" } : block
             );
           }
           return;
@@ -210,9 +232,7 @@ export function WorkbenchPage() {
         if (event.type === "content_completed") {
           if (activeContentId && activeContentText) {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content"
-                ? { ...block, content: activeContentText, status: "done" }
-                : block,
+              block.kind === "content" ? { ...block, content: activeContentText, status: "done" } : block
             );
           }
           activeReasoningId = "";
@@ -220,28 +240,21 @@ export function WorkbenchPage() {
         }
 
         if (event.type === "tool_started") {
-          activeReasoningId = "";
-          activeContentId = "";
-          activeContentText = "";
+          activeReasoningId = ""; activeContentId = ""; activeContentText = "";
           const toolInput = (payload.input ?? {}) as Record<string, unknown>;
           const display = getToolDisplay(String(payload.tool_name ?? "tool"), toolInput);
           appendAssistantBlock(assistantId, {
             id: String(payload.id ?? `tool-${Date.now()}`),
-            kind: "tool",
-            title: display.title,
-            meta: display.meta,
+            kind: "tool", title: display.title, meta: display.meta,
             argumentsText: JSON.stringify(toolInput ?? {}, null, 2),
-            outputText: "",
-            status: "running",
+            outputText: "", status: "running",
           });
           return;
         }
 
         if (event.type === "tool_finished") {
           updateAssistantBlock(assistantId, String(payload.id), (block) =>
-            block.kind === "tool"
-              ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" }
-              : block,
+            block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block
           );
           void refreshSession(sessionId);
           return;
@@ -251,18 +264,11 @@ export function WorkbenchPage() {
           activeContentText = payload.summary;
           if (activeContentId) {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content"
-                ? { ...block, content: payload.summary as string, status: "done" }
-                : block,
+              block.kind === "content" ? { ...block, content: payload.summary as string, status: "done" } : block
             );
           } else {
-            activeContentId = `content-${Date.now()}-${Math.random()}`;
-            appendAssistantBlock(assistantId, {
-              id: activeContentId,
-              kind: "content",
-              content: payload.summary,
-              status: "done",
-            });
+            activeContentId = `content-${Date.now()}`;
+            appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: payload.summary, status: "done" });
           }
           return;
         }
@@ -274,22 +280,14 @@ export function WorkbenchPage() {
 
         if (event.type === "result") {
           const subtype = String(payload.subtype ?? "");
-          if (subtype && subtype !== "success") {
-            setError(RESULT_MESSAGES[subtype] ?? "执行失败");
-          }
+          if (subtype && subtype !== "success") setError(RESULT_MESSAGES[subtype] ?? "执行失败");
           return;
         }
 
         if (event.type === "error") {
-          const traceText = typeof payload.traceback === "string" ? `\n\n${payload.traceback}` : "";
           appendAssistantBlock(assistantId, {
-            id: `tool-error-${Date.now()}`,
-            kind: "tool",
-            title: "执行错误",
-            meta: "error",
-            argumentsText: "",
-            outputText: `${String(payload.message ?? "执行失败")}${traceText}`,
-            status: "done",
+            id: `tool-error-${Date.now()}`, kind: "tool", title: "执行错误", meta: "error",
+            argumentsText: "", outputText: `${String(payload.message ?? "执行失败")}${payload.traceback ? `\n\n${payload.traceback}` : ""}`, status: "done",
           });
           setError(typeof payload.message === "string" ? payload.message : "执行失败");
         }
@@ -317,14 +315,8 @@ export function WorkbenchPage() {
     if (!canUploadSkill) return;
     try {
       setError("");
-      await uploadSkill(sessionId, {
-        name: skillName.trim(),
-        description: skillDescription.trim(),
-        content: skillContent.trim(),
-      });
-      setSkillName("");
-      setSkillDescription("");
-      setSkillContent("");
+      await uploadSkill(sessionId, { name: skillName.trim(), description: skillDescription.trim(), content: skillContent.trim() });
+      setSkillName(""); setSkillDescription(""); setSkillContent("");
       await refreshSession(sessionId);
       setSidebarView("skills");
     } catch (uploadError) {
@@ -358,186 +350,180 @@ export function WorkbenchPage() {
   };
 
   return (
-    <main className="chat-workbench">
-      <aside className="chat-sidebar">
-        <div className="chat-sidebar__desktop">
-          <section className="sidebar-card">
-            <div className="sidebar-switcher">
-              <button className={`sidebar-tab ${sidebarView === "files" ? "is-active" : ""}`} onClick={() => setSidebarView("files")}>文件</button>
-              <button className={`sidebar-tab ${sidebarView === "skills" ? "is-active" : ""}`} onClick={() => setSidebarView("skills")}>技能</button>
-            </div>
+    <main className="app-layout">
+      {/* 侧边栏 */}
+      <aside className={`sidebar ${isSidebarOpen ? "is-open" : "is-closed"}`}>
+        <div className="sidebar-inner">
+          <div className="sidebar-header">
+            <h1 className="brand-title">AetherCore</h1>
+            {isMobile && <button className="icon-button" onClick={() => setIsSidebarOpen(false)}><Icons.Menu /></button>}
+          </div>
+          
+          <div className="segment-control">
+            <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => setSidebarView("files")}>文件库</button>
+            <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => setSidebarView("skills")}>技能组</button>
+          </div>
 
+          <div className="sidebar-content">
             {sidebarView === "files" ? (
-              <>
-                <div className="sidebar-card__header">
-                  <div>
-                    <h2>会话文件</h2>
-                    <p>当前会话生命周期内上传与产出的所有文件</p>
-                  </div>
-                  <label className="sidebar-button">
+              <div className="tab-pane">
+                <div className="pane-header">
+                  <h3>会话文件</h3>
+                  <label className="action-button small">
                     <span>上传</span>
-                    <input type="file" onChange={(event) => { const file = event.target.files?.[0]; void handleUpload(file); event.currentTarget.value = ""; }} />
+                    <input type="file" onChange={(e) => { void handleUpload(e.target.files?.[0]); e.currentTarget.value = ""; }} />
                   </label>
                 </div>
-                <div className="sidebar-list">
-                  {files.length === 0 ? <span className="empty-text">暂无文件</span> : null}
-                  {files.map((item) => (
-                    <article key={item.file_id} className="sidebar-item">
-                      <strong>{item.name}</strong>
-                      <p>{item.category} · {item.size} bytes</p>
-                      <a className="download-link" href={getDownloadUrl(sessionId, item.file_id)} target="_blank" rel="noreferrer">下载</a>
+                <div className="item-list">
+                  {files.length === 0 ? <div className="empty-state">当前暂无上传文件</div> : null}
+                  {files.map((item, i) => (
+                    <article key={item.file_id} className="resource-card anim-enter" style={{ animationDelay: `${i * 0.05}s` }}>
+                      <div className="resource-icon"><Icons.File /></div>
+                      <div className="resource-info">
+                        <strong>{item.name}</strong>
+                        <p>{item.category} · {(item.size / 1024).toFixed(1)} KB</p>
+                      </div>
+                      <a className="download-btn" href={getDownloadUrl(sessionId, item.file_id)} target="_blank" rel="noreferrer" title="下载"><Icons.Download /></a>
                     </article>
                   ))}
                 </div>
-              </>
+              </div>
             ) : (
-              <>
-                <div className="sidebar-card__header">
-                  <div>
-                    <h2>技能管理</h2>
-                    <p>内置技能、宿主技能与用户技能统一管理</p>
-                  </div>
+              <div className="tab-pane">
+                <div className="pane-header"><h3>新建技能</h3></div>
+                <div className="form-group anim-enter" style={{ animationDelay: "0s" }}>
+                  <input className="input-field" value={skillName} onChange={(e) => setSkillName(e.target.value)} placeholder="技能名称" />
+                  <input className="input-field" value={skillDescription} onChange={(e) => setSkillDescription(e.target.value)} placeholder="一句话描述" />
+                  <textarea className="input-field textarea" value={skillContent} onChange={(e) => setSkillContent(e.target.value)} placeholder="在这里输入完整的 Markdown 定义..." />
+                  <button className="action-button primary w-full" disabled={!canUploadSkill} onClick={handleUploadSkill}>保存并上传</button>
                 </div>
-                <div className="skill-form">
-                  <input value={skillName} onChange={(event) => setSkillName(event.target.value)} placeholder="技能名称" />
-                  <input value={skillDescription} onChange={(event) => setSkillDescription(event.target.value)} placeholder="技能描述" />
-                  <textarea className="composer-textarea skill-textarea" value={skillContent} onChange={(event) => setSkillContent(event.target.value)} placeholder="输入 SKILL.md 主体内容" />
-                  <button className="sidebar-button sidebar-button--solid" disabled={!canUploadSkill} onClick={handleUploadSkill}>上传技能</button>
-                </div>
-                <div className="sidebar-list">
-                  {skills.length === 0 ? <span className="empty-text">暂无技能</span> : null}
-                  {skills.map((item, index) => (
-                    <article key={`${item.name}-${index}`} className="sidebar-item">
-                      <strong>{item.name}</strong>
-                      <p>{item.description}</p>
-                      <span className="skill-badge">{item.source}</span>
+                
+                <h3 className="sub-title">已加载技能 ({skills.length})</h3>
+                <div className="item-list">
+                  {skills.length === 0 ? <div className="empty-state">暂无已加载技能</div> : null}
+                  {skills.map((item, i) => (
+                    <article key={`${item.name}-${i}`} className="resource-card block anim-enter" style={{ animationDelay: `${i * 0.05 + 0.1}s` }}>
+                      <div className="flex-row">
+                        <strong>{item.name}</strong>
+                        <span className="badge">{item.source}</span>
+                      </div>
+                      <p className="desc">{item.description}</p>
                     </article>
                   ))}
                 </div>
-              </>
+              </div>
             )}
-          </section>
-        </div>
-
-        <div className="chat-sidebar__mobile">
-          <button className={`sidebar-tab ${sidebarView === "files" ? "is-active" : ""}`} onClick={() => setSidebarView("files")}>文件</button>
-          <button className={`sidebar-tab ${sidebarView === "skills" ? "is-active" : ""}`} onClick={() => setSidebarView("skills")}>技能</button>
+          </div>
         </div>
       </aside>
 
-      <section className="chat-main">
-        {error ? <section className="error-banner">{error}</section> : null}
+      {isMobile && isSidebarOpen && <div className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)}></div>}
 
-        <div ref={historyRef} className="chat-history">
-          {messages.map((message) =>
-            message.role === "user" ? (
-              <article key={message.id} className="chat-row is-user">
-                <div className="chat-bubble is-user user-bubble">
-                  <div className="chat-bubble__content markdown-body" dangerouslySetInnerHTML={renderMarkdown(message.content)} />
+      {/* 主工作区 */}
+      <section className="main-content">
+        <header className="top-nav">
+          <div className="nav-left">
+            <button className="icon-button subtle nav-trigger" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
+              {isSidebarOpen ? <Icons.SidebarClose /> : <Icons.Menu />}
+            </button>
+            <span className="session-badge">Session ID: {sessionId || "Initializing..."}</span>
+          </div>
+        </header>
+
+        {error ? <div className="error-toast anim-shake">{error}</div> : null}
+
+        <div className="chat-area" ref={historyRef}>
+          <div className="chat-container">
+            {messages.length === 0 && (
+              <div className="welcome-screen anim-enter">
+                <div className="welcome-icon"><Icons.Sparkles /></div>
+                <h2>AetherCore Workbench</h2>
+                <p>输入任务指令，或在左侧上传文件与技能定义</p>
+              </div>
+            )}
+            
+            {messages.map((message) =>
+              message.role === "user" ? (
+                <div key={message.id} className="message-row user msg-anim">
+                  <div className="bubble user-bubble">
+                    <div dangerouslySetInnerHTML={renderMarkdown(message.content)} className="markdown-body clean" />
+                  </div>
                 </div>
-              </article>
-            ) : (
-              <article key={message.id} className="assistant-stack">
-                {renderAssistantSegments(message.blocks).map((segment) =>
-                  segment.kind === "tool" ? (
-                    <article key={segment.id} className="chat-row is-assistant">
-                      <details className="chat-bubble is-assistant is-tool">
-                        <summary className="tool-summary">
-                          <span className="tool-summary__title">{segment.block.title}</span>
-                          <span className="tool-summary__meta">{segment.block.meta} · {segment.block.status === "running" ? "执行中" : "详情"}</span>
-                        </summary>
-                        {segment.block.argumentsText ? <pre>{segment.block.argumentsText}</pre> : null}
-                        {segment.block.outputText ? <pre>{segment.block.outputText}</pre> : null}
-                      </details>
-                    </article>
-                  ) : (
-                    <article key={segment.id} className="chat-row is-assistant">
-                      <div className="chat-bubble is-assistant">
-                        {segment.blocks.map((block) =>
-                          block.kind === "reasoning" ? (
-                            <div key={block.id} className="bubble-reasoning">
-                              <div className="bubble-reasoning__label">Thinking</div>
-                              <div className="markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
+              ) : (
+                <div key={message.id} className="message-row assistant msg-anim">
+                  <div className="assistant-content">
+                    {renderAssistantSegments(message.blocks).map((segment) =>
+                      segment.kind === "tool" ? (
+                        <details key={segment.id} className={`tool-card ${segment.block.status}`}>
+                          <summary className="tool-header">
+                            <div className="tool-title"><Icons.Terminal /> {segment.block.title}</div>
+                            <div className="tool-status">
+                              {segment.block.status === "running" ? <span className="status-run"><Icons.Loader /> 执行中...</span> : <span className="status-done"><Icons.Check /> 完成</span>}
                             </div>
-                          ) : (
-                            <div key={block.id} className="chat-bubble__content markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
-                          ),
-                        )}
-                      </div>
-                    </article>
-                  ),
-                )}
-              </article>
-            ),
-          )}
+                          </summary>
+                          <div className="tool-body">
+                            {segment.block.argumentsText && (
+                              <div className="tool-section">
+                                <div className="section-label">Input Args</div>
+                                <pre className="code-block input">{segment.block.argumentsText}</pre>
+                              </div>
+                            )}
+                            {segment.block.outputText && (
+                              <div className="tool-section">
+                                <div className="section-label">Output Result</div>
+                                <pre className="code-block output">{segment.block.outputText}</pre>
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      ) : (
+                        <div key={segment.id} className="text-bubble">
+                          {segment.blocks.map((block) =>
+                            block.kind === "reasoning" ? (
+                              <details key={block.id} className="reasoning-block" open>
+                                <summary><Icons.Sparkles /> 思考过程</summary>
+                                <div className="reasoning-content markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
+                              </details>
+                            ) : (
+                              <div key={block.id} className="markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
+                            ),
+                          )}
+                        </div>
+                      ),
+                    )}
+                  </div>
+                </div>
+              ),
+            )}
+          </div>
         </div>
 
-        <footer className="chat-composer">
-          <div className="session-chip">会话 ID: {sessionId || "初始化中"}</div>
-          <textarea
-            className="composer-textarea"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void handleSend();
-              }
-            }}
-            placeholder="输入任务，例如：读取上传文件，执行脚本，并生成可下载结果。"
-          />
-          <div className="composer-actions">
-            <span className="composer-tip">{busy ? "正在处理，请稍候" : "Enter 发送，Shift + Enter 换行"}</span>
-            <button className="send-button" disabled={!canSend} onClick={handleSend}>{busy ? "处理中" : "发送"}</button>
+        <div className="composer-area">
+          <div className="composer-box">
+            <textarea
+              ref={textareaRef}
+              className="composer-input"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSend(); }
+              }}
+              placeholder="发送指令，与系统深度交互..."
+              rows={1}
+            />
+            <div className="composer-actions">
+              <label className="icon-button attach-btn" title="上传文件">
+                <input type="file" onChange={(e) => { void handleUpload(e.target.files?.[0]); e.currentTarget.value = ""; }} />
+                <Icons.Attach />
+              </label>
+              <button className={`icon-button send-btn ${canSend ? 'active' : ''}`} disabled={!canSend} onClick={handleSend} title="发送">
+                <Icons.Send />
+              </button>
+            </div>
           </div>
-        </footer>
+          <div className="composer-footer">AetherCore System · Advanced Mode</div>
+        </div>
       </section>
-
-      <div className="chat-sidebar__mobile-panel">
-        <section className="sidebar-card">
-          {sidebarView === "files" ? (
-            <>
-              <div className="sidebar-card__header">
-                <h2>会话文件</h2>
-                <label className="sidebar-button">
-                  <span>上传</span>
-                  <input type="file" onChange={(event) => { const file = event.target.files?.[0]; void handleUpload(file); event.currentTarget.value = ""; }} />
-                </label>
-              </div>
-              <div className="sidebar-list">
-                {files.length === 0 ? <span className="empty-text">暂无文件</span> : null}
-                {files.map((item) => (
-                  <article key={item.file_id} className="sidebar-item">
-                    <strong>{item.name}</strong>
-                    <p>{item.category} · {item.size} bytes</p>
-                    <a className="download-link" href={getDownloadUrl(sessionId, item.file_id)} target="_blank" rel="noreferrer">下载</a>
-                  </article>
-                ))}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="sidebar-card__header"><h2>技能管理</h2></div>
-              <div className="skill-form">
-                <input value={skillName} onChange={(event) => setSkillName(event.target.value)} placeholder="技能名称" />
-                <input value={skillDescription} onChange={(event) => setSkillDescription(event.target.value)} placeholder="技能描述" />
-                <textarea className="composer-textarea skill-textarea" value={skillContent} onChange={(event) => setSkillContent(event.target.value)} placeholder="输入 SKILL.md 主体内容" />
-                <button className="sidebar-button sidebar-button--solid" disabled={!canUploadSkill} onClick={handleUploadSkill}>上传技能</button>
-              </div>
-              <div className="sidebar-list">
-                {skills.length === 0 ? <span className="empty-text">暂无技能</span> : null}
-                {skills.map((item, index) => (
-                  <article key={`${item.name}-${index}`} className="sidebar-item">
-                    <strong>{item.name}</strong>
-                    <p>{item.description}</p>
-                    <span className="skill-badge">{item.source}</span>
-                  </article>
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-      </div>
     </main>
   );
 }
