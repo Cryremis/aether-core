@@ -15,7 +15,7 @@ export type AdminWhitelistPayload = {
 export type PlatformCreatePayload = {
   platform_key: string;
   display_name: string;
-  host_type: "embedded" | "standalone";
+  host_type?: "embedded" | "standalone";
   description: string;
   owner_user_id?: number;
 };
@@ -298,29 +298,6 @@ export async function downloadPlatformBaselineFile(platformId: number, relativeP
     throw new Error(`下载平台基线文件失败: ${response.status}`);
   }
   return response.blob();
-}
-
-export async function uploadPlatformBaselineSkill(platformId: number, file: File) {
-  const formData = new FormData();
-  formData.append("skill_file", file);
-  const response = await apiFetch(`/platforms/${platformId}/baseline/skills`, {
-    method: "POST",
-    body: formData,
-  });
-  if (!response.ok) {
-    throw new Error(`上传平台基线技能失败: ${response.status}`);
-  }
-  return response.json();
-}
-
-export async function deletePlatformBaselineSkill(platformId: number, skillName: string) {
-  const response = await apiFetch(`/platforms/${platformId}/baseline/skills/${encodeURIComponent(skillName)}`, {
-    method: "DELETE",
-  });
-  if (!response.ok) {
-    throw new Error(`删除平台基线技能失败: ${response.status}`);
-  }
-  return response.json();
 }
 
 export async function bootstrapAdminSession(sessionId?: string) {

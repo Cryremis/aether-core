@@ -10,6 +10,7 @@ class PlatformCreateRequest(BaseModel):
 
     platform_key: str
     display_name: str
+    # `standalone` 为系统内置保留模式，外部平台注册默认走 `embedded`
     host_type: Literal["embedded", "standalone"] = "embedded"
     description: str = ""
     owner_user_id: int | None = None

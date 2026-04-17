@@ -39,16 +39,20 @@ def create_platform(
     auth: AuthContext = Depends(require_system_admin),
 ) -> ApiResponse:
     assert auth.user is not None
+    normalized_platform_key = request.platform_key.strip().lower()
+    if normalized_platform_key == "standalone":
+        raise HTTPException(status_code=409, detail='platform_key "standalone" 为系统内置保留平台')
+    if request.host_type == "standalone":
+        raise HTTPException(status_code=400, detail="独立平台为系统内置模式，新注册平台无需选择该类型")
     owner_user_id = request.owner_user_id or auth.user.user_id
     owner = store_service.get_user_by_id(owner_user_id)
     if owner is None:
         raise HTTPException(status_code=404, detail="负责人管理员不存在")
-    normalized_platform_key = request.platform_key.strip().lower()
     try:
         row = store_service.create_platform(
             platform_key=normalized_platform_key,
             display_name=request.display_name,
-            host_type=request.host_type,
+            host_type="embedded",
             description=request.description,
             owner_user_id=owner_user_id,
         )
