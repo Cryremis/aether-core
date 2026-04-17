@@ -21,6 +21,18 @@ class ToolService:
     def list_tool_schemas(self, session: AgentSession) -> list[dict[str, Any]]:
         tools = [
             self._schema(
+                "invoke_skill",
+                "加载一个真实技能包，把该技能的 SKILL.md 指令注入当前对话上下文。若任务明显匹配某个技能，必须先调用它。",
+                {
+                    "type": "object",
+                    "properties": {
+                        "skill_name": {"type": "string"},
+                    },
+                    "required": ["skill_name"],
+                    "additionalProperties": False,
+                },
+            ),
+            self._schema(
                 "list_skills",
                 "列出当前会话可见技能。",
                 {"type": "object", "properties": {}, "additionalProperties": False},
@@ -80,6 +92,8 @@ class ToolService:
         return tools
 
     async def execute(self, session: AgentSession, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if tool_name == "invoke_skill":
+            return skill_service.invoke_skill(session, skill_name=str(arguments["skill_name"]))
         if tool_name == "list_skills":
             return {"items": [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]}
         if tool_name == "list_files":

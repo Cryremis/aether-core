@@ -82,6 +82,10 @@ class SessionService:
         session.uploaded_skills.append(skill)
         self.persist(session)
 
+    def replace_uploaded_skills(self, session: AgentSession, skills: list[dict[str, Any]]) -> None:
+        session.uploaded_skills = skills
+        self.persist(session)
+
     def _load_from_disk(self, session_id: str) -> AgentSession | None:
         metadata_path = sandbox_manager.ensure_workspace(session_id).metadata_dir / "session.json"
         if not metadata_path.exists():

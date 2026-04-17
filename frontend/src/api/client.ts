@@ -185,21 +185,9 @@ export async function listSkills(sessionId: string) {
   return response.json();
 }
 
-export async function uploadSkill(
-  sessionId: string,
-  payload: { name: string; description: string; content?: string; skillFile?: File },
-) {
+export async function uploadSkill(sessionId: string, skillFile: File) {
   const formData = new FormData();
-  formData.append("name", payload.name);
-  formData.append("description", payload.description);
-
-  if (payload.content) {
-    formData.append("content", payload.content);
-  }
-
-  if (payload.skillFile) {
-    formData.append("skill_file", payload.skillFile);
-  }
+  formData.append("skill_file", skillFile);
 
   const response = await apiFetch(`/agent/skills/upload?session_id=${encodeURIComponent(sessionId)}`, {
     method: "POST",

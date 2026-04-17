@@ -142,3 +142,76 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
     assert result_events[0]["payload"]["result"] == "重复工具调用后仍然继续完成任务"
     assert all(item["payload"].get("subtype") != "error_stalled" for item in result_events)
     assert any(block["kind"] == "tool" for block in session.messages[-1]["blocks"])
+
+
+def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+
+    observed_messages: list[list[dict]] = []
+    rounds = {"value": 0}
+
+    async def fake_stream_chat_completion(messages, tools) -> AsyncGenerator[dict, None]:
+        observed_messages.append(messages)
+        if rounds["value"] == 0:
+            rounds["value"] += 1
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_skill_1",
+                                    "function": {
+                                        "name": "invoke_skill",
+                                        "arguments": '{"skill_name":"data-analysis"}',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+            return
+
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "已按技能要求完成分析"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    async def fake_execute(session, tool_name, arguments):
+        assert tool_name == "invoke_skill"
+        return {
+            "public_output": {"loaded": True, "skill": {"name": "data-analysis"}},
+            "injected_messages": [
+                {
+                    "role": "user",
+                    "content": '<aether_skill name="data-analysis" source="built_in">技能正文</aether_skill>',
+                }
+            ],
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
+
+    session = AgentSession(session_id="sess_engine_skill")
+    events = asyncio.run(collect_stream(session, "帮我做数据分析"))
+
+    assert len(observed_messages) == 2
+    assert any(
+        message.get("role") == "user" and "aether_skill" in str(message.get("content", ""))
+        for message in observed_messages[1]
+    )
+    result_events = [item for item in events if item["type"] == "result"]
+    assert len(result_events) == 1
+    assert result_events[0]["payload"]["subtype"] == "success"
+    assert result_events[0]["payload"]["result"] == "已按技能要求完成分析"

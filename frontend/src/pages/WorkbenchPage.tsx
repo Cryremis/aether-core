@@ -153,9 +153,6 @@ export function WorkbenchPage({
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [skillName, setSkillName] = useState("");
-  const [skillDescription, setSkillDescription] = useState("");
-  const [skillContent, setSkillContent] = useState("");
   const [sidebarView, setSidebarView] = useState<SidebarView>("sessions");
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 1024);
@@ -241,7 +238,6 @@ export function WorkbenchPage({
   }, [sessionId]);
 
   const canSend = useMemo(() => input.trim().length > 0 && !!sessionId && !busy, [busy, input, sessionId]);
-  const canUploadSkill = useMemo(() => !!sessionId && !!skillName.trim() && !!skillDescription.trim() && !busy, [busy, sessionId, skillDescription, skillName]);
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
     setMessages((current) =>
@@ -349,7 +345,9 @@ export function WorkbenchPage({
           updateAssistantBlock(assistantId, String(payload.id), (block) =>
             block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block,
           );
-          void refreshResources(sessionId);
+          if (["sandbox_shell", "create_text_artifact"].includes(String(payload.tool_name ?? ""))) {
+            void refreshResources(sessionId);
+          }
           void onSessionRefresh?.();
           return;
         }
@@ -367,7 +365,7 @@ export function WorkbenchPage({
           return;
         }
 
-        if (event.type === "artifact_created" || event.type === "completed") {
+        if (event.type === "artifact_created") {
           void refreshResources(sessionId);
           void onSessionRefresh?.();
           return;
@@ -396,7 +394,6 @@ export function WorkbenchPage({
       setError(chatError instanceof Error ? chatError.message : "对话执行失败");
     } finally {
       setBusy(false);
-      void refreshResources(sessionId);
       void onSessionRefresh?.();
     }
   };
@@ -414,14 +411,11 @@ export function WorkbenchPage({
     }
   };
 
-  const handleUploadSkill = async () => {
-    if (!canUploadSkill) return;
+  const handleUploadSkill = async (file: File | undefined) => {
+    if (!file || !sessionId) return;
     try {
       setError("");
-      await uploadSkill(sessionId, { name: skillName.trim(), description: skillDescription.trim(), content: skillContent.trim() });
-      setSkillName("");
-      setSkillDescription("");
-      setSkillContent("");
+      await uploadSkill(sessionId, file);
       await refreshResources(sessionId);
       void onSessionRefresh?.();
       setSidebarView("skills");
@@ -532,13 +526,18 @@ export function WorkbenchPage({
             ) : (
               <div className="tab-pane">
                 <div className="pane-header">
-                  <h3>新建技能</h3>
+                  <h3>技能包</h3>
+                  <label className="action-button small">
+                    <span>上传</span>
+                    <input
+                      type="file"
+                      accept=".zip,.md"
+                      onChange={(e) => { void handleUploadSkill(e.target.files?.[0]); e.currentTarget.value = ""; }}
+                    />
+                  </label>
                 </div>
-                <div className="form-group anim-enter" style={{ animationDelay: "0s" }}>
-                  <input className="input-field" value={skillName} onChange={(e) => setSkillName(e.target.value)} placeholder="技能名称" />
-                  <input className="input-field" value={skillDescription} onChange={(e) => setSkillDescription(e.target.value)} placeholder="一句话描述" />
-                  <textarea className="input-field textarea" value={skillContent} onChange={(e) => setSkillContent(e.target.value)} placeholder="在这里输入完整的 Markdown 定义..." />
-                  <button className="action-button primary w-full" disabled={!canUploadSkill} onClick={handleUploadSkill}>保存并上传</button>
+                <div className="empty-state">
+                  支持上传真实技能包目录压缩成的 `.zip`，或单个 `SKILL.md` 文件。
                 </div>
 
                 <h3 className="sub-title">已加载技能 ({skills.length})</h3>

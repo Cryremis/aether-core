@@ -1,5 +1,5 @@
 # backend/app/api/routes/skills.py
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.deps import AuthContext, get_auth_context
 from app.schemas.common import ApiResponse
@@ -39,24 +39,16 @@ def list_skills(session_id: str, auth: AuthContext = Depends(get_auth_context)) 
 @router.post("/upload")
 async def upload_skill(
     session_id: str,
-    name: str = Form(...),
-    description: str = Form(...),
-    content: str | None = Form(default=None),
-    allowed_tools: str = Form(default=""),
-    tags: str = Form(default="upload"),
-    skill_file: UploadFile | None = File(default=None),
+    skill_file: UploadFile = File(...),
     auth: AuthContext = Depends(get_auth_context),
 ) -> ApiResponse:
     session = _ensure_session_access(session_id, auth)
-    raw_content = content or ""
-    if skill_file is not None:
-        raw_content = (await skill_file.read()).decode("utf-8", errors="replace")
-    card = skill_service.install_skill_from_text(
+    cards = skill_service.install_skill_upload(
         session=session,
-        name=name,
-        description=description,
-        content=raw_content,
-        allowed_tools=[item.strip() for item in allowed_tools.split(",") if item.strip()],
-        tags=[item.strip() for item in tags.split(",") if item.strip()],
+        filename=skill_file.filename or "uploaded-skill.md",
+        raw_bytes=await skill_file.read(),
     )
-    return ApiResponse(message="技能上传成功", data=card.model_dump(mode="json"))
+    return ApiResponse(
+        message="技能上传成功",
+        data={"items": [item.model_dump(mode="json") for item in cards]},
+    )

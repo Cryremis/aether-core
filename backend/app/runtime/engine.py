@@ -277,29 +277,33 @@ class AgentEngine:
                             "error": str(exc),
                             "summary": f"工具执行失败: {exc}",
                         }
+                    visible_result = result.get("public_output", result) if isinstance(result, dict) else result
                     yield make_event(
                         session,
                         "tool_finished",
                         id=tool_call["id"],
                         tool_name=tool_name,
-                        output=result,
+                        output=visible_result,
                     )
                     self._update_assistant_block(
                         persisted_assistant_blocks,
                         tool_block_id,
-                        outputText=json.dumps(result, ensure_ascii=False, indent=2),
+                        outputText=json.dumps(visible_result, ensure_ascii=False, indent=2),
                         status="done",
                     )
-                    artifact_payload = result.get("artifact") if isinstance(result, dict) else None
+                    artifact_payload = visible_result.get("artifact") if isinstance(visible_result, dict) else None
                     if artifact_payload:
                         yield make_event(session, "artifact_created", artifact=artifact_payload)
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
-                            "content": json.dumps(result, ensure_ascii=False),
+                            "content": json.dumps(visible_result, ensure_ascii=False),
                         }
                     )
+                    injected_messages = result.get("injected_messages", []) if isinstance(result, dict) else []
+                    if injected_messages:
+                        messages.extend(injected_messages)
                 continue
 
             last_tool_fingerprint = None
