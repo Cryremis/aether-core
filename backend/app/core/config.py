@@ -119,17 +119,23 @@ class Settings(BaseSettings):
     def project_root(self) -> Path:
         return self.backend_root.parent
 
+    @cached_property
+    def resolved_storage_root(self) -> Path:
+        if self.storage_root.is_absolute():
+            return self.storage_root
+        return self.project_root / self.storage_root
+
     @property
     def sessions_root(self) -> Path:
-        return self.storage_root / self.sessions_dir_name
+        return self.resolved_storage_root / self.sessions_dir_name
 
     @property
     def metadata_db_path(self) -> Path:
-        return self.storage_root / self.metadata_db_name
+        return self.resolved_storage_root / self.metadata_db_name
 
     @property
     def platform_baselines_root(self) -> Path:
-        return self.storage_root / "platform_baselines"
+        return self.resolved_storage_root / "platform_baselines"
 
 
 settings = Settings()

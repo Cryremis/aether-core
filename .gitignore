@@ -16,7 +16,14 @@ dist/
 Thumbs.db
 storage/sessions/
 storage/uploads/
+storage/platform_baselines/
+storage/aethercore.db
 backend/storage/sessions/
 backend/storage/uploads/
+backend/storage/platform_baselines/
+backend/storage/aethercore.db
+backend/.pytest_cache/
+.pytest-temp/
+.tmp-check/
 frontend/.vite/
 frontend/dist/
