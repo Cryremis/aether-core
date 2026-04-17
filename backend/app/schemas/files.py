@@ -14,7 +14,7 @@ class FileRecord(BaseModel):
     relative_path: str
     size: int
     media_type: str
-    category: Literal["upload", "artifact", "skill"]
+    category: Literal["upload", "artifact", "skill", "platform"]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

@@ -42,6 +42,6 @@ class SkillCard(BaseModel):
 
     name: str
     description: str
-    source: Literal["built_in", "host", "upload"]
+    source: Literal["built_in", "host", "platform", "upload"]
     allowed_tools: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)

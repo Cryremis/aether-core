@@ -15,6 +15,34 @@ class PlatformCreateRequest(BaseModel):
     owner_user_id: int | None = None
 
 
+class PlatformBaselineFile(BaseModel):
+    """平台基线文件。"""
+
+    name: str
+    relative_path: str
+    section: Literal["input", "work"]
+    size: int
+    media_type: str
+
+
+class PlatformBaselineSkill(BaseModel):
+    """平台基线技能。"""
+
+    name: str
+    description: str
+    allowed_tools: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    relative_path: str
+
+
+class PlatformBaselineSummary(BaseModel):
+    """平台基线环境摘要。"""
+
+    platform_key: str
+    files: list[PlatformBaselineFile] = Field(default_factory=list)
+    skills: list[PlatformBaselineSkill] = Field(default_factory=list)
+
+
 class PlatformSummary(BaseModel):
     """平台注册摘要。"""
 

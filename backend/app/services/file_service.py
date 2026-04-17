@@ -45,9 +45,18 @@ class FileService:
     def list_uploads(self, session: AgentSession) -> list[FileRecord]:
         return [FileRecord(**item) for item in session.uploads]
 
+    def list_platform_files(self, session: AgentSession) -> list[FileRecord]:
+        return [FileRecord(**item) for item in session.platform_files]
+
+    def list_visible_files(self, session: AgentSession) -> list[FileRecord]:
+        return [
+            *self.list_platform_files(session),
+            *self.list_uploads(session),
+        ]
+
     def resolve_file_path(self, session: AgentSession, file_id: str) -> Path | None:
         assert session.workspace is not None
-        for item in [*session.uploads, *session.artifacts]:
+        for item in [*session.platform_files, *session.uploads, *session.artifacts]:
             if item["file_id"] == file_id:
                 return sandbox_manager.ensure_within_workspace(session.workspace, session.workspace.root / item["relative_path"])
         return None

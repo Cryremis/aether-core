@@ -20,6 +20,28 @@ export type PlatformCreatePayload = {
   owner_user_id?: number;
 };
 
+export type PlatformBaselineFile = {
+  name: string;
+  relative_path: string;
+  section: "input" | "work";
+  size: number;
+  media_type: string;
+};
+
+export type PlatformBaselineSkill = {
+  name: string;
+  description: string;
+  allowed_tools: string[];
+  tags: string[];
+  relative_path: string;
+};
+
+export type PlatformBaselineSummary = {
+  platform_key: string;
+  files: PlatformBaselineFile[];
+  skills: PlatformBaselineSkill[];
+};
+
 const API_BASE = "/api/v1";
 const ACCESS_TOKEN_KEY = "aethercore_access_token";
 
@@ -144,6 +166,80 @@ export async function createPlatform(payload: PlatformCreatePayload) {
   });
   if (!response.ok) {
     throw new Error(`平台注册失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getPlatformBaseline(platformId: number) {
+  const response = await apiFetch(`/platforms/${platformId}/baseline`);
+  if (!response.ok) {
+    throw new Error(`获取平台基线环境失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function uploadPlatformBaselineFile(
+  platformId: number,
+  section: "input" | "work",
+  file: File,
+) {
+  const formData = new FormData();
+  formData.append("upload_file", file);
+  const response = await apiFetch(
+    `/platforms/${platformId}/baseline/files?section=${encodeURIComponent(section)}`,
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`上传平台基线文件失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function deletePlatformBaselineFile(platformId: number, relativePath: string) {
+  const response = await apiFetch(
+    `/platforms/${platformId}/baseline/files?relative_path=${encodeURIComponent(relativePath)}`,
+    {
+      method: "DELETE",
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`删除平台基线文件失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function downloadPlatformBaselineFile(platformId: number, relativePath: string) {
+  const response = await apiFetch(
+    `/platforms/${platformId}/baseline/files/download?relative_path=${encodeURIComponent(relativePath)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`下载平台基线文件失败: ${response.status}`);
+  }
+  return response.blob();
+}
+
+export async function uploadPlatformBaselineSkill(platformId: number, file: File) {
+  const formData = new FormData();
+  formData.append("skill_file", file);
+  const response = await apiFetch(`/platforms/${platformId}/baseline/skills`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(`上传平台基线技能失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function deletePlatformBaselineSkill(platformId: number, skillName: string) {
+  const response = await apiFetch(`/platforms/${platformId}/baseline/skills/${encodeURIComponent(skillName)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`删除平台基线技能失败: ${response.status}`);
   }
   return response.json();
 }

@@ -117,7 +117,7 @@ class SkillService:
         return None
 
     def _all_skill_definitions(self, session: AgentSession) -> list[dict[str, Any]]:
-        skills = [*self._built_in_skills, *session.host_skills]
+        skills = [*self._built_in_skills, *session.host_skills, *session.platform_skills]
         if session.workspace is not None:
             workspace_skills = self._load_skills_from_disk(session.workspace.skills_dir, source="upload")
             if workspace_skills != session.uploaded_skills:
@@ -125,7 +125,12 @@ class SkillService:
             skills.extend(workspace_skills)
         else:
             skills.extend(session.uploaded_skills)
-        return [self._ensure_materialized(session, item) for item in skills]
+        deduped: dict[str, dict[str, Any]] = {}
+        for item in skills:
+            materialized = self._ensure_materialized(session, item)
+            key = self._slugify(str(materialized.get("name", "")))
+            deduped[key] = materialized
+        return list(deduped.values())
 
     def _load_skills_from_disk(self, root: Path, source: str) -> list[dict[str, Any]]:
         loaded = skill_loader.load_directory(root, source=source)

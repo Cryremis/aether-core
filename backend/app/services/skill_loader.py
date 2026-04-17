@@ -27,10 +27,16 @@ class SkillLoader:
         lines = text.splitlines()
         metadata: dict[str, Any] = {}
         body = text
-        if len(lines) >= 3 and lines[1].strip() == "---":
+        frontmatter_start: int | None = None
+        if len(lines) >= 3 and lines[0].strip() == "---":
+            frontmatter_start = 0
+        elif len(lines) >= 4 and lines[1].strip() == "---":
+            frontmatter_start = 1
+
+        if frontmatter_start is not None:
             frontmatter_lines: list[str] = []
-            end_index = 2
-            for index in range(2, len(lines)):
+            end_index = frontmatter_start + 1
+            for index in range(frontmatter_start + 1, len(lines)):
                 line = lines[index]
                 if line.strip() == "---":
                     end_index = index

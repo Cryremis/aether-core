@@ -4,8 +4,14 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   createAdminWhitelist,
   createPlatform,
+  deletePlatformBaselineFile,
+  deletePlatformBaselineSkill,
+  downloadPlatformBaselineFile,
+  getPlatformBaseline,
   listAdminWhitelist,
   listPlatforms,
+  uploadPlatformBaselineFile,
+  uploadPlatformBaselineSkill,
 } from "../api/client";
 
 type AdminPanelProps = {
@@ -22,6 +28,22 @@ type PlatformItem = {
   host_secret: string;
 };
 
+type PlatformBaselineFileItem = {
+  name: string;
+  relative_path: string;
+  section: "input" | "work";
+  size: number;
+  media_type: string;
+};
+
+type PlatformBaselineSkillItem = {
+  name: string;
+  description: string;
+  allowed_tools: string[];
+  tags: string[];
+  relative_path: string;
+};
+
 type WhitelistItem = {
   whitelist_id: number;
   provider: string;
@@ -33,7 +55,12 @@ type WhitelistItem = {
 export function AdminPanel({ role }: AdminPanelProps) {
   const [platforms, setPlatforms] = useState<PlatformItem[]>([]);
   const [whitelist, setWhitelist] = useState<WhitelistItem[]>([]);
+  const [activePlatformId, setActivePlatformId] = useState<number | null>(null);
+  const [baselineFiles, setBaselineFiles] = useState<PlatformBaselineFileItem[]>([]);
+  const [baselineSkills, setBaselineSkills] = useState<PlatformBaselineSkillItem[]>([]);
   const [error, setError] = useState("");
+  const [baselineError, setBaselineError] = useState("");
+  const [baselineSection, setBaselineSection] = useState<"input" | "work">("input");
 
   const [providerUserId, setProviderUserId] = useState("");
   const [whitelistRole, setWhitelistRole] = useState("platform_admin");
@@ -62,9 +89,42 @@ export function AdminPanel({ role }: AdminPanelProps) {
     }
   };
 
+  const loadPlatformBaseline = async (platformId: number) => {
+    setBaselineError("");
+    try {
+      const result = await getPlatformBaseline(platformId);
+      const data = (result.data ?? {}) as {
+        files?: PlatformBaselineFileItem[];
+        skills?: PlatformBaselineSkillItem[];
+      };
+      setBaselineFiles(data.files ?? []);
+      setBaselineSkills(data.skills ?? []);
+      setActivePlatformId(platformId);
+    } catch (loadError) {
+      setBaselineError(loadError instanceof Error ? loadError.message : "加载平台基线环境失败");
+    }
+  };
+
   useEffect(() => {
     void loadData();
   }, [role]);
+
+  useEffect(() => {
+    if (!platforms.length) {
+      setActivePlatformId(null);
+      setBaselineFiles([]);
+      setBaselineSkills([]);
+      return;
+    }
+
+    const preferred =
+      platforms.find((item) => item.platform_key === "standalone") ??
+      platforms[0];
+    const targetId = activePlatformId && platforms.some((item) => item.platform_id === activePlatformId)
+      ? activePlatformId
+      : preferred.platform_id;
+    void loadPlatformBaseline(targetId);
+  }, [platforms]);
 
   const handleCreateWhitelist = async (event: FormEvent) => {
     event.preventDefault();
@@ -107,6 +167,80 @@ export function AdminPanel({ role }: AdminPanelProps) {
       setError(submitError instanceof Error ? submitError.message : "平台注册失败");
     }
   };
+
+  const handleBaselineFileUpload = async (file?: File | null) => {
+    if (!file || !activePlatformId) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      await uploadPlatformBaselineFile(activePlatformId, baselineSection, file);
+      await loadPlatformBaseline(activePlatformId);
+    } catch (submitError) {
+      setBaselineError(submitError instanceof Error ? submitError.message : "上传平台基线文件失败");
+    }
+  };
+
+  const handleBaselineSkillUpload = async (file?: File | null) => {
+    if (!file || !activePlatformId) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      await uploadPlatformBaselineSkill(activePlatformId, file);
+      await loadPlatformBaseline(activePlatformId);
+    } catch (submitError) {
+      setBaselineError(submitError instanceof Error ? submitError.message : "上传平台基线技能失败");
+    }
+  };
+
+  const handleDownloadBaselineFile = async (file: PlatformBaselineFileItem) => {
+    if (!activePlatformId) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      const blob = await downloadPlatformBaselineFile(activePlatformId, file.relative_path);
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = file.name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      setBaselineError(downloadError instanceof Error ? downloadError.message : "下载平台基线文件失败");
+    }
+  };
+
+  const handleDeleteBaselineFile = async (relativePath: string) => {
+    if (!activePlatformId) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      await deletePlatformBaselineFile(activePlatformId, relativePath);
+      await loadPlatformBaseline(activePlatformId);
+    } catch (deleteError) {
+      setBaselineError(deleteError instanceof Error ? deleteError.message : "删除平台基线文件失败");
+    }
+  };
+
+  const handleDeleteBaselineSkill = async (skillName: string) => {
+    if (!activePlatformId) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      await deletePlatformBaselineSkill(activePlatformId, skillName);
+      await loadPlatformBaseline(activePlatformId);
+    } catch (deleteError) {
+      setBaselineError(deleteError instanceof Error ? deleteError.message : "删除平台基线技能失败");
+    }
+  };
+
+  const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
 
   return (
     <section className="admin-panel">
@@ -180,9 +314,81 @@ export function AdminPanel({ role }: AdminPanelProps) {
             <p>{item.description || "未填写平台说明"}</p>
             <p>初始管理员：{item.owner_name}</p>
             <code>{item.host_secret}</code>
+            <button type="button" onClick={() => void loadPlatformBaseline(item.platform_id)}>
+              {activePlatformId === item.platform_id ? "当前正在编辑基线环境" : "编辑平台基线环境"}
+            </button>
           </article>
         ))}
       </div>
+
+      {activePlatform ? (
+        <div className="admin-panel__list">
+          <h4>平台基线环境</h4>
+          <p className="admin-panel__hint">
+            当前平台：{activePlatform.display_name}（{activePlatform.platform_key}）。新会话会从这里派生出初始文件、工作目录和预置技能。
+          </p>
+          {baselineError ? <div className="admin-panel__error">{baselineError}</div> : null}
+
+          <div className="admin-panel__form">
+            <h4>基线文件</h4>
+            <select
+              value={baselineSection}
+              onChange={(event) => setBaselineSection(event.target.value as "input" | "work")}
+            >
+              <option value="input">input 参考资料区</option>
+              <option value="work">work 工作区</option>
+            </select>
+            <label className="admin-panel__file-button">
+              上传文件
+              <input
+                type="file"
+                onChange={(event) => void handleBaselineFileUpload(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            {baselineFiles.length === 0 ? <div className="admin-panel__empty">当前没有基线文件。</div> : null}
+            {baselineFiles.map((item) => (
+              <article key={item.relative_path} className="admin-panel__card">
+                <strong>{item.name}</strong>
+                <p>{item.relative_path}</p>
+                <p>{item.section} · {item.size} bytes</p>
+                <div className="admin-panel__actions">
+                  <button type="button" onClick={() => void handleDownloadBaselineFile(item)}>
+                    下载
+                  </button>
+                  <button type="button" onClick={() => void handleDeleteBaselineFile(item.relative_path)}>
+                    删除
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+
+          <div className="admin-panel__form">
+            <h4>基线技能</h4>
+            <label className="admin-panel__file-button">
+              上传技能包
+              <input
+                type="file"
+                accept=".zip,.md"
+                onChange={(event) => void handleBaselineSkillUpload(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            {baselineSkills.length === 0 ? <div className="admin-panel__empty">当前没有基线技能。</div> : null}
+            {baselineSkills.map((item) => (
+              <article key={item.relative_path} className="admin-panel__card">
+                <strong>{item.name}</strong>
+                <p>{item.description}</p>
+                <p>{item.relative_path}</p>
+                <div className="admin-panel__actions">
+                  <button type="button" onClick={() => void handleDeleteBaselineSkill(item.name)}>
+                    删除
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {role === "system_admin" ? (
         <div className="admin-panel__list">

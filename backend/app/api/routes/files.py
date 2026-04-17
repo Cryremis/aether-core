@@ -46,7 +46,7 @@ async def upload_file(
 @router.get("")
 def list_files(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> FileListResponse:
     session = _ensure_session_access(session_id, auth)
-    return FileListResponse(items=[*file_service.list_uploads(session), *artifact_service.list_artifacts(session)])
+    return FileListResponse(items=[*file_service.list_visible_files(session), *artifact_service.list_artifacts(session)])
 
 
 @router.get("/{file_id}/download")

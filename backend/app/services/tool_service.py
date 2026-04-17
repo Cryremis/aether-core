@@ -100,7 +100,7 @@ class ToolService:
             return {
                 "items": [
                     item.model_dump(mode="json")
-                    for item in artifact_service.list_artifacts(session) + file_service.list_uploads(session)
+                    for item in file_service.list_visible_files(session) + artifact_service.list_artifacts(session)
                 ]
             }
         if tool_name == "read_workspace_file":

@@ -695,7 +695,9 @@ a { text-decoration: none; color: var(--accent); }
 }
 
 .admin-panel__header button,
-.admin-panel__form button {
+.admin-panel__form button,
+.admin-panel__card button,
+.admin-panel__file-button {
   min-height: 34px;
   padding: 0 12px;
   border-radius: 10px;
@@ -703,6 +705,11 @@ a { text-decoration: none; color: var(--accent); }
   color: #fff;
   font-size: 12px;
   font-weight: 600;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .admin-panel__form {
@@ -760,6 +767,20 @@ a { text-decoration: none; color: var(--accent); }
   padding: 12px;
 }
 
+.admin-panel__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-panel__file-button {
+  width: fit-content;
+}
+
+.admin-panel__file-button input {
+  display: none;
+}
+
 .admin-panel__card p {
   font-size: 12px;
   color: var(--text-secondary);
@@ -780,6 +801,8 @@ a { text-decoration: none; color: var(--accent); }
 }
 
 .admin-page {
+  height: 100vh;
+  overflow-y: auto;
   min-height: 100vh;
   background:
     radial-gradient(circle at top left, rgba(37, 99, 235, 0.05), transparent 24%),

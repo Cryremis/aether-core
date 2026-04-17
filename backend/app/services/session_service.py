@@ -20,6 +20,8 @@ class AgentSession:
     host_type: str = "custom"
     messages: list[dict[str, Any]] = field(default_factory=list)
     host_context: dict[str, Any] = field(default_factory=dict)
+    platform_files: list[dict[str, Any]] = field(default_factory=list)
+    platform_skills: list[dict[str, Any]] = field(default_factory=list)
     host_tools: list[dict[str, Any]] = field(default_factory=list)
     host_skills: list[dict[str, Any]] = field(default_factory=list)
     uploaded_skills: list[dict[str, Any]] = field(default_factory=list)
@@ -86,6 +88,17 @@ class SessionService:
         session.uploaded_skills = skills
         self.persist(session)
 
+    def replace_platform_assets(
+        self,
+        session: AgentSession,
+        *,
+        files: list[dict[str, Any]],
+        skills: list[dict[str, Any]],
+    ) -> None:
+        session.platform_files = files
+        session.platform_skills = skills
+        self.persist(session)
+
     def _load_from_disk(self, session_id: str) -> AgentSession | None:
         metadata_path = sandbox_manager.ensure_workspace(session_id).metadata_dir / "session.json"
         if not metadata_path.exists():
@@ -98,6 +111,8 @@ class SessionService:
             host_type=payload.get("host_type", "custom"),
             messages=payload.get("messages", []),
             host_context=payload.get("host_context", {}),
+            platform_files=payload.get("platform_files", []),
+            platform_skills=payload.get("platform_skills", []),
             host_tools=payload.get("host_tools", []),
             host_skills=payload.get("host_skills", []),
             uploaded_skills=payload.get("uploaded_skills", []),
@@ -120,6 +135,8 @@ class SessionService:
             "host_type": session.host_type,
             "messages": session.messages,
             "host_context": session.host_context,
+            "platform_files": session.platform_files,
+            "platform_skills": session.platform_skills,
             "host_tools": session.host_tools,
             "host_skills": session.host_skills,
             "uploaded_skills": session.uploaded_skills,

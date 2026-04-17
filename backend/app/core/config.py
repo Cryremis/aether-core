@@ -127,5 +127,9 @@ class Settings(BaseSettings):
     def metadata_db_path(self) -> Path:
         return self.storage_root / self.metadata_db_name
 
+    @property
+    def platform_baselines_root(self) -> Path:
+        return self.storage_root / "platform_baselines"
+
 
 settings = Settings()

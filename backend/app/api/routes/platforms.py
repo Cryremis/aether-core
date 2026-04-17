@@ -1,7 +1,8 @@
 # backend/app/api/routes/platforms.py
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from app.api.deps import AuthContext, require_admin, require_platform_secret, require_system_admin
 from app.schemas.common import ApiResponse
@@ -13,9 +14,20 @@ from app.schemas.platform import (
     PlatformSummary,
 )
 from app.services.conversation_service import conversation_service
+from app.services.platform_baseline_service import platform_baseline_service
 from app.services.store import store_service
 
 router = APIRouter(prefix="/api/v1/platforms", tags=["platforms"])
+
+
+def _get_managed_platform(platform_id: int, auth: AuthContext) -> dict:
+    platform = next((item for item in store_service.list_platforms() if item["platform_id"] == platform_id), None)
+    if platform is None:
+        raise HTTPException(status_code=404, detail="平台不存在")
+    if auth.role != "system_admin":
+        if auth.user is None or not store_service.is_platform_admin(platform_id=platform_id, user_id=auth.user.user_id):
+            raise HTTPException(status_code=403, detail="无权管理该平台")
+    return platform
 
 
 @router.post("")
@@ -61,11 +73,7 @@ def assign_platform_admin(
     request: PlatformAdminAssignRequest,
     auth: AuthContext = Depends(require_admin),
 ) -> ApiResponse:
-    platform = next((item for item in store_service.list_platforms() if item["platform_id"] == platform_id), None)
-    if platform is None:
-        raise HTTPException(status_code=404, detail="平台不存在")
-    if auth.role != "system_admin" and (auth.user is None or not store_service.is_platform_admin(platform_id=platform_id, user_id=auth.user.user_id)):
-        raise HTTPException(status_code=403, detail="无权管理该平台")
+    _get_managed_platform(platform_id, auth)
     target_user = store_service.get_user_by_id(request.user_id)
     if target_user is None:
         raise HTTPException(status_code=404, detail="目标管理员不存在")
@@ -94,6 +102,91 @@ def list_platforms(auth: AuthContext = Depends(require_admin)) -> ApiResponse:
             ).model_dump(mode="json")
         )
     return ApiResponse(message="平台列表", data=items)
+
+
+@router.get("/{platform_id}/baseline")
+def get_platform_baseline(
+    platform_id: int,
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    summary = platform_baseline_service.list_summary(platform["platform_key"])
+    return ApiResponse(message="平台基线环境", data=summary.model_dump(mode="json"))
+
+
+@router.post("/{platform_id}/baseline/files")
+async def upload_platform_baseline_file(
+    platform_id: int,
+    upload_file: UploadFile = File(...),
+    section: str = Query(default="input"),
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    normalized_section = section.strip().lower()
+    if normalized_section not in {"input", "work"}:
+        raise HTTPException(status_code=400, detail="section 仅支持 input 或 work")
+    item = await platform_baseline_service.upload_file(
+        platform["platform_key"],
+        upload_file=upload_file,
+        section=normalized_section,  # type: ignore[arg-type]
+    )
+    return ApiResponse(message="平台基线文件上传成功", data=item.model_dump(mode="json"))
+
+
+@router.delete("/{platform_id}/baseline/files")
+def delete_platform_baseline_file(
+    platform_id: int,
+    relative_path: str = Query(...),
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    try:
+        platform_baseline_service.delete_file(platform["platform_key"], relative_path=relative_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(message="平台基线文件已删除")
+
+
+@router.get("/{platform_id}/baseline/files/download")
+def download_platform_baseline_file(
+    platform_id: int,
+    relative_path: str = Query(...),
+    auth: AuthContext = Depends(require_admin),
+) -> FileResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    try:
+        path = platform_baseline_service.resolve_file(platform["platform_key"], relative_path=relative_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(path=path, filename=path.name)
+
+
+@router.post("/{platform_id}/baseline/skills")
+async def upload_platform_baseline_skill(
+    platform_id: int,
+    skill_file: UploadFile = File(...),
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    items = await platform_baseline_service.upload_skill(platform["platform_key"], upload_file=skill_file)
+    return ApiResponse(
+        message="平台基线技能上传成功",
+        data={"items": [item.model_dump(mode="json") for item in items]},
+    )
+
+
+@router.delete("/{platform_id}/baseline/skills/{skill_name}")
+def delete_platform_baseline_skill(
+    platform_id: int,
+    skill_name: str,
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    try:
+        platform_baseline_service.delete_skill(platform["platform_key"], skill_name=skill_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(message="平台基线技能已删除")
 
 
 @router.post("/embed/bootstrap", response_model=EmbedBootstrapResponse)

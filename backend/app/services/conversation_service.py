@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.schemas.platform import ConversationSummary
+from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import AgentSession, session_service
 from app.services.store import StoreUser, store_service
 from app.services.token_service import token_service
@@ -36,6 +37,7 @@ class ConversationService:
         session.conversation_id = conversation["conversation_id"]
         session.host_name = "AetherCore"
         session.host_type = "standalone"
+        platform_baseline_service.materialize_to_session("standalone", session)
         session_service.persist(session)
         return session
 
@@ -76,6 +78,7 @@ class ConversationService:
             )
             session.host_name = host_name or platform["display_name"]
             session.host_type = host_type or platform["host_type"]
+            platform_baseline_service.materialize_to_session(platform["platform_key"], session)
         else:
             session = session_service.get_or_create(conversation["session_id"])
 

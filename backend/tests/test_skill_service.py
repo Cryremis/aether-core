@@ -41,6 +41,7 @@ def test_install_skill_upload_from_zip_and_invoke(tmp_path):
     )
 
     assert any(item.name == "excel-helper" for item in cards)
+    assert any(item.description == "处理 Excel 与表格文件" for item in cards)
     loaded = skill_service.invoke_skill(session, "excel-helper")
     injected = loaded["injected_messages"][0]["content"]
     assert "Base directory for this skill:" in injected
