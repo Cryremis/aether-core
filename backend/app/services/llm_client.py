@@ -7,41 +7,45 @@ from typing import Any, AsyncGenerator
 import httpx
 
 from app.core.config import settings
+from app.services.llm_config_service import RuntimeLlmConfig
 
 
 class LlmClient:
     """OpenAI 兼容协议客户端。"""
 
-    def _endpoint(self) -> str:
-        if not settings.llm_api_key:
+    def _endpoint(self, config: RuntimeLlmConfig) -> str:
+        if not config.api_key:
             raise RuntimeError("未配置 LLM_API_KEY，无法调用模型。")
-        if not settings.llm_base_url:
+        if not config.base_url:
             raise RuntimeError("未配置 LLM_BASE_URL，无法调用模型。")
-        if not settings.llm_model:
+        if not config.model:
             raise RuntimeError("未配置 LLM_MODEL，无法调用模型。")
 
-        base = settings.llm_base_url.rstrip("/")
+        base = config.base_url.rstrip("/")
         if base.endswith("/chat/completions"):
             return base
         if base.endswith("/v1") or base.endswith("/v3") or base.endswith("/v4"):
             return f"{base}/chat/completions"
         return f"{base}/chat/completions"
 
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {settings.llm_api_key}",
+    def _headers(self, config: RuntimeLlmConfig) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json",
         }
+        headers.update(config.extra_headers)
+        return headers
 
     def _payload(
         self,
+        config: RuntimeLlmConfig,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         *,
         stream: bool,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": settings.llm_model,
+            "model": config.model,
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": settings.llm_max_tokens,
@@ -51,16 +55,18 @@ class LlmClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
             payload["tool_stream"] = True
+        payload.update(config.extra_body)
         return payload
 
     async def create_chat_completion(
         self,
+        config: RuntimeLlmConfig,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        payload = self._payload(messages, tools, stream=False)
+        payload = self._payload(config, messages, tools, stream=False)
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-            response = await client.post(self._endpoint(), headers=self._headers(), json=payload)
+            response = await client.post(self._endpoint(config), headers=self._headers(config), json=payload)
             response.raise_for_status()
             data = response.json()
 
@@ -71,12 +77,13 @@ class LlmClient:
 
     async def stream_chat_completion(
         self,
+        config: RuntimeLlmConfig,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> AsyncGenerator[dict[str, Any], None]:
-        payload = self._payload(messages, tools, stream=True)
+        payload = self._payload(config, messages, tools, stream=True)
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-            async with client.stream("POST", self._endpoint(), headers=self._headers(), json=payload) as response:
+            async with client.stream("POST", self._endpoint(config), headers=self._headers(config), json=payload) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data:"):

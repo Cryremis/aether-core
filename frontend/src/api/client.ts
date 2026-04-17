@@ -59,6 +59,34 @@ export type PlatformBaselineFileContent = {
   truncated: boolean;
 };
 
+export type LlmConfigPayload = {
+  enabled: boolean;
+  provider_kind?: "litellm";
+  api_format?: "openai-compatible";
+  base_url: string;
+  model: string;
+  api_key?: string | null;
+  clear_api_key?: boolean;
+  extra_headers?: Record<string, string>;
+  extra_body?: Record<string, unknown>;
+};
+
+export type LlmConfigSummary = {
+  enabled: boolean;
+  provider_kind: string;
+  api_format: string;
+  base_url: string;
+  model: string;
+  has_api_key: boolean;
+  extra_headers: Record<string, string>;
+  extra_body: Record<string, unknown>;
+  updated_at?: string | null;
+};
+
+export type ResolvedLlmConfig = LlmConfigSummary & {
+  scope: "user" | "platform" | "global";
+};
+
 const API_BASE = "/api/v1";
 const ACCESS_TOKEN_KEY = "aethercore_access_token";
 
@@ -183,6 +211,70 @@ export async function createPlatform(payload: PlatformCreatePayload) {
   });
   if (!response.ok) {
     throw new Error(`平台注册失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getGlobalLlmConfig() {
+  const response = await apiFetch("/llm/global");
+  if (!response.ok) {
+    throw new Error(`获取全局 LLM 配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getUserLlmConfig() {
+  const response = await apiFetch("/llm/user");
+  if (!response.ok) {
+    throw new Error(`获取用户 LLM 配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updateUserLlmConfig(payload: LlmConfigPayload) {
+  const response = await apiFetch("/llm/user", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`更新用户 LLM 配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function deleteUserLlmConfig() {
+  const response = await apiFetch("/llm/user", { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(`删除用户 LLM 配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getPlatformLlmConfig(platformId: number) {
+  const response = await apiFetch(`/llm/platform/${platformId}`);
+  if (!response.ok) {
+    throw new Error(`获取平台 LLM 配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updatePlatformLlmConfig(platformId: number, payload: LlmConfigPayload) {
+  const response = await apiFetch(`/llm/platform/${platformId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`更新平台 LLM 配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function deletePlatformLlmConfig(platformId: number) {
+  const response = await apiFetch(`/llm/platform/${platformId}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(`删除平台 LLM 配置失败: ${response.status}`);
   }
   return response.json();
 }

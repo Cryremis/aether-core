@@ -103,6 +103,34 @@ class StoreService:
                     UNIQUE(platform_id, user_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS platform_llm_configs (
+                    platform_id INTEGER PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    provider_kind TEXT NOT NULL DEFAULT 'litellm',
+                    api_format TEXT NOT NULL DEFAULT 'openai-compatible',
+                    base_url TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    api_key TEXT,
+                    extra_headers_json TEXT NOT NULL DEFAULT '{}',
+                    extra_body_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS user_llm_configs (
+                    user_id INTEGER PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    provider_kind TEXT NOT NULL DEFAULT 'litellm',
+                    api_format TEXT NOT NULL DEFAULT 'openai-compatible',
+                    base_url TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    api_key TEXT,
+                    extra_headers_json TEXT NOT NULL DEFAULT '{}',
+                    extra_body_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL UNIQUE,
@@ -357,6 +385,128 @@ class StoreService:
             rows = conn.execute("SELECT * FROM platforms ORDER BY platform_id DESC").fetchall()
         return [dict(row) for row in rows]
 
+    def get_platform_llm_config(self, platform_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM platform_llm_configs WHERE platform_id = ?", (platform_id,)).fetchone()
+        return self._row_to_llm_config(row)
+
+    def upsert_platform_llm_config(
+        self,
+        *,
+        platform_id: int,
+        enabled: bool,
+        provider_kind: str,
+        api_format: str,
+        base_url: str,
+        model: str,
+        api_key: str | None,
+        extra_headers: dict[str, Any],
+        extra_body: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = utcnow_iso()
+        existing = self.get_platform_llm_config(platform_id)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO platform_llm_configs(
+                    platform_id, enabled, provider_kind, api_format, base_url, model, api_key,
+                    extra_headers_json, extra_body_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    provider_kind = excluded.provider_kind,
+                    api_format = excluded.api_format,
+                    base_url = excluded.base_url,
+                    model = excluded.model,
+                    api_key = excluded.api_key,
+                    extra_headers_json = excluded.extra_headers_json,
+                    extra_body_json = excluded.extra_body_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    platform_id,
+                    1 if enabled else 0,
+                    provider_kind,
+                    api_format,
+                    base_url,
+                    model,
+                    api_key,
+                    json.dumps(extra_headers, ensure_ascii=False),
+                    json.dumps(extra_body, ensure_ascii=False),
+                    existing["created_at"] if existing else now,
+                    now,
+                ),
+            )
+        row = self.get_platform_llm_config(platform_id)
+        if row is None:
+            raise RuntimeError("平台 LLM 配置保存失败")
+        return row
+
+    def delete_platform_llm_config(self, platform_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM platform_llm_configs WHERE platform_id = ?", (platform_id,))
+
+    def get_user_llm_config(self, user_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM user_llm_configs WHERE user_id = ?", (user_id,)).fetchone()
+        return self._row_to_llm_config(row)
+
+    def upsert_user_llm_config(
+        self,
+        *,
+        user_id: int,
+        enabled: bool,
+        provider_kind: str,
+        api_format: str,
+        base_url: str,
+        model: str,
+        api_key: str | None,
+        extra_headers: dict[str, Any],
+        extra_body: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = utcnow_iso()
+        existing = self.get_user_llm_config(user_id)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_llm_configs(
+                    user_id, enabled, provider_kind, api_format, base_url, model, api_key,
+                    extra_headers_json, extra_body_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    provider_kind = excluded.provider_kind,
+                    api_format = excluded.api_format,
+                    base_url = excluded.base_url,
+                    model = excluded.model,
+                    api_key = excluded.api_key,
+                    extra_headers_json = excluded.extra_headers_json,
+                    extra_body_json = excluded.extra_body_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    user_id,
+                    1 if enabled else 0,
+                    provider_kind,
+                    api_format,
+                    base_url,
+                    model,
+                    api_key,
+                    json.dumps(extra_headers, ensure_ascii=False),
+                    json.dumps(extra_body, ensure_ascii=False),
+                    existing["created_at"] if existing else now,
+                    now,
+                ),
+            )
+        row = self.get_user_llm_config(user_id)
+        if row is None:
+            raise RuntimeError("用户 LLM 配置保存失败")
+        return row
+
+    def delete_user_llm_config(self, user_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM user_llm_configs WHERE user_id = ?", (user_id,))
+
     def is_platform_admin(self, *, platform_id: int, user_id: int) -> bool:
         with self._connect() as conn:
             row = conn.execute(
@@ -509,6 +659,17 @@ class StoreService:
             password_hash=row["password_hash"],
             is_active=bool(row["is_active"]),
         )
+
+    def _row_to_llm_config(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        return {
+            **dict(row),
+            "enabled": bool(row["enabled"]),
+            "has_api_key": bool(row["api_key"]),
+            "extra_headers": json.loads(row["extra_headers_json"] or "{}"),
+            "extra_body": json.loads(row["extra_body_json"] or "{}"),
+        }
 
 
 store_service = StoreService()

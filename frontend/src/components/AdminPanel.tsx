@@ -5,14 +5,17 @@ import {
   createPlatformBaselineDirectory,
   createAdminWhitelist,
   createPlatform,
+  deletePlatformLlmConfig,
   deletePlatformBaselineFile,
   downloadPlatformBaselineFile,
   getPlatformBaseline,
   getPlatformBaselineFileContent,
+  getPlatformLlmConfig,
   listAdminWhitelist,
   listPlatforms,
   movePlatformBaselinePath,
   savePlatformBaselineTextFile,
+  updatePlatformLlmConfig,
   uploadPlatformBaselineFile,
 } from "../api/client";
 
@@ -56,6 +59,15 @@ type WhitelistItem = {
 };
 
 type AdminWhitelistRole = "system_admin" | "platform_admin" | "debug";
+type LlmConfigFormState = {
+  enabled: boolean;
+  base_url: string;
+  model: string;
+  api_key: string;
+  extra_headers_text: string;
+  extra_body_text: string;
+  has_api_key: boolean;
+};
 
 // ================== SVG 图标集合 ==================
 const Icons = {
@@ -96,6 +108,18 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const[platformKey, setPlatformKey] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
+  const [platformLlmForm, setPlatformLlmForm] = useState<LlmConfigFormState>({
+    enabled: true,
+    base_url: "",
+    model: "",
+    api_key: "",
+    extra_headers_text: "",
+    extra_body_text: "",
+    has_api_key: false,
+  });
+  const [platformLlmError, setPlatformLlmError] = useState("");
+  const [platformLlmBusy, setPlatformLlmBusy] = useState(false);
+  const [showPlatformLlmAdvanced, setShowPlatformLlmAdvanced] = useState(false);
 
   const fileManagerRef = useRef<HTMLDivElement>(null);
 
@@ -135,6 +159,54 @@ export function AdminPanel({ role }: AdminPanelProps) {
   };
 
   useEffect(() => { void loadData(); }, [role]);
+
+  useEffect(() => {
+    if (!activePlatformId) {
+      setPlatformLlmError("");
+      setPlatformLlmForm({
+        enabled: true,
+        base_url: "",
+        model: "",
+        api_key: "",
+        extra_headers_text: "",
+        extra_body_text: "",
+        has_api_key: false,
+      });
+      setShowPlatformLlmAdvanced(false);
+      return;
+    }
+    void (async () => {
+      try {
+        setPlatformLlmError("");
+        const result = await getPlatformLlmConfig(activePlatformId);
+        const data = (result.data ?? null) as {
+          enabled: boolean;
+          base_url: string;
+          model: string;
+          has_api_key: boolean;
+          extra_headers?: Record<string, string>;
+          extra_body?: Record<string, unknown>;
+        } | null;
+        setPlatformLlmForm({
+          enabled: data?.enabled ?? true,
+          base_url: data?.base_url ?? "",
+          model: data?.model ?? "",
+          api_key: "",
+          extra_headers_text: data?.extra_headers && Object.keys(data.extra_headers).length > 0 ? JSON.stringify(data.extra_headers, null, 2) : "",
+          extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
+          has_api_key: Boolean(data?.has_api_key),
+        });
+        setShowPlatformLlmAdvanced(
+          Boolean(
+            (data?.extra_headers && Object.keys(data.extra_headers).length > 0) ||
+            (data?.extra_body && Object.keys(data.extra_body).length > 0),
+          ),
+        );
+      } catch (err) {
+        setPlatformLlmError(err instanceof Error ? err.message : "加载平台 LLM 配置失败");
+      }
+    })();
+  }, [activePlatformId]);
 
   useEffect(() => {
     if (!platforms.length) {
@@ -270,6 +342,88 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
   const describePlatformType = (item: PlatformItem) => item.platform_key === "standalone" || item.host_type === "standalone" ? "内置平台" : "接入平台";
 
+  const parseJsonObject = (raw: string, label: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return {};
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error(`${label}必须是 JSON 对象`);
+      }
+      return parsed as Record<string, unknown>;
+    } catch (err) {
+      throw new Error(err instanceof Error ? err.message : `${label}解析失败`);
+    }
+  };
+
+  const handleSavePlatformLlm = async () => {
+    if (!activePlatformId) return;
+    try {
+      setPlatformLlmBusy(true);
+      setPlatformLlmError("");
+      await updatePlatformLlmConfig(activePlatformId, {
+        enabled: platformLlmForm.enabled,
+        base_url: platformLlmForm.base_url.trim(),
+        model: platformLlmForm.model.trim(),
+        api_key: platformLlmForm.api_key.trim() || undefined,
+        extra_headers: parseJsonObject(platformLlmForm.extra_headers_text, "扩展请求头") as Record<string, string>,
+        extra_body: parseJsonObject(platformLlmForm.extra_body_text, "扩展请求体"),
+      });
+      const latest = await getPlatformLlmConfig(activePlatformId);
+      const data = (latest.data ?? null) as {
+        enabled: boolean;
+        base_url: string;
+        model: string;
+        has_api_key: boolean;
+        extra_headers?: Record<string, string>;
+        extra_body?: Record<string, unknown>;
+      } | null;
+      setPlatformLlmForm({
+        enabled: data?.enabled ?? true,
+        base_url: data?.base_url ?? "",
+        model: data?.model ?? "",
+        api_key: "",
+        extra_headers_text: data?.extra_headers && Object.keys(data.extra_headers).length > 0 ? JSON.stringify(data.extra_headers, null, 2) : "",
+        extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
+        has_api_key: Boolean(data?.has_api_key),
+      });
+      setShowPlatformLlmAdvanced(
+        Boolean(
+          (data?.extra_headers && Object.keys(data.extra_headers).length > 0) ||
+          (data?.extra_body && Object.keys(data.extra_body).length > 0),
+        ),
+      );
+    } catch (err) {
+      setPlatformLlmError(err instanceof Error ? err.message : "保存平台 LLM 配置失败");
+    } finally {
+      setPlatformLlmBusy(false);
+    }
+  };
+
+  const handleResetPlatformLlm = async () => {
+    if (!activePlatformId) return;
+    if (!window.confirm("确定删除该平台的专属 LLM 配置并回退到全局默认吗？")) return;
+    try {
+      setPlatformLlmBusy(true);
+      setPlatformLlmError("");
+      await deletePlatformLlmConfig(activePlatformId);
+      setPlatformLlmForm({
+        enabled: true,
+        base_url: "",
+        model: "",
+        api_key: "",
+        extra_headers_text: "",
+        extra_body_text: "",
+        has_api_key: false,
+      });
+      setShowPlatformLlmAdvanced(false);
+    } catch (err) {
+      setPlatformLlmError(err instanceof Error ? err.message : "删除平台 LLM 配置失败");
+    } finally {
+      setPlatformLlmBusy(false);
+    }
+  };
+
   // 面包屑解析
   const breadcrumbs = useMemo(() => {
     if (!currentBaselineDirectory) return[];
@@ -391,6 +545,68 @@ export function AdminPanel({ role }: AdminPanelProps) {
       {/* ================= 现代化资源管理器 ================= */}
       {activePlatform ? (
         <div className="admin-panel__list baseline-manager-wrapper">
+          <div className="admin-panel__form admin-panel__form--llm">
+            <h4>平台默认 LLM</h4>
+            <p className="admin-panel__hint">这里配置该平台的新会话默认使用的 LiteLLM / OpenAI 兼容入口。终端用户如配置了个人 LLM，会优先覆盖这里。</p>
+            {platformLlmError ? <div className="admin-panel__error">{platformLlmError}</div> : null}
+            <label className="admin-panel__checkbox">
+              <input
+                type="checkbox"
+                checked={platformLlmForm.enabled}
+                onChange={(e) => setPlatformLlmForm((current) => ({ ...current, enabled: e.target.checked }))}
+              />
+              <span>启用平台默认 LLM</span>
+            </label>
+            <input
+              value={platformLlmForm.base_url}
+              onChange={(e) => setPlatformLlmForm((current) => ({ ...current, base_url: e.target.value }))}
+              autoComplete="off"
+              name="platform-llm-base-url"
+              placeholder="LiteLLM 或内网 OpenAI 兼容服务地址，例如 http://litellm.internal:4000/v1"
+            />
+            <input
+              value={platformLlmForm.model}
+              onChange={(e) => setPlatformLlmForm((current) => ({ ...current, model: e.target.value }))}
+              autoComplete="off"
+              name="platform-llm-model-id"
+              placeholder="模型 ID，例如 glm-4.5 / minimax-m1 / gpt-4o-mini"
+            />
+            <input
+              type="password"
+              value={platformLlmForm.api_key}
+              onChange={(e) => setPlatformLlmForm((current) => ({ ...current, api_key: e.target.value }))}
+              autoComplete="new-password"
+              name="platform-llm-api-key"
+              placeholder={platformLlmForm.has_api_key ? "已存在密钥，留空则保持不变" : "API Key"}
+            />
+            <details className="llm-advanced-panel" open={showPlatformLlmAdvanced} onToggle={(e) => setShowPlatformLlmAdvanced((e.currentTarget as HTMLDetailsElement).open)}>
+              <summary>高级参数</summary>
+              <p className="admin-panel__hint">仅在代理网关、租户透传或内网兼容服务需要补充额外 headers/body 时填写。留空即可。</p>
+              <textarea
+                value={platformLlmForm.extra_headers_text}
+                onChange={(e) => setPlatformLlmForm((current) => ({ ...current, extra_headers_text: e.target.value }))}
+                autoComplete="off"
+                name="platform-llm-extra-headers"
+                placeholder='额外请求头 JSON，例如 {"x-foo":"bar"}'
+              />
+              <textarea
+                value={platformLlmForm.extra_body_text}
+                onChange={(e) => setPlatformLlmForm((current) => ({ ...current, extra_body_text: e.target.value }))}
+                autoComplete="off"
+                name="platform-llm-extra-body"
+                placeholder='额外请求体 JSON，例如 {"reasoning":{"effort":"medium"}}'
+              />
+            </details>
+            <div className="admin-panel__actions">
+              <button type="button" onClick={() => void handleSavePlatformLlm()} disabled={platformLlmBusy || !platformLlmForm.base_url.trim() || !platformLlmForm.model.trim()}>
+                {platformLlmBusy ? "保存中..." : "保存平台 LLM"}
+              </button>
+              <button type="button" className="danger-button" onClick={() => void handleResetPlatformLlm()} disabled={platformLlmBusy}>
+                清除覆盖
+              </button>
+            </div>
+          </div>
+
           <div className="manager-header">
             <div className="manager-header__info">
               <h4>基线资源管理器</h4>

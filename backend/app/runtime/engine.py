@@ -10,6 +10,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.runtime.event_protocol import make_event
+from app.services.llm_config_service import llm_config_service
 from app.services.llm_client import llm_client
 from app.services.session_service import AgentSession, session_service
 from app.services.store import store_service
@@ -47,6 +48,10 @@ class AgentEngine:
             {"role": "system", "content": self._build_system_message(session)},
             *session.messages,
         ]
+        conversation = store_service.get_conversation_by_session(session.session_id)
+        if conversation is None:
+            raise RuntimeError("会话对应的对话记录不存在")
+        llm_runtime = llm_config_service.resolve_for_conversation(conversation)
         tools = tool_service.list_tool_schemas(session)
         turn_count = 0
         last_stop_reason: str | None = None
@@ -102,7 +107,7 @@ class AgentEngine:
             active_reasoning_block_id = ""
             active_content_block_id = ""
 
-            async for chunk in llm_client.stream_chat_completion(messages=messages, tools=tools):
+            async for chunk in llm_client.stream_chat_completion(config=llm_runtime, messages=messages, tools=tools):
                 choices = chunk.get("choices") or []
                 if not choices:
                     continue

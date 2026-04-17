@@ -754,6 +754,19 @@ a { text-decoration: none; color: var(--accent); }
   color: var(--text-secondary);
 }
 
+.admin-panel__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.admin-panel__checkbox input {
+  width: 16px;
+  height: 16px;
+}
+
 .admin-panel__list {
   display: flex;
   flex-direction: column;
@@ -779,6 +792,16 @@ a { text-decoration: none; color: var(--accent); }
   border-radius: 10px;
   border: 1px solid rgba(226, 232, 240, 0.95);
   background: #fff;
+}
+
+.danger-button {
+  background: #fff1f2;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+}
+
+.danger-button:hover {
+  background: #ffe4e6;
 }
 
 .admin-panel__file-button {
@@ -1730,6 +1753,85 @@ a { text-decoration: none; color: var(--accent); }
 .markdown-body pre,
 .markdown-body blockquote {
   margin-top: 0;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  padding: 24px;
+}
+
+.llm-dialog {
+  width: min(720px, 100%);
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+}
+
+.llm-dialog__header,
+.llm-dialog__footer {
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.llm-dialog__header {
+  border-bottom: 1px solid rgba(226, 232, 240, 0.85);
+}
+
+.llm-dialog__footer {
+  border-top: 1px solid rgba(226, 232, 240, 0.85);
+}
+
+.llm-dialog__header p {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.llm-dialog__body {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+}
+
+.llm-input {
+  width: 100%;
+}
+
+.llm-textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.llm-advanced-panel {
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(248, 250, 252, 0.88);
+}
+
+.llm-advanced-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.llm-advanced-panel__hint {
+  margin: 10px 0 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 1280px) {

@@ -15,6 +15,7 @@ from app.services.auth_service import auth_service
 from app.core.config import settings
 from app.services.oauth_service import oauth_service
 from app.services.store import store_service
+from app.services.llm_config_service import llm_config_service
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 

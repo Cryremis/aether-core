@@ -123,7 +123,8 @@ class Settings(BaseSettings):
     def resolved_storage_root(self) -> Path:
         if self.storage_root.is_absolute():
             return self.storage_root
-        return self.project_root / self.storage_root
+        # 存储根目录固定落在 backend/storage，避免受启动 cwd 影响读到项目根目录下的另一套运行态数据。
+        return self.backend_root / self.storage_root
 
     @property
     def sessions_root(self) -> Path:

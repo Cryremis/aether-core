@@ -5,11 +5,14 @@ import "highlight.js/styles/github-dark-dimmed.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  deleteUserLlmConfig,
   getDownloadUrl,
+  getUserLlmConfig,
   getSessionSummary,
   listFiles,
   listSkills,
   streamChat,
+  updateUserLlmConfig,
   uploadFile,
   uploadSkill,
 } from "../api/client";
@@ -55,6 +58,16 @@ type ChatMessage =
   | { id: string; role: "assistant"; blocks: AssistantBlock[] };
 
 type SidebarView = "sessions" | "files" | "skills";
+type LlmDialogState = {
+  enabled: boolean;
+  base_url: string;
+  model: string;
+  api_key: string;
+  extra_headers_text: string;
+  extra_body_text: string;
+  has_api_key: boolean;
+  resolved_scope: "user" | "platform" | "global";
+};
 
 type WorkbenchPageProps = {
   conversations: Array<{
@@ -156,6 +169,20 @@ export function WorkbenchPage({
   const [sidebarView, setSidebarView] = useState<SidebarView>("sessions");
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 1024);
+  const [showLlmDialog, setShowLlmDialog] = useState(false);
+  const [llmBusy, setLlmBusy] = useState(false);
+  const [llmError, setLlmError] = useState("");
+  const [llmState, setLlmState] = useState<LlmDialogState>({
+    enabled: true,
+    base_url: "",
+    model: "",
+    api_key: "",
+    extra_headers_text: "",
+    extra_body_text: "",
+    has_api_key: false,
+    resolved_scope: "global",
+  });
+  const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
 
   const historyRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -210,6 +237,92 @@ export function WorkbenchPage({
     if (!node) return;
     node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
+
+  const loadUserLlmConfig = async () => {
+    const result = await getUserLlmConfig();
+    const data = (result.data ?? {}) as {
+      config?: {
+        enabled: boolean;
+        base_url: string;
+        model: string;
+        has_api_key: boolean;
+        extra_headers?: Record<string, string>;
+        extra_body?: Record<string, unknown>;
+      } | null;
+      resolved?: { scope?: "user" | "platform" | "global" };
+    };
+    const config = data.config;
+    setLlmState({
+      enabled: config?.enabled ?? true,
+      base_url: config?.base_url ?? "",
+      model: config?.model ?? "",
+      api_key: "",
+      extra_headers_text: config?.extra_headers && Object.keys(config.extra_headers).length > 0 ? JSON.stringify(config.extra_headers, null, 2) : "",
+      extra_body_text: config?.extra_body && Object.keys(config.extra_body).length > 0 ? JSON.stringify(config.extra_body, null, 2) : "",
+      has_api_key: Boolean(config?.has_api_key),
+      resolved_scope: data.resolved?.scope ?? "global",
+    });
+    setShowAdvancedLlmFields(
+      Boolean(
+        (config?.extra_headers && Object.keys(config.extra_headers).length > 0) ||
+        (config?.extra_body && Object.keys(config.extra_body).length > 0),
+      ),
+    );
+  };
+
+  const parseJsonObject = (raw: string, label: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return {};
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`${label}必须是 JSON 对象`);
+    }
+    return parsed as Record<string, unknown>;
+  };
+
+  const openLlmDialog = async () => {
+    try {
+      setLlmError("");
+      setShowLlmDialog(true);
+      await loadUserLlmConfig();
+    } catch (err) {
+      setLlmError(err instanceof Error ? err.message : "加载个人 LLM 配置失败");
+    }
+  };
+
+  const saveUserLlm = async () => {
+    try {
+      setLlmBusy(true);
+      setLlmError("");
+      await updateUserLlmConfig({
+        enabled: llmState.enabled,
+        base_url: llmState.base_url.trim(),
+        model: llmState.model.trim(),
+        api_key: llmState.api_key.trim() || undefined,
+        extra_headers: parseJsonObject(llmState.extra_headers_text, "扩展请求头") as Record<string, string>,
+        extra_body: parseJsonObject(llmState.extra_body_text, "扩展请求体"),
+      });
+      await loadUserLlmConfig();
+    } catch (err) {
+      setLlmError(err instanceof Error ? err.message : "保存个人 LLM 配置失败");
+    } finally {
+      setLlmBusy(false);
+    }
+  };
+
+  const resetUserLlm = async () => {
+    if (!window.confirm("确定删除个人 LLM 覆盖并回退到平台默认 / 全局默认吗？")) return;
+    try {
+      setLlmBusy(true);
+      setLlmError("");
+      await deleteUserLlmConfig();
+      await loadUserLlmConfig();
+    } catch (err) {
+      setLlmError(err instanceof Error ? err.message : "删除个人 LLM 配置失败");
+    } finally {
+      setLlmBusy(false);
+    }
+  };
 
   const refreshResources = async (nextSessionId: string) => {
     const [skillResult, fileResult] = await Promise.all([listSkills(nextSessionId), listFiles(nextSessionId)]);
@@ -559,6 +672,9 @@ export function WorkbenchPage({
 
           {!isEmbedMode ? (
             <div className="sidebar-footer">
+              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={() => void openLlmDialog()}>
+                模型配置
+              </button>
               <button type="button" className="action-button sidebar-footer__button" onClick={onAdminToggle}>
                 管理配置
               </button>
@@ -571,6 +687,84 @@ export function WorkbenchPage({
       </aside>
 
       {isMobile && isSidebarOpen ? <div className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)}></div> : null}
+
+      {showLlmDialog ? (
+        <div className="modal-backdrop" onClick={() => setShowLlmDialog(false)}>
+          <div className="llm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="llm-dialog__header">
+              <div>
+                <h3>个人 LLM 配置</h3>
+                <p>当前生效来源：{llmState.resolved_scope === "user" ? "个人覆盖" : llmState.resolved_scope === "platform" ? "平台默认" : "全局默认"}</p>
+              </div>
+              <button type="button" className="icon-button subtle" onClick={() => setShowLlmDialog(false)}>×</button>
+            </div>
+            {llmError ? <div className="error-toast anim-shake">{llmError}</div> : null}
+            <div className="llm-dialog__body">
+              <label className="admin-panel__checkbox">
+                <input
+                  type="checkbox"
+                  checked={llmState.enabled}
+                  onChange={(e) => setLlmState((current) => ({ ...current, enabled: e.target.checked }))}
+                />
+                <span>启用个人 LLM 覆盖</span>
+              </label>
+              <input
+                className="composer-input llm-input"
+                value={llmState.base_url}
+                onChange={(e) => setLlmState((current) => ({ ...current, base_url: e.target.value }))}
+                autoComplete="off"
+                name="llm-base-url"
+                placeholder="LiteLLM 或内网 OpenAI 兼容服务地址"
+              />
+              <input
+                className="composer-input llm-input"
+                value={llmState.model}
+                onChange={(e) => setLlmState((current) => ({ ...current, model: e.target.value }))}
+                autoComplete="off"
+                name="llm-model-id"
+                placeholder="模型 ID"
+              />
+              <input
+                className="composer-input llm-input"
+                type="password"
+                value={llmState.api_key}
+                onChange={(e) => setLlmState((current) => ({ ...current, api_key: e.target.value }))}
+                autoComplete="new-password"
+                name="llm-api-key"
+                placeholder={llmState.has_api_key ? "已存在密钥，留空则保持不变" : "API Key"}
+              />
+              <details className="llm-advanced-panel" open={showAdvancedLlmFields} onToggle={(e) => setShowAdvancedLlmFields((e.currentTarget as HTMLDetailsElement).open)}>
+                <summary>高级参数</summary>
+                <p className="llm-advanced-panel__hint">仅在对接 LiteLLM、代理网关或内网兼容服务需要额外请求头、额外请求体时填写。留空即可。</p>
+                <textarea
+                  className="composer-input llm-textarea"
+                  value={llmState.extra_headers_text}
+                  onChange={(e) => setLlmState((current) => ({ ...current, extra_headers_text: e.target.value }))}
+                  autoComplete="off"
+                  name="llm-extra-headers"
+                  placeholder='额外请求头 JSON，例如 {"x-tenant":"demo"}'
+                />
+                <textarea
+                  className="composer-input llm-textarea"
+                  value={llmState.extra_body_text}
+                  onChange={(e) => setLlmState((current) => ({ ...current, extra_body_text: e.target.value }))}
+                  autoComplete="off"
+                  name="llm-extra-body"
+                  placeholder='额外请求体 JSON，例如 {"reasoning":{"effort":"medium"}}'
+                />
+              </details>
+            </div>
+            <div className="llm-dialog__footer">
+              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={() => void resetUserLlm()} disabled={llmBusy}>
+                清除覆盖
+              </button>
+              <button type="button" className="action-button sidebar-footer__button" onClick={() => void saveUserLlm()} disabled={llmBusy || !llmState.base_url.trim() || !llmState.model.trim()}>
+                {llmBusy ? "保存中..." : "保存个人 LLM"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <section className="main-content">
         <header className="top-nav">

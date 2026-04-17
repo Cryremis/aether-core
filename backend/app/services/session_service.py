@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.core.config import settings
 from app.sandbox.manager import sandbox_manager
 from app.sandbox.models import SandboxWorkspace
 
@@ -59,6 +60,9 @@ class SessionService:
         self._write_metadata(session)
         return session
 
+    def _metadata_path(self, session_id: str) -> Path:
+        return settings.sessions_root / session_id / "sandbox" / "metadata" / "session.json"
+
     def attach_host(
         self,
         session: AgentSession,
@@ -109,7 +113,7 @@ class SessionService:
         self.persist(session)
 
     def _load_from_disk(self, session_id: str) -> AgentSession | None:
-        metadata_path = sandbox_manager.ensure_workspace(session_id).metadata_dir / "session.json"
+        metadata_path = self._metadata_path(session_id)
         if not metadata_path.exists():
             return None
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
