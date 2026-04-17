@@ -20,9 +20,49 @@ class PlatformBaselineFile(BaseModel):
 
     name: str
     relative_path: str
-    section: Literal["input", "work"]
+    section: Literal["input", "skills", "work", "output", "logs"]
     size: int
     media_type: str
+
+
+class PlatformBaselineEntry(BaseModel):
+    """平台基线环境目录项。"""
+
+    name: str
+    relative_path: str
+    section: Literal["input", "skills", "work", "output", "logs"]
+    kind: Literal["file", "directory"]
+    size: int = 0
+    media_type: str = ""
+
+
+class PlatformBaselineFileContent(BaseModel):
+    """平台基线文本文件内容。"""
+
+    relative_path: str
+    media_type: str
+    content: str
+    truncated: bool = False
+
+
+class PlatformBaselineWriteRequest(BaseModel):
+    """写入平台基线文本文件请求。"""
+
+    relative_path: str
+    content: str
+
+
+class PlatformBaselineDirectoryRequest(BaseModel):
+    """创建平台基线目录请求。"""
+
+    relative_path: str
+
+
+class PlatformBaselineMoveRequest(BaseModel):
+    """移动或重命名平台基线路径请求。"""
+
+    source_relative_path: str
+    target_relative_path: str
 
 
 class PlatformBaselineSkill(BaseModel):
@@ -40,6 +80,7 @@ class PlatformBaselineSummary(BaseModel):
 
     platform_key: str
     files: list[PlatformBaselineFile] = Field(default_factory=list)
+    entries: list[PlatformBaselineEntry] = Field(default_factory=list)
     skills: list[PlatformBaselineSkill] = Field(default_factory=list)
 
 

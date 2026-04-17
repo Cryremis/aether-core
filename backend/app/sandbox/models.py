@@ -9,11 +9,13 @@ class SandboxWorkspace:
 
     session_id: str
     root: Path
+    baseline_root: Path | None
     input_dir: Path
     skills_dir: Path
     work_dir: Path
     output_dir: Path
     logs_dir: Path
+    overlay_work_dir: Path
     metadata_dir: Path
 
 

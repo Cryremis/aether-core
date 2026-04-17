@@ -2,14 +2,17 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
+  createPlatformBaselineDirectory,
   createAdminWhitelist,
   createPlatform,
   deletePlatformBaselineFile,
-  deletePlatformBaselineSkill,
   downloadPlatformBaselineFile,
   getPlatformBaseline,
+  getPlatformBaselineFileContent,
   listAdminWhitelist,
   listPlatforms,
+  movePlatformBaselinePath,
+  savePlatformBaselineTextFile,
   uploadPlatformBaselineFile,
   uploadPlatformBaselineSkill,
 } from "../api/client";
@@ -31,17 +34,18 @@ type PlatformItem = {
 type PlatformBaselineFileItem = {
   name: string;
   relative_path: string;
-  section: "input" | "work";
+  section: "input" | "skills" | "work" | "output" | "logs";
   size: number;
   media_type: string;
 };
 
-type PlatformBaselineSkillItem = {
+type PlatformBaselineEntryItem = {
   name: string;
-  description: string;
-  allowed_tools: string[];
-  tags: string[];
   relative_path: string;
+  section: "input" | "skills" | "work" | "output" | "logs";
+  kind: "file" | "directory";
+  size: number;
+  media_type: string;
 };
 
 type WhitelistItem = {
@@ -57,10 +61,15 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const [whitelist, setWhitelist] = useState<WhitelistItem[]>([]);
   const [activePlatformId, setActivePlatformId] = useState<number | null>(null);
   const [baselineFiles, setBaselineFiles] = useState<PlatformBaselineFileItem[]>([]);
-  const [baselineSkills, setBaselineSkills] = useState<PlatformBaselineSkillItem[]>([]);
+  const [baselineEntries, setBaselineEntries] = useState<PlatformBaselineEntryItem[]>([]);
   const [error, setError] = useState("");
   const [baselineError, setBaselineError] = useState("");
-  const [baselineSection, setBaselineSection] = useState<"input" | "work">("input");
+  const [currentBaselineDirectory, setCurrentBaselineDirectory] = useState("work");
+  const [selectedBaselinePath, setSelectedBaselinePath] = useState("");
+  const [selectedBaselineContent, setSelectedBaselineContent] = useState("");
+  const [selectedBaselineMediaType, setSelectedBaselineMediaType] = useState("");
+  const [selectedBaselineTruncated, setSelectedBaselineTruncated] = useState(false);
+  const [baselineDirty, setBaselineDirty] = useState(false);
 
   const [providerUserId, setProviderUserId] = useState("");
   const [whitelistRole, setWhitelistRole] = useState("platform_admin");
@@ -95,10 +104,10 @@ export function AdminPanel({ role }: AdminPanelProps) {
       const result = await getPlatformBaseline(platformId);
       const data = (result.data ?? {}) as {
         files?: PlatformBaselineFileItem[];
-        skills?: PlatformBaselineSkillItem[];
+        entries?: PlatformBaselineEntryItem[];
       };
       setBaselineFiles(data.files ?? []);
-      setBaselineSkills(data.skills ?? []);
+      setBaselineEntries(data.entries ?? []);
       setActivePlatformId(platformId);
     } catch (loadError) {
       setBaselineError(loadError instanceof Error ? loadError.message : "加载平台基线环境失败");
@@ -113,7 +122,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
     if (!platforms.length) {
       setActivePlatformId(null);
       setBaselineFiles([]);
-      setBaselineSkills([]);
+      setBaselineEntries([]);
       return;
     }
 
@@ -125,6 +134,19 @@ export function AdminPanel({ role }: AdminPanelProps) {
       : preferred.platform_id;
     void loadPlatformBaseline(targetId);
   }, [platforms]);
+
+  useEffect(() => {
+    if (!selectedBaselinePath) {
+      return;
+    }
+    if (!baselineEntries.some((item) => item.relative_path === selectedBaselinePath && item.kind === "file")) {
+      setSelectedBaselinePath("");
+      setSelectedBaselineContent("");
+      setSelectedBaselineMediaType("");
+      setSelectedBaselineTruncated(false);
+      setBaselineDirty(false);
+    }
+  }, [baselineEntries, selectedBaselinePath]);
 
   const handleCreateWhitelist = async (event: FormEvent) => {
     event.preventDefault();
@@ -174,7 +196,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
     }
     try {
       setBaselineError("");
-      await uploadPlatformBaselineFile(activePlatformId, baselineSection, file);
+      await uploadPlatformBaselineFile(activePlatformId, currentBaselineDirectory, file);
       await loadPlatformBaseline(activePlatformId);
     } catch (submitError) {
       setBaselineError(submitError instanceof Error ? submitError.message : "上传平台基线文件失败");
@@ -221,26 +243,166 @@ export function AdminPanel({ role }: AdminPanelProps) {
     try {
       setBaselineError("");
       await deletePlatformBaselineFile(activePlatformId, relativePath);
+      if (selectedBaselinePath === relativePath || selectedBaselinePath.startsWith(`${relativePath}/`)) {
+        setSelectedBaselinePath("");
+        setSelectedBaselineContent("");
+        setSelectedBaselineMediaType("");
+        setSelectedBaselineTruncated(false);
+        setBaselineDirty(false);
+      }
       await loadPlatformBaseline(activePlatformId);
     } catch (deleteError) {
       setBaselineError(deleteError instanceof Error ? deleteError.message : "删除平台基线文件失败");
     }
   };
 
-  const handleDeleteBaselineSkill = async (skillName: string) => {
+  const handleSelectBaselineEntry = async (item: PlatformBaselineEntryItem) => {
     if (!activePlatformId) {
+      return;
+    }
+    if (item.kind === "directory") {
+      setCurrentBaselineDirectory(item.relative_path);
+      setSelectedBaselinePath("");
+      setSelectedBaselineContent("");
+      setSelectedBaselineMediaType("");
+      setSelectedBaselineTruncated(false);
+      setBaselineDirty(false);
       return;
     }
     try {
       setBaselineError("");
-      await deletePlatformBaselineSkill(activePlatformId, skillName);
+      const result = await getPlatformBaselineFileContent(activePlatformId, item.relative_path);
+      const data = (result.data ?? {}) as {
+        content?: string;
+        media_type?: string;
+        truncated?: boolean;
+      };
+      setSelectedBaselinePath(item.relative_path);
+      setCurrentBaselineDirectory(item.relative_path.split("/").slice(0, -1).join("/") || item.section);
+      setSelectedBaselineContent(data.content ?? "");
+      setSelectedBaselineMediaType(data.media_type ?? item.media_type);
+      setSelectedBaselineTruncated(Boolean(data.truncated));
+      setBaselineDirty(false);
+    } catch (loadError) {
+      setBaselineError(loadError instanceof Error ? loadError.message : "加载平台基线文件内容失败");
+    }
+  };
+
+  const handleSaveBaselineText = async () => {
+    if (!activePlatformId || !selectedBaselinePath) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      await savePlatformBaselineTextFile(activePlatformId, selectedBaselinePath, selectedBaselineContent);
+      setBaselineDirty(false);
       await loadPlatformBaseline(activePlatformId);
-    } catch (deleteError) {
-      setBaselineError(deleteError instanceof Error ? deleteError.message : "删除平台基线技能失败");
+    } catch (saveError) {
+      setBaselineError(saveError instanceof Error ? saveError.message : "保存平台基线文件失败");
+    }
+  };
+
+  const handleCreateBaselineFile = async () => {
+    if (!activePlatformId) {
+      return;
+    }
+    const filename = window.prompt(
+      `输入新文件名或相对路径，当前目录：${currentBaselineDirectory}`,
+      `${currentBaselineDirectory}/new-file.txt`,
+    );
+    if (!filename?.trim()) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      await savePlatformBaselineTextFile(activePlatformId, filename.trim(), "");
+      await loadPlatformBaseline(activePlatformId);
+      setSelectedBaselinePath(filename.trim());
+      setSelectedBaselineContent("");
+      setSelectedBaselineMediaType("text/plain");
+      setSelectedBaselineTruncated(false);
+      setBaselineDirty(false);
+    } catch (createError) {
+      setBaselineError(createError instanceof Error ? createError.message : "创建平台基线文件失败");
+    }
+  };
+
+  const handleCreateBaselineDirectory = async () => {
+    if (!activePlatformId) {
+      return;
+    }
+    const directoryPath = window.prompt(
+      `输入新目录路径，当前目录：${currentBaselineDirectory}`,
+      `${currentBaselineDirectory}/new-folder`,
+    );
+    if (!directoryPath?.trim()) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      await createPlatformBaselineDirectory(activePlatformId, directoryPath.trim());
+      await loadPlatformBaseline(activePlatformId);
+    } catch (createError) {
+      setBaselineError(createError instanceof Error ? createError.message : "创建平台基线目录失败");
+    }
+  };
+
+  const handleRenameBaselinePath = async (sourcePath: string) => {
+    if (!activePlatformId) {
+      return;
+    }
+    const targetPath = window.prompt("输入新的完整路径", sourcePath);
+    if (!targetPath?.trim() || targetPath.trim() === sourcePath) {
+      return;
+    }
+    try {
+      setBaselineError("");
+      await movePlatformBaselinePath(activePlatformId, sourcePath, targetPath.trim());
+      if (selectedBaselinePath === sourcePath) {
+        setSelectedBaselinePath(targetPath.trim());
+      }
+      await loadPlatformBaseline(activePlatformId);
+    } catch (moveError) {
+      setBaselineError(moveError instanceof Error ? moveError.message : "重命名平台基线路径失败");
     }
   };
 
   const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
+  const sortedBaselineEntries = useMemo(() => {
+    return [...baselineEntries].sort((left, right) => {
+      if (["input", "skills", "work", "output", "logs"].includes(left.relative_path)) {
+        return -1;
+      }
+      if (["input", "skills", "work", "output", "logs"].includes(right.relative_path)) {
+        return 1;
+      }
+      if (left.kind !== right.kind) {
+        return left.kind === "directory" ? -1 : 1;
+      }
+      return left.relative_path.localeCompare(right.relative_path);
+    });
+  }, [baselineEntries]);
+
+  const currentDirectoryChildren = useMemo(() => {
+    const prefix = currentBaselineDirectory ? `${currentBaselineDirectory}/` : "";
+    return baselineEntries
+      .filter((item) => {
+        if (item.relative_path === currentBaselineDirectory) {
+          return false;
+        }
+        if (!item.relative_path.startsWith(prefix)) {
+          return false;
+        }
+        const rest = item.relative_path.slice(prefix.length);
+        return rest.length > 0 && !rest.includes("/");
+      })
+      .sort((left, right) => {
+        if (left.kind !== right.kind) {
+          return left.kind === "directory" ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name);
+      });
+  }, [baselineEntries, currentBaselineDirectory]);
 
   return (
     <section className="admin-panel">
@@ -330,63 +492,141 @@ export function AdminPanel({ role }: AdminPanelProps) {
           {baselineError ? <div className="admin-panel__error">{baselineError}</div> : null}
 
           <div className="admin-panel__form">
-            <h4>基线文件</h4>
-            <select
-              value={baselineSection}
-              onChange={(event) => setBaselineSection(event.target.value as "input" | "work")}
-            >
-              <option value="input">input 参考资料区</option>
-              <option value="work">work 工作区</option>
-            </select>
-            <label className="admin-panel__file-button">
-              上传文件
-              <input
-                type="file"
-                onChange={(event) => void handleBaselineFileUpload(event.target.files?.[0] ?? null)}
-              />
-            </label>
-            {baselineFiles.length === 0 ? <div className="admin-panel__empty">当前没有基线文件。</div> : null}
-            {baselineFiles.map((item) => (
-              <article key={item.relative_path} className="admin-panel__card">
-                <strong>{item.name}</strong>
-                <p>{item.relative_path}</p>
-                <p>{item.section} · {item.size} bytes</p>
-                <div className="admin-panel__actions">
-                  <button type="button" onClick={() => void handleDownloadBaselineFile(item)}>
-                    下载
-                  </button>
-                  <button type="button" onClick={() => void handleDeleteBaselineFile(item.relative_path)}>
-                    删除
+            <h4>平台基线文件管理器</h4>
+            <div className="admin-panel__actions">
+              <label className="admin-panel__file-button">
+                上传文件
+                <input
+                  type="file"
+                  onChange={(event) => void handleBaselineFileUpload(event.target.files?.[0] ?? null)}
+                />
+              </label>
+              <button type="button" onClick={() => void handleCreateBaselineFile()}>
+                新建文件
+              </button>
+              <button type="button" onClick={() => void handleCreateBaselineDirectory()}>
+                新建目录
+              </button>
+            </div>
+            <p className="admin-panel__hint">当前目录：{currentBaselineDirectory}</p>
+
+            <div className="admin-panel__file-manager">
+              <div className="admin-panel__tree">
+                {sortedBaselineEntries.length === 0 ? (
+                  <div className="admin-panel__empty">当前没有基线文件或目录。</div>
+                ) : null}
+                {sortedBaselineEntries.map((item) => {
+                  const depth = Math.max(item.relative_path.split("/").length - 1, 0);
+                  const fileItem = baselineFiles.find((file) => file.relative_path === item.relative_path);
+                  return (
+                    <div
+                      key={item.relative_path}
+                      className={`admin-panel__tree-item ${selectedBaselinePath === item.relative_path || currentBaselineDirectory === item.relative_path ? "is-active" : ""}`}
+                      style={{ paddingLeft: `${12 + depth * 16}px` }}
+                    >
+                      <button
+                        type="button"
+                        className="admin-panel__tree-main"
+                        onClick={() => void handleSelectBaselineEntry(item)}
+                      >
+                        <span>{item.kind === "directory" ? "[DIR]" : "[FILE]"}</span>
+                        <strong>{item.name}</strong>
+                        <em>{item.relative_path}</em>
+                      </button>
+                      <div className="admin-panel__tree-actions">
+                        {fileItem ? (
+                          <button type="button" onClick={() => void handleDownloadBaselineFile(fileItem)}>
+                            下载
+                          </button>
+                        ) : null}
+                        {!["input", "skills", "work", "output", "logs"].includes(item.relative_path) ? (
+                          <>
+                            <button type="button" onClick={() => void handleRenameBaselinePath(item.relative_path)}>
+                              重命名
+                            </button>
+                            <button type="button" onClick={() => void handleDeleteBaselineFile(item.relative_path)}>
+                              删除
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="admin-panel__editor">
+                <div className="admin-panel__editor-header">
+                  <div>
+                    <strong>当前目录内容</strong>
+                    <p>{currentBaselineDirectory}</p>
+                  </div>
+                </div>
+                <div className="admin-panel__directory-list">
+                  {currentDirectoryChildren.length === 0 ? (
+                    <div className="admin-panel__empty">当前目录为空。</div>
+                  ) : null}
+                  {currentDirectoryChildren.map((item) => {
+                    const fileItem = baselineFiles.find((file) => file.relative_path === item.relative_path);
+                    return (
+                      <div key={item.relative_path} className="admin-panel__directory-item">
+                        <button
+                          type="button"
+                          className="admin-panel__directory-main"
+                          onClick={() => void handleSelectBaselineEntry(item)}
+                        >
+                          <span>{item.kind === "directory" ? "[DIR]" : "[FILE]"}</span>
+                          <strong>{item.name}</strong>
+                          <em>{item.kind === "file" ? `${item.size} bytes` : "目录"}</em>
+                        </button>
+                        <div className="admin-panel__tree-actions">
+                          {fileItem ? (
+                            <button type="button" onClick={() => void handleDownloadBaselineFile(fileItem)}>
+                              下载
+                            </button>
+                          ) : null}
+                          <button type="button" onClick={() => void handleRenameBaselinePath(item.relative_path)}>
+                            重命名
+                          </button>
+                          <button type="button" onClick={() => void handleDeleteBaselineFile(item.relative_path)}>
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="admin-panel__editor-header">
+                  <div>
+                    <strong>{selectedBaselinePath || "未选择文件"}</strong>
+                    <p>
+                      {selectedBaselineMediaType || "请选择左侧文本文件进行查看或编辑"}
+                      {selectedBaselineTruncated ? " · 已按大小限制截断显示" : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveBaselineText()}
+                    disabled={!selectedBaselinePath || !baselineDirty}
+                  >
+                    保存
                   </button>
                 </div>
-              </article>
-            ))}
+                <textarea
+                  className="admin-panel__editor-textarea"
+                  value={selectedBaselineContent}
+                  onChange={(event) => {
+                    setSelectedBaselineContent(event.target.value);
+                    setBaselineDirty(true);
+                  }}
+                  placeholder="选择一个文本文件后，可在这里直接编辑其内容。"
+                  disabled={!selectedBaselinePath}
+                />
+              </div>
+            </div>
           </div>
 
-          <div className="admin-panel__form">
-            <h4>基线技能</h4>
-            <label className="admin-panel__file-button">
-              上传技能包
-              <input
-                type="file"
-                accept=".zip,.md"
-                onChange={(event) => void handleBaselineSkillUpload(event.target.files?.[0] ?? null)}
-              />
-            </label>
-            {baselineSkills.length === 0 ? <div className="admin-panel__empty">当前没有基线技能。</div> : null}
-            {baselineSkills.map((item) => (
-              <article key={item.relative_path} className="admin-panel__card">
-                <strong>{item.name}</strong>
-                <p>{item.description}</p>
-                <p>{item.relative_path}</p>
-                <div className="admin-panel__actions">
-                  <button type="button" onClick={() => void handleDeleteBaselineSkill(item.name)}>
-                    删除
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
         </div>
       ) : null}
 

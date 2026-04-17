@@ -18,6 +18,7 @@ class AgentSession:
     conversation_id: str | None = None
     host_name: str = ""
     host_type: str = "custom"
+    baseline_root: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
     host_context: dict[str, Any] = field(default_factory=dict)
     platform_files: list[dict[str, Any]] = field(default_factory=list)
@@ -50,7 +51,10 @@ class SessionService:
 
         new_id = session_id or f"sess_{uuid.uuid4().hex}"
         session = self._load_from_disk(new_id) or AgentSession(session_id=new_id)
-        session.workspace = sandbox_manager.ensure_workspace(new_id)
+        session.workspace = sandbox_manager.ensure_workspace(
+            new_id,
+            Path(session.baseline_root) if session.baseline_root else None,
+        )
         self._sessions[new_id] = session
         self._write_metadata(session)
         return session
@@ -99,6 +103,11 @@ class SessionService:
         session.platform_skills = skills
         self.persist(session)
 
+    def bind_baseline_root(self, session: AgentSession, baseline_root: Path) -> None:
+        session.baseline_root = str(baseline_root.resolve())
+        session.workspace = sandbox_manager.ensure_workspace(session.session_id, baseline_root)
+        self.persist(session)
+
     def _load_from_disk(self, session_id: str) -> AgentSession | None:
         metadata_path = sandbox_manager.ensure_workspace(session_id).metadata_dir / "session.json"
         if not metadata_path.exists():
@@ -109,6 +118,7 @@ class SessionService:
             conversation_id=payload.get("conversation_id"),
             host_name=payload.get("host_name", ""),
             host_type=payload.get("host_type", "custom"),
+            baseline_root=payload.get("baseline_root", ""),
             messages=payload.get("messages", []),
             host_context=payload.get("host_context", {}),
             platform_files=payload.get("platform_files", []),
@@ -121,7 +131,10 @@ class SessionService:
             uploads=payload.get("uploads", []),
             created_at=payload.get("created_at", time.time()),
             last_access=payload.get("last_access", time.time()),
-            workspace=sandbox_manager.ensure_workspace(session_id),
+            workspace=sandbox_manager.ensure_workspace(
+                session_id,
+                Path(payload["baseline_root"]) if payload.get("baseline_root") else None,
+            ),
         )
 
     def _write_metadata(self, session: AgentSession) -> None:
@@ -133,6 +146,7 @@ class SessionService:
             "conversation_id": session.conversation_id,
             "host_name": session.host_name,
             "host_type": session.host_type,
+            "baseline_root": session.baseline_root,
             "messages": session.messages,
             "host_context": session.host_context,
             "platform_files": session.platform_files,

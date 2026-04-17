@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 import shutil
 import time
 import uuid
@@ -109,6 +110,7 @@ class DockerSandboxExecutor(SandboxExecutor):
         container_name: str,
         process_command: list[str],
     ) -> list[str]:
+        use_overlay = workspace.baseline_root is not None
         args = [
             "run",
             "--rm",
@@ -116,14 +118,6 @@ class DockerSandboxExecutor(SandboxExecutor):
             container_name,
             "--workdir",
             settings.sandbox_docker_work_dir,
-            "--user",
-            settings.sandbox_docker_user,
-            "--mount",
-            (
-                "type=bind,"
-                f"src={workspace.root.resolve()},"
-                f"dst={settings.sandbox_docker_workspace_mount}"
-            ),
             "--memory",
             settings.sandbox_docker_memory,
             "--cpus",
@@ -134,6 +128,8 @@ class DockerSandboxExecutor(SandboxExecutor):
             "no-new-privileges:true",
             "--cap-drop",
             "ALL",
+            "--cap-add",
+            "SYS_ADMIN",
             "--env",
             f"AETHER_SESSION_ID={workspace.session_id}",
             "--env",
@@ -152,6 +148,43 @@ class DockerSandboxExecutor(SandboxExecutor):
             "PYTHONIOENCODING=utf-8",
         ]
 
+        if use_overlay:
+            args.extend(
+                [
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace.root.resolve()},"
+                        "dst=/aether/session-upper"
+                    ),
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace.overlay_work_dir.resolve()},"
+                        "dst=/aether/session-overlay-work"
+                    ),
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace.baseline_root.resolve()},"
+                        "dst=/aether/baseline,readonly"
+                    ),
+                    "--tmpfs",
+                    "/workspace:size=64m",
+                ]
+            )
+        else:
+            args.extend(
+                [
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace.root.resolve()},"
+                        f"dst={settings.sandbox_docker_workspace_mount}"
+                    ),
+                ]
+            )
+
         if settings.sandbox_docker_read_only_rootfs:
             args.append("--read-only")
 
@@ -162,8 +195,28 @@ class DockerSandboxExecutor(SandboxExecutor):
             args.extend(["--network", "none"])
 
         args.append(settings.sandbox_docker_image)
-        args.extend(process_command)
+        args.extend(self._build_runtime_command(process_command, use_overlay))
         return args
+
+    def _build_runtime_command(self, process_command: list[str], use_overlay: bool) -> list[str]:
+        if not use_overlay:
+            return process_command
+
+        quoted_process = shlex.join(process_command)
+        setup_script = """
+set -euo pipefail
+mkdir -p /workspace /tmp/aether-runtime
+for name in input skills work output logs; do
+  mkdir -p "/workspace/${name}"
+  mkdir -p "/aether/session-upper/${name}"
+  mkdir -p "/aether/session-overlay-work/${name}"
+  mount -t overlay overlay \
+    -o "lowerdir=/aether/baseline/${name},upperdir=/aether/session-upper/${name},workdir=/aether/session-overlay-work/${name}" \
+    "/workspace/${name}"
+done
+exec {process}
+""".strip().format(process=quoted_process)
+        return ["/bin/bash", "-lc", setup_script]
 
     async def _force_remove_container(self, docker_binary: str, container_name: str) -> None:
         process = await asyncio.create_subprocess_exec(

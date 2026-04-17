@@ -11,16 +11,20 @@ from app.sandbox.runner import SandboxRunner
 
 
 def build_workspace(root: Path) -> SandboxWorkspace:
-    for name in ["input", "skills", "work", "output", "logs", "metadata"]:
+    for name in ["input", "skills", "work", "output", "logs", "metadata", ".overlay-work"]:
         (root / name).mkdir(parents=True, exist_ok=True)
+    for name in ["input", "skills", "work", "output", "logs"]:
+        (root / ".overlay-work" / name).mkdir(parents=True, exist_ok=True)
     return SandboxWorkspace(
         session_id="sess_demo",
         root=root,
+        baseline_root=None,
         input_dir=root / "input",
         skills_dir=root / "skills",
         work_dir=root / "work",
         output_dir=root / "output",
         logs_dir=root / "logs",
+        overlay_work_dir=root / ".overlay-work",
         metadata_dir=root / "metadata",
     )
 

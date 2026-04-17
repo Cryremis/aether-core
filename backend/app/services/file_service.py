@@ -58,7 +58,7 @@ class FileService:
         assert session.workspace is not None
         for item in [*session.platform_files, *session.uploads, *session.artifacts]:
             if item["file_id"] == file_id:
-                return sandbox_manager.ensure_within_workspace(session.workspace, session.workspace.root / item["relative_path"])
+                return sandbox_manager.resolve_logical_path(session.workspace, item["relative_path"])
         return None
 
     def read_text(
@@ -73,7 +73,7 @@ class FileService:
         if file_id:
             target_path = self.resolve_file_path(session, file_id)
         elif relative_path:
-            target_path = sandbox_manager.ensure_within_workspace(session.workspace, session.workspace.root / relative_path)
+            target_path = sandbox_manager.resolve_logical_path(session.workspace, relative_path)
 
         if not target_path or not target_path.exists():
             raise FileNotFoundError("目标文件不存在。")

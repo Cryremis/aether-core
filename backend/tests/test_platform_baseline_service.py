@@ -10,6 +10,11 @@ from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
+from app.schemas.platform import (
+    PlatformBaselineDirectoryRequest,
+    PlatformBaselineMoveRequest,
+    PlatformBaselineWriteRequest,
+)
 
 
 def initialize_store(tmp_path: Path) -> None:
@@ -76,3 +81,37 @@ def test_platform_baseline_materializes_into_new_host_session(tmp_path):
     assert session.workspace is not None
     assert (session.workspace.work_dir / "repo" / "main.py").exists()
     assert any(item["name"] == "main.py" for item in session.platform_files)
+
+
+def test_platform_baseline_file_manager_operations(tmp_path):
+    initialize_store(tmp_path)
+
+    platform_root = platform_baseline_service.ensure_platform_root("standalone")
+    (platform_root / "input" / "docs").mkdir(parents=True, exist_ok=True)
+
+    created_dir = platform_baseline_service.create_directory(
+        "standalone",
+        PlatformBaselineDirectoryRequest(relative_path="input/docs/specs"),
+    )
+    assert created_dir.kind == "directory"
+
+    created_file = platform_baseline_service.write_text(
+        "standalone",
+        PlatformBaselineWriteRequest(relative_path="input/docs/specs/readme.md", content="# hello"),
+    )
+    assert created_file.kind == "file"
+
+    content = platform_baseline_service.read_text("standalone", relative_path="input/docs/specs/readme.md")
+    assert content.content == "# hello"
+
+    moved = platform_baseline_service.move_path(
+        "standalone",
+        PlatformBaselineMoveRequest(
+            source_relative_path="input/docs/specs/readme.md",
+            target_relative_path="input/docs/specs/guide.md",
+        ),
+    )
+    assert moved.relative_path == "input/docs/specs/guide.md"
+
+    platform_baseline_service.delete_file("standalone", relative_path="input/docs/specs/guide.md")
+    assert not (platform_root / "input" / "docs" / "specs" / "guide.md").exists()

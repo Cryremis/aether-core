@@ -9,7 +9,10 @@ from app.schemas.common import ApiResponse
 from app.schemas.platform import (
     EmbedBootstrapRequest,
     EmbedBootstrapResponse,
+    PlatformBaselineDirectoryRequest,
+    PlatformBaselineMoveRequest,
     PlatformAdminAssignRequest,
+    PlatformBaselineWriteRequest,
     PlatformCreateRequest,
     PlatformSummary,
 )
@@ -114,22 +117,88 @@ def get_platform_baseline(
     return ApiResponse(message="平台基线环境", data=summary.model_dump(mode="json"))
 
 
+@router.get("/{platform_id}/baseline/files/content")
+def get_platform_baseline_file_content(
+    platform_id: int,
+    relative_path: str = Query(...),
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    try:
+        content = platform_baseline_service.read_text(platform["platform_key"], relative_path=relative_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(message="平台基线文件内容", data=content.model_dump(mode="json"))
+
+
+@router.post("/{platform_id}/baseline/files/text")
+def write_platform_baseline_file(
+    platform_id: int,
+    request: PlatformBaselineWriteRequest,
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    try:
+        item = platform_baseline_service.write_text(platform["platform_key"], request)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(message="平台基线文件已保存", data=item.model_dump(mode="json"))
+
+
+@router.post("/{platform_id}/baseline/directories")
+def create_platform_baseline_directory(
+    platform_id: int,
+    request: PlatformBaselineDirectoryRequest,
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    try:
+        item = platform_baseline_service.create_directory(platform["platform_key"], request)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(message="平台基线目录已创建", data=item.model_dump(mode="json"))
+
+
+@router.patch("/{platform_id}/baseline/paths")
+def move_platform_baseline_path(
+    platform_id: int,
+    request: PlatformBaselineMoveRequest,
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    try:
+        item = platform_baseline_service.move_path(platform["platform_key"], request)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(message="平台基线路径已更新", data=item.model_dump(mode="json"))
+
+
 @router.post("/{platform_id}/baseline/files")
 async def upload_platform_baseline_file(
     platform_id: int,
     upload_file: UploadFile = File(...),
-    section: str = Query(default="input"),
+    target_relative_dir: str = Query(default="work"),
     auth: AuthContext = Depends(require_admin),
 ) -> ApiResponse:
     platform = _get_managed_platform(platform_id, auth)
-    normalized_section = section.strip().lower()
-    if normalized_section not in {"input", "work"}:
-        raise HTTPException(status_code=400, detail="section 仅支持 input 或 work")
-    item = await platform_baseline_service.upload_file(
-        platform["platform_key"],
-        upload_file=upload_file,
-        section=normalized_section,  # type: ignore[arg-type]
-    )
+    try:
+        item = await platform_baseline_service.upload_file(
+            platform["platform_key"],
+            upload_file=upload_file,
+            target_relative_dir=target_relative_dir,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(message="平台基线文件上传成功", data=item.model_dump(mode="json"))
 
 
@@ -144,6 +213,8 @@ def delete_platform_baseline_file(
         platform_baseline_service.delete_file(platform["platform_key"], relative_path=relative_path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(message="平台基线文件已删除")
 
 

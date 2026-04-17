@@ -23,7 +23,16 @@ export type PlatformCreatePayload = {
 export type PlatformBaselineFile = {
   name: string;
   relative_path: string;
-  section: "input" | "work";
+  section: "input" | "skills" | "work" | "output" | "logs";
+  size: number;
+  media_type: string;
+};
+
+export type PlatformBaselineEntry = {
+  name: string;
+  relative_path: string;
+  section: "input" | "skills" | "work" | "output" | "logs";
+  kind: "file" | "directory";
   size: number;
   media_type: string;
 };
@@ -39,7 +48,15 @@ export type PlatformBaselineSkill = {
 export type PlatformBaselineSummary = {
   platform_key: string;
   files: PlatformBaselineFile[];
+  entries: PlatformBaselineEntry[];
   skills: PlatformBaselineSkill[];
+};
+
+export type PlatformBaselineFileContent = {
+  relative_path: string;
+  media_type: string;
+  content: string;
+  truncated: boolean;
 };
 
 const API_BASE = "/api/v1";
@@ -180,13 +197,13 @@ export async function getPlatformBaseline(platformId: number) {
 
 export async function uploadPlatformBaselineFile(
   platformId: number,
-  section: "input" | "work",
+  targetRelativeDir: string,
   file: File,
 ) {
   const formData = new FormData();
   formData.append("upload_file", file);
   const response = await apiFetch(
-    `/platforms/${platformId}/baseline/files?section=${encodeURIComponent(section)}`,
+    `/platforms/${platformId}/baseline/files?target_relative_dir=${encodeURIComponent(targetRelativeDir)}`,
     {
       method: "POST",
       body: formData,
@@ -194,6 +211,68 @@ export async function uploadPlatformBaselineFile(
   );
   if (!response.ok) {
     throw new Error(`上传平台基线文件失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getPlatformBaselineFileContent(platformId: number, relativePath: string) {
+  const response = await apiFetch(
+    `/platforms/${platformId}/baseline/files/content?relative_path=${encodeURIComponent(relativePath)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`获取平台基线文件内容失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function savePlatformBaselineTextFile(
+  platformId: number,
+  relativePath: string,
+  content: string,
+) {
+  const response = await apiFetch(`/platforms/${platformId}/baseline/files/text`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      relative_path: relativePath,
+      content,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`保存平台基线文件失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function createPlatformBaselineDirectory(platformId: number, relativePath: string) {
+  const response = await apiFetch(`/platforms/${platformId}/baseline/directories`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      relative_path: relativePath,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`创建平台基线目录失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function movePlatformBaselinePath(
+  platformId: number,
+  sourceRelativePath: string,
+  targetRelativePath: string,
+) {
+  const response = await apiFetch(`/platforms/${platformId}/baseline/paths`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source_relative_path: sourceRelativePath,
+      target_relative_path: targetRelativePath,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`重命名平台基线路径失败: ${response.status}`);
   }
   return response.json();
 }
