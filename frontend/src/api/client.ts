@@ -433,6 +433,27 @@ export async function getSessionSummary(sessionId: string) {
   return response.json();
 }
 
+export async function deleteSession(sessionId: string) {
+  const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`删除会话失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function renameSession(sessionId: string, title: string) {
+  const response = await apiFetch(
+    `/agent/sessions/${encodeURIComponent(sessionId)}/title?title=${encodeURIComponent(title)}`,
+    { method: "PATCH" },
+  );
+  if (!response.ok) {
+    throw new Error(`重命名会话失败: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function listSkills(sessionId: string) {
   const response = await apiFetch(`/agent/skills?session_id=${encodeURIComponent(sessionId)}`);
   if (!response.ok) {

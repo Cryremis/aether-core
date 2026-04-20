@@ -641,26 +641,16 @@ a { text-decoration: none; color: var(--accent); }
 .history-item {
   width: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   gap: 8px;
-  padding: 14px 12px;
+  padding: 0;
   margin-bottom: 8px;
   border: 1px solid transparent;
   border-radius: 16px;
   background: transparent;
   text-align: left;
   color: var(--text-primary);
-}
-
-.history-item strong {
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.history-item span {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .history-item:hover {
@@ -677,6 +667,60 @@ a { text-decoration: none; color: var(--accent); }
   margin-bottom: 0;
   background: #ffffff;
   border-color: rgba(226, 232, 240, 0.9);
+  position: relative;
+}
+
+.history-item__main {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 14px 12px;
+  text-align: left;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.history-item__main strong {
+  font-size: 14px;
+  line-height: 1.5;
+  display: block;
+}
+
+.history-item__actions {
+  display: flex;
+  gap: 4px;
+  padding-right: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.history-item:hover .history-item__actions,
+.history-item.is-active .history-item__actions {
+  opacity: 1;
+}
+
+.history-item__action-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.history-item__action-btn:hover {
+  background: #f1f5f9;
+  color: var(--text-primary);
+}
+
+.history-item__action-btn--delete:hover {
+  background: #fef2f2;
+  color: #ef4444;
 }
 
 .history-sidebar__footer {

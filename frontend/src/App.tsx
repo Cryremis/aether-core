@@ -4,9 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import {
   bootstrapAdminSession,
   clearAccessToken,
+  deleteSession,
   getCurrentUser,
   listConversations,
   loadStoredAccessToken,
+  renameSession,
   setAccessToken,
 } from "./api/client";
 import { AdminPage } from "./pages/AdminPage";
@@ -33,6 +35,7 @@ export default function App() {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [isEmbedMode, setIsEmbedMode] = useState(false);
+  const [isNewSession, setIsNewSession] = useState(false);
 
   const refreshConversations = async (preferredSessionId?: string) => {
     const result = await listConversations();
@@ -41,11 +44,13 @@ export default function App() {
 
     if (preferredSessionId) {
       setSessionId(preferredSessionId);
+      setIsNewSession(false);
       return items;
     }
 
     if (!sessionId && items.length > 0) {
       setSessionId(items[0].session_id);
+      setIsNewSession(false);
     }
     return items;
   };
@@ -110,10 +115,39 @@ export default function App() {
     }
   };
 
-  const handleNewConversation = async () => {
-    const created = await bootstrapAdminSession();
-    const nextSessionId = String(created.data?.session_id ?? "");
-    await refreshConversations(nextSessionId);
+  const handleNewConversation = () => {
+    setSessionId("");
+    setIsNewSession(true);
+  };
+
+  const handleDeleteSession = async (targetSessionId: string) => {
+    if (!window.confirm("确定删除该会话吗？")) return;
+    try {
+      await deleteSession(targetSessionId);
+      await refreshConversations();
+      if (sessionId === targetSessionId) {
+        handleNewConversation();
+      }
+    } catch (err) {
+      console.error("删除会话失败:", err);
+    }
+  };
+
+  const handleRenameSession = async (targetSessionId: string, currentTitle: string) => {
+    const newTitle = window.prompt("请输入新的会话名称:", currentTitle || "新对话");
+    if (!newTitle || newTitle.trim() === "" || newTitle === currentTitle) return;
+    try {
+      await renameSession(targetSessionId, newTitle.trim());
+      await refreshConversations(sessionId);
+    } catch (err) {
+      console.error("重命名会话失败:", err);
+    }
+  };
+
+  const handleCreateSessionAndSelect = (newSessionId: string) => {
+    setIsNewSession(false);
+    setSessionId(newSessionId);
+    void refreshConversations(newSessionId);
   };
 
   const handleLogout = () => {
@@ -146,23 +180,27 @@ export default function App() {
         <section className="workspace-shell__main">
           {page === "admin" && currentUser ? (
             <AdminPage role={currentUser.role} onBack={() => setPage("workbench")} />
-          ) : sessionId ? (
+          ) : sessionId || isNewSession ? (
             <WorkbenchPage
               conversations={conversations}
               currentUser={currentUser}
               isEmbedMode={isEmbedMode}
               sessionId={sessionId}
+              isNewSession={isNewSession}
               onAdminToggle={() => setPage("admin")}
               onLogout={handleLogout}
-              onNewConversation={() => void handleNewConversation()}
+              onNewConversation={handleNewConversation}
+              onDeleteSession={(id) => void handleDeleteSession(id)}
+              onRenameSession={(id, title) => void handleRenameSession(id, title)}
+              onSessionCreated={handleCreateSessionAndSelect}
               onSessionRefresh={() => void refreshConversations(sessionId)}
-              onSessionSelect={setSessionId}
+              onSessionSelect={(id) => { setSessionId(id); setIsNewSession(false); }}
             />
           ) : null}
         </section>
       </div>
     );
-  }, [authed, conversations, currentUser, isEmbedMode, page, ready, sessionId]);
+  }, [authed, conversations, currentUser, isEmbedMode, isNewSession, page, ready, sessionId]);
 
   return shell;
 }

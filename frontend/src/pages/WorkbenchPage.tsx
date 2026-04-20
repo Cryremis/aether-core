@@ -5,6 +5,7 @@ import "highlight.js/styles/github-dark-dimmed.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  bootstrapAdminSession,
   deleteUserLlmConfig,
   getDownloadUrl,
   getUserLlmConfig,
@@ -81,9 +82,13 @@ type WorkbenchPageProps = {
   } | null;
   isEmbedMode?: boolean;
   sessionId: string;
+  isNewSession?: boolean;
   onAdminToggle?: () => void;
   onLogout?: () => void;
   onNewConversation?: () => void;
+  onDeleteSession?: (sessionId: string) => void;
+  onRenameSession?: (sessionId: string, currentTitle: string) => void;
+  onSessionCreated?: (sessionId: string) => void;
   onSessionRefresh?: () => void;
   onSessionSelect?: (sessionId: string) => void;
 };
@@ -154,9 +159,13 @@ export function WorkbenchPage({
   currentUser,
   isEmbedMode = false,
   sessionId,
+  isNewSession = false,
   onAdminToggle,
   onLogout,
   onNewConversation,
+  onDeleteSession,
+  onRenameSession,
+  onSessionCreated,
   onSessionRefresh,
   onSessionSelect,
 }: WorkbenchPageProps) {
@@ -185,6 +194,9 @@ export function WorkbenchPage({
   });
   const [allowNetwork, setAllowNetwork] = useState(true);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
+  const [localSessionId, setLocalSessionId] = useState<string | null>(null);
+  const isStreamingRef = useRef(false);
+  const newlyCreatedSessionRef = useRef<string | null>(null);
 
   const historyRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -340,10 +352,31 @@ export function WorkbenchPage({
     await refreshResources(nextSessionId);
   };
 
-  useEffect(() => {
+useEffect(() => {
+    if (isNewSession) {
+      setLocalSessionId(null);
+      newlyCreatedSessionRef.current = null;
+      setMessages([]);
+      setSkills([]);
+      setFiles([]);
+      setLoading(false);
+      return;
+    }
+    if (isStreamingRef.current) {
+      return;
+    }
+    const targetSessionId = sessionId || localSessionId;
+    if (!targetSessionId) {
+      setLoading(false);
+      return;
+    }
+    if (newlyCreatedSessionRef.current === targetSessionId) {
+      newlyCreatedSessionRef.current = null;
+      return;
+    }
     setLoading(true);
     setError("");
-    void loadSession(sessionId)
+    void loadSession(targetSessionId)
       .catch((loadError) => {
         setError(loadError instanceof Error ? loadError.message : "初始化失败");
         setMessages([]);
@@ -351,9 +384,9 @@ export function WorkbenchPage({
         setFiles([]);
       })
       .finally(() => setLoading(false));
-  }, [sessionId]);
+  }, [sessionId, isNewSession, localSessionId]);
 
-  const canSend = useMemo(() => input.trim().length > 0 && !!sessionId && !busy, [busy, input, sessionId]);
+  const canSend = useMemo(() => input.trim().length > 0 && (sessionId || localSessionId || isNewSession) && !busy, [busy, input, sessionId, localSessionId, isNewSession]);
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
     setMessages((current) =>
@@ -385,6 +418,21 @@ export function WorkbenchPage({
     const userText = input.trim();
     const assistantId = `assistant-${Date.now()}`;
 
+    let effectiveSessionId = sessionId || localSessionId;
+    const wasNewSession = isNewSession && !effectiveSessionId;
+    if (wasNewSession) {
+      try {
+        const created = await bootstrapAdminSession();
+        effectiveSessionId = String(created.data?.session_id ?? "");
+        setLocalSessionId(effectiveSessionId);
+        newlyCreatedSessionRef.current = effectiveSessionId;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "创建会话失败");
+        return;
+      }
+    }
+
+    isStreamingRef.current = true;
     setBusy(true);
     setError("");
     setInput("");
@@ -401,7 +449,11 @@ export function WorkbenchPage({
     let activeContentText = "";
 
     try {
-      await streamChat(sessionId, userText, allowNetwork, (event) => {
+      if (!effectiveSessionId) {
+        setError("无法获取会话 ID");
+        return;
+      }
+      await streamChat(effectiveSessionId, userText, allowNetwork, (event) => {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
 
         if (event.type === "reasoning_delta") {
@@ -509,7 +561,11 @@ export function WorkbenchPage({
     } catch (chatError) {
       setError(chatError instanceof Error ? chatError.message : "对话执行失败");
     } finally {
+      isStreamingRef.current = false;
       setBusy(false);
+      if (wasNewSession && effectiveSessionId) {
+        onSessionCreated?.(effectiveSessionId);
+      }
       void onSessionRefresh?.();
     }
   };
@@ -604,15 +660,26 @@ export function WorkbenchPage({
                 <div className="item-list">
                   {conversations.length === 0 ? <div className="empty-state">暂无历史会话</div> : null}
                   {conversations.map((item) => (
-                    <button
+                    <div
                       key={item.conversation_id}
-                      type="button"
                       className={`history-item history-item--compact ${item.session_id === sessionId ? "is-active" : ""}`}
-                      onClick={() => onSessionSelect?.(item.session_id)}
                     >
-                      <strong>{item.title || "新对话"}</strong>
-                      <span>{item.session_id}</span>
-                    </button>
+                      <button
+                        type="button"
+                        className="history-item__main"
+                        onClick={() => onSessionSelect?.(item.session_id)}
+                      >
+                        <strong>{item.title || "新对话"}</strong>
+                      </button>
+                      <div className="history-item__actions">
+                        <button type="button" className="history-item__action-btn" title="重命名" onClick={(e) => { e.stopPropagation(); onRenameSession?.(item.session_id, item.title); }}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg>
+                        </button>
+                        <button type="button" className="history-item__action-btn history-item__action-btn--delete" title="删除" onClick={(e) => { e.stopPropagation(); onDeleteSession?.(item.session_id); }}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -775,7 +842,7 @@ export function WorkbenchPage({
             <button className="icon-button subtle nav-trigger" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
               {isSidebarOpen ? <Icons.SidebarClose /> : <Icons.Menu />}
             </button>
-            <span className="session-badge">Session ID: {sessionId || "Initializing..."}</span>
+            <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? "新会话" : `Session ID: ${sessionId || localSessionId || "Initializing..."}`}</span>
           </div>
         </header>
 
