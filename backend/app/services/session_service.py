@@ -173,5 +173,16 @@ class SessionService:
         }
         metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def delete_session(self, session_id: str) -> bool:
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+        metadata_path = self._metadata_path(session_id)
+        session_dir = settings.sessions_root / session_id
+        if session_dir.exists():
+            import shutil
+            shutil.rmtree(session_dir, ignore_errors=True)
+            return True
+        return metadata_path.exists()
+
 
 session_service = SessionService()

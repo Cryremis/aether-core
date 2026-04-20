@@ -87,3 +87,45 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         messages=session.messages,
     )
     return ApiResponse(message="会话摘要", data=summary.model_dump(mode="json"))
+
+
+@router.delete("/{session_id}")
+def delete_session(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    conversation = store_service.get_conversation_by_session(session_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if auth.kind == "admin":
+        if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
+            raise HTTPException(status_code=403, detail="无权删除该会话")
+    elif auth.kind == "embed":
+        if (
+            conversation.get("conversation_id") != auth.conversation_id
+            or conversation.get("platform_id") != auth.platform_id
+        ):
+            raise HTTPException(status_code=403, detail="无权删除该会话")
+    else:
+        raise HTTPException(status_code=401, detail="未授权")
+    deleted = store_service.delete_conversation(session_id)
+    if deleted:
+        session_service.delete_session(session_id)
+    return ApiResponse(message="会话已删除", data={"deleted": deleted})
+
+
+@router.patch("/{session_id}/title")
+def rename_session(session_id: str, title: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    conversation = store_service.get_conversation_by_session(session_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if auth.kind == "admin":
+        if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
+            raise HTTPException(status_code=403, detail="无权重命名该会话")
+    elif auth.kind == "embed":
+        if (
+            conversation.get("conversation_id") != auth.conversation_id
+            or conversation.get("platform_id") != auth.platform_id
+        ):
+            raise HTTPException(status_code=403, detail="无权重命名该会话")
+    else:
+        raise HTTPException(status_code=401, detail="未授权")
+    updated = store_service.update_conversation_title(session_id, title.strip()[:80] or "新对话")
+    return ApiResponse(message="会话已重命名", data={"updated": updated, "title": title.strip()[:80] or "新对话"})

@@ -664,6 +664,20 @@ class StoreService:
                 ),
             )
 
+    def delete_conversation(self, session_id: str) -> bool:
+        with self._connect() as conn:
+            result = conn.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
+            return result.rowcount > 0
+
+    def update_conversation_title(self, session_id: str, title: str) -> bool:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            result = conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE session_id = ?",
+                (title, now, session_id),
+            )
+            return result.rowcount > 0
+
     def _row_to_user(self, row: sqlite3.Row | None) -> StoreUser | None:
         if row is None:
             return None
