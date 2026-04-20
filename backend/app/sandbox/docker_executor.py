@@ -6,6 +6,7 @@ import shlex
 import shutil
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.config import settings
@@ -13,10 +14,22 @@ from app.sandbox.executors import SandboxExecutor
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 
 
+@dataclass(frozen=True)
+class BaselineRuntimePlan:
+    """描述基线环境在容器内的挂载策略。"""
+
+    mode: str
+    mount_upper_workspace: bool
+    requires_root: bool
+
+
 class DockerSandboxExecutor(SandboxExecutor):
     """基于 Docker 的强隔离执行器。"""
 
     name = "docker"
+
+    def __init__(self) -> None:
+        self._baseline_plan_cache: BaselineRuntimePlan | None = None
 
     async def run_shell(
         self,
@@ -30,7 +43,8 @@ class DockerSandboxExecutor(SandboxExecutor):
 
         container_name = f"aethercore-sbx-{workspace.session_id[:18]}-{uuid.uuid4().hex[:8]}"
         process_command = self._build_process_command(shell, command)
-        cli_args = self._build_docker_run_args(workspace, container_name, process_command)
+        baseline_plan = await self._resolve_baseline_plan(docker_binary, workspace)
+        cli_args = self._build_docker_run_args(workspace, container_name, process_command, baseline_plan)
 
         started_at = time.perf_counter()
         process = await asyncio.create_subprocess_exec(
@@ -99,7 +113,7 @@ class DockerSandboxExecutor(SandboxExecutor):
 
     def _build_process_command(self, shell: str, command: str) -> list[str]:
         if shell == "bash":
-            return ["/bin/bash", "-lc", command]
+            return ["/bin/bash", "-c", command]
         if shell == "powershell":
             return ["pwsh", "-NoLogo", "-NoProfile", "-Command", command]
         raise RuntimeError(f"暂不支持的 shell 类型: {shell}")
@@ -109,8 +123,8 @@ class DockerSandboxExecutor(SandboxExecutor):
         workspace: SandboxWorkspace,
         container_name: str,
         process_command: list[str],
+        baseline_plan: BaselineRuntimePlan,
     ) -> list[str]:
-        use_overlay = workspace.baseline_root is not None
         args = [
             "run",
             "--rm",
@@ -146,9 +160,20 @@ class DockerSandboxExecutor(SandboxExecutor):
             f"AETHER_LOGS_DIR={settings.sandbox_docker_logs_dir}",
             "--env",
             "PYTHONIOENCODING=utf-8",
+            "--env",
+            "HOME=/tmp/aether-home",
+            "--env",
+            "XDG_CACHE_HOME=/tmp/aether-home/.cache",
+            "--env",
+            "XDG_CONFIG_HOME=/tmp/aether-home/.config",
+            "--env",
+            "DOTNET_CLI_HOME=/tmp/aether-home",
         ]
 
-        if use_overlay:
+        if baseline_plan.requires_root:
+            args.extend(["--user", "root"])
+
+        if baseline_plan.mount_upper_workspace:
             args.extend(
                 [
                     "--mount",
@@ -169,10 +194,21 @@ class DockerSandboxExecutor(SandboxExecutor):
                         f"src={workspace.baseline_root.resolve()},"
                         "dst=/aether/baseline,readonly"
                     ),
-                    "--tmpfs",
-                    "/workspace:size=64m",
                 ]
             )
+        elif workspace.baseline_root is not None:
+            args.extend(
+                [
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace.baseline_root.resolve()},"
+                        "dst=/aether/baseline,readonly"
+                    ),
+                ]
+            )
+        if baseline_plan.mode == "overlay":
+            args.extend(["--tmpfs", "/workspace:size=64m"])
         else:
             args.extend(
                 [
@@ -195,28 +231,102 @@ class DockerSandboxExecutor(SandboxExecutor):
             args.extend(["--network", "none"])
 
         args.append(settings.sandbox_docker_image)
-        args.extend(self._build_runtime_command(process_command, use_overlay))
+        args.extend(self._build_runtime_command(process_command, baseline_plan))
         return args
 
-    def _build_runtime_command(self, process_command: list[str], use_overlay: bool) -> list[str]:
-        if not use_overlay:
+    def _build_runtime_command(
+        self,
+        process_command: list[str],
+        baseline_plan: BaselineRuntimePlan,
+    ) -> list[str]:
+        if baseline_plan.mode == "direct":
             return process_command
 
         quoted_process = shlex.join(process_command)
+        if baseline_plan.mode == "copy":
+            setup_script = """
+set -euo pipefail
+mkdir -p /workspace/metadata
+if [ ! -f /workspace/metadata/.baseline-materialized ]; then
+  for name in input skills work output logs; do
+    mkdir -p "/workspace/${{name}}"
+    if [ -d "/aether/baseline/${{name}}" ]; then
+      cp -R "/aether/baseline/${{name}}/." "/workspace/${{name}}/"
+    fi
+  done
+  printf 'copy\n' > /workspace/metadata/.baseline-materialized
+fi
+exec {process}
+""".strip().format(process=quoted_process)
+            return ["/bin/bash", "-c", setup_script]
+
         setup_script = """
 set -euo pipefail
 mkdir -p /workspace /tmp/aether-runtime
 for name in input skills work output logs; do
-  mkdir -p "/workspace/${name}"
-  mkdir -p "/aether/session-upper/${name}"
-  mkdir -p "/aether/session-overlay-work/${name}"
+  mkdir -p "/workspace/${{name}}"
+  mkdir -p "/aether/session-upper/${{name}}"
+  mkdir -p "/aether/session-overlay-work/${{name}}"
   mount -t overlay overlay \
-    -o "lowerdir=/aether/baseline/${name},upperdir=/aether/session-upper/${name},workdir=/aether/session-overlay-work/${name}" \
-    "/workspace/${name}"
+    -o "lowerdir=/aether/baseline/${{name}},upperdir=/aether/session-upper/${{name}},workdir=/aether/session-overlay-work/${{name}}" \
+    "/workspace/${{name}}"
 done
 exec {process}
 """.strip().format(process=quoted_process)
-        return ["/bin/bash", "-lc", setup_script]
+        return ["/bin/bash", "-c", setup_script]
+
+    async def _resolve_baseline_plan(
+        self,
+        docker_binary: str,
+        workspace: SandboxWorkspace,
+    ) -> BaselineRuntimePlan:
+        if workspace.baseline_root is None:
+            return BaselineRuntimePlan(mode="direct", mount_upper_workspace=False, requires_root=False)
+        if self._baseline_plan_cache is not None:
+            return self._baseline_plan_cache
+
+        supports_overlay = await self._supports_overlay_mount(docker_binary)
+        self._baseline_plan_cache = (
+            BaselineRuntimePlan(mode="overlay", mount_upper_workspace=True, requires_root=True)
+            if supports_overlay
+            else BaselineRuntimePlan(mode="copy", mount_upper_workspace=False, requires_root=False)
+        )
+        return self._baseline_plan_cache
+
+    async def _supports_overlay_mount(self, docker_binary: str) -> bool:
+        probe_name = f"aethercore-sbx-probe-{uuid.uuid4().hex[:8]}"
+        process = await asyncio.create_subprocess_exec(
+            docker_binary,
+            "run",
+            "--rm",
+            "--name",
+            probe_name,
+            "--user",
+            "root",
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "SYS_ADMIN",
+            settings.sandbox_docker_image,
+            "/bin/bash",
+            "-c",
+            (
+                "set -e;"
+                "mkdir -p /tmp/testmnt /tmp/lower /tmp/upper /tmp/work;"
+                "touch /tmp/lower/probe.txt;"
+                "mount -t overlay overlay "
+                "-o lowerdir=/tmp/lower,upperdir=/tmp/upper,workdir=/tmp/work /tmp/testmnt"
+            ),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr_bytes = await process.communicate()
+        if process.returncode == 0:
+            return True
+        stderr_text = self._decode_output(stderr_bytes)
+        if "wrong fs type" in stderr_text.lower() or "must be superuser" in stderr_text.lower():
+            return False
+        return False
 
     async def _force_remove_container(self, docker_binary: str, container_name: str) -> None:
         process = await asyncio.create_subprocess_exec(
