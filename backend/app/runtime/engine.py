@@ -38,17 +38,8 @@ class AgentEngine:
         session.messages.append({"role": "user", "content": message})
         session.touch()
         session_service.persist(session)
-        store_service.touch_conversation(
-            session.session_id,
-            title=message.strip()[:80] or "新对话",
-            message_count=len(session.messages),
-        )
-
-        messages: list[dict[str, object]] = [
-            {"role": "system", "content": self._build_system_message(session)},
-            *session.messages,
-        ]
         conversation = store_service.get_conversation_by_session(session.session_id)
+        is_new_conversation = conversation is None or conversation.get("message_count", 0) == 0
         if conversation is None:
             conversation = store_service.create_conversation(
                 session_id=session.session_id,
@@ -56,6 +47,17 @@ class AgentEngine:
                 host_name=session.host_name or "AetherCore",
                 host_type=session.host_type or "standalone",
             )
+        new_title = message.strip()[:80] or "新对话" if is_new_conversation else None
+        store_service.touch_conversation(
+            session.session_id,
+            title=new_title,
+            message_count=len(session.messages),
+        )
+
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": self._build_system_message(session)},
+            *session.messages,
+        ]
         llm_runtime = llm_config_service.resolve_for_conversation(conversation)
         tools = tool_service.list_tool_schemas(session)
         turn_count = 0
