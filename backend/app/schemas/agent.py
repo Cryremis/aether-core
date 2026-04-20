@@ -10,6 +10,7 @@ class AgentChatRequest(BaseModel):
 
     message: str
     session_id: str | None = None
+    allow_network: bool | None = None
 
 
 class AgentEvent(BaseModel):

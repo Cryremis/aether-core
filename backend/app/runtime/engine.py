@@ -50,7 +50,12 @@ class AgentEngine:
         ]
         conversation = store_service.get_conversation_by_session(session.session_id)
         if conversation is None:
-            raise RuntimeError("会话对应的对话记录不存在")
+            conversation = store_service.create_conversation(
+                session_id=session.session_id,
+                title=message.strip()[:80] or "新对话",
+                host_name=session.host_name or "AetherCore",
+                host_type=session.host_type or "standalone",
+            )
         llm_runtime = llm_config_service.resolve_for_conversation(conversation)
         tools = tool_service.list_tool_schemas(session)
         turn_count = 0
@@ -107,7 +112,7 @@ class AgentEngine:
             active_reasoning_block_id = ""
             active_content_block_id = ""
 
-            async for chunk in llm_client.stream_chat_completion(config=llm_runtime, messages=messages, tools=tools):
+            async for chunk in llm_client.stream_chat_completion(llm_runtime, messages, tools):
                 choices = chunk.get("choices") or []
                 if not choices:
                     continue

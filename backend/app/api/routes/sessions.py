@@ -80,6 +80,7 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         host_name=session.host_name,
         host_type=session.host_type,
         message_count=len(session.messages),
+        allow_network=session.allow_network,
         created_at=datetime.fromisoformat(conversation["created_at"]) if conversation.get("created_at") else datetime.now(timezone.utc),
         skills=skill_service.list_for_session(session),
         files=[*file_service.list_uploads(session), *artifact_service.list_artifacts(session)],

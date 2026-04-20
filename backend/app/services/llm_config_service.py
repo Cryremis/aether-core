@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.config import settings
-from app.schemas.llm import LlmConfigSummary, LlmResolvedConfig, LlmConfigUpdateRequest
+from app.schemas.llm import LlmConfigSummary, LlmNetworkConfig, LlmResolvedConfig, LlmConfigUpdateRequest
 from app.services.store import StoreUser, store_service
 
 
@@ -21,6 +21,7 @@ class RuntimeLlmConfig:
     api_key: str
     extra_headers: dict[str, str] = field(default_factory=dict)
     extra_body: dict[str, Any] = field(default_factory=dict)
+    network: LlmNetworkConfig = field(default_factory=LlmNetworkConfig)
     enabled: bool = True
 
 
@@ -37,6 +38,7 @@ class LlmConfigService:
             has_api_key=bool(settings.llm_api_key),
             extra_headers={},
             extra_body={},
+            network=self._public_network_config(self._global_network_config()),
             updated_at=None,
         )
 
@@ -63,6 +65,7 @@ class LlmConfigService:
             api_key=(request.api_key or "").strip() or None,
             extra_headers=request.extra_headers,
             extra_body=request.extra_body,
+            network=request.network.model_dump(mode="json"),
         )
         return self._to_summary(row)
 
@@ -86,6 +89,7 @@ class LlmConfigService:
             api_key=api_key,
             extra_headers=request.extra_headers,
             extra_body=request.extra_body,
+            network=request.network.model_dump(mode="json"),
         )
         return self._to_summary(row)
 
@@ -118,6 +122,7 @@ class LlmConfigService:
             api_key=settings.llm_api_key,
             extra_headers={},
             extra_body={},
+            network=self._global_network_config(),
             enabled=True,
         )
 
@@ -145,6 +150,7 @@ class LlmConfigService:
             has_api_key=bool(row.get("has_api_key")),
             extra_headers=row.get("extra_headers") or {},
             extra_body=row.get("extra_body") or {},
+            network=self._public_network_config(self._normalize_network(row.get("network"))),
             updated_at=row.get("updated_at"),
         )
 
@@ -158,11 +164,31 @@ class LlmConfigService:
             api_key=str(row.get("api_key") or ""),
             extra_headers=row.get("extra_headers") or {},
             extra_body=row.get("extra_body") or {},
+            network=self._normalize_network(row.get("network")),
             enabled=bool(row.get("enabled", True)),
         )
 
     def _to_resolved(self, scope: str, row: dict[str, Any]) -> LlmResolvedConfig:
         return LlmResolvedConfig(scope=scope, **self._to_summary(row).model_dump())
+
+    def _global_network_config(self) -> LlmNetworkConfig:
+        return LlmNetworkConfig(
+            enabled=settings.llm_network_enabled,
+            allowed_domains=list(settings.llm_network_allowed_domains),
+            blocked_domains=list(settings.llm_network_blocked_domains),
+            max_search_results=settings.llm_network_max_search_results,
+            fetch_timeout_seconds=settings.llm_network_fetch_timeout_seconds,
+        )
+
+    def _normalize_network(self, value: Any) -> LlmNetworkConfig:
+        if isinstance(value, LlmNetworkConfig):
+            return value
+        if isinstance(value, dict):
+            return LlmNetworkConfig(**dict(value))
+        return LlmNetworkConfig()
+
+    def _public_network_config(self, config: LlmNetworkConfig) -> LlmNetworkConfig:
+        return config
 
 
 llm_config_service = LlmConfigService()

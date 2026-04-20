@@ -39,6 +39,8 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
     if not request.session_id:
         raise HTTPException(status_code=400, detail="缺少 session_id")
     session = _ensure_session_access(request.session_id, auth)
+    if request.allow_network is not None:
+        session_service.set_allow_network(session, request.allow_network)
 
     async def event_stream():
         yield f"data: {AgentEvent(type='session_created', session_id=session.session_id).model_dump_json()}\n\n"

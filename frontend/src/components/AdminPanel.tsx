@@ -67,6 +67,11 @@ type LlmConfigFormState = {
   extra_headers_text: string;
   extra_body_text: string;
   has_api_key: boolean;
+  network_enabled: boolean;
+  allowed_domains_text: string;
+  blocked_domains_text: string;
+  max_search_results: number;
+  fetch_timeout_seconds: number;
 };
 
 // ================== SVG 图标集合 ==================
@@ -116,6 +121,11 @@ export function AdminPanel({ role }: AdminPanelProps) {
     extra_headers_text: "",
     extra_body_text: "",
     has_api_key: false,
+    network_enabled: true,
+    allowed_domains_text: "",
+    blocked_domains_text: "",
+    max_search_results: 8,
+    fetch_timeout_seconds: 30,
   });
   const [platformLlmError, setPlatformLlmError] = useState("");
   const [platformLlmBusy, setPlatformLlmBusy] = useState(false);
@@ -171,6 +181,11 @@ export function AdminPanel({ role }: AdminPanelProps) {
         extra_headers_text: "",
         extra_body_text: "",
         has_api_key: false,
+        network_enabled: true,
+        allowed_domains_text: "",
+        blocked_domains_text: "",
+        max_search_results: 8,
+        fetch_timeout_seconds: 30,
       });
       setShowPlatformLlmAdvanced(false);
       return;
@@ -186,6 +201,13 @@ export function AdminPanel({ role }: AdminPanelProps) {
           has_api_key: boolean;
           extra_headers?: Record<string, string>;
           extra_body?: Record<string, unknown>;
+          network?: {
+            enabled?: boolean;
+            allowed_domains?: string[];
+            blocked_domains?: string[];
+            max_search_results?: number;
+            fetch_timeout_seconds?: number;
+          };
         } | null;
         setPlatformLlmForm({
           enabled: data?.enabled ?? true,
@@ -195,6 +217,11 @@ export function AdminPanel({ role }: AdminPanelProps) {
           extra_headers_text: data?.extra_headers && Object.keys(data.extra_headers).length > 0 ? JSON.stringify(data.extra_headers, null, 2) : "",
           extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
           has_api_key: Boolean(data?.has_api_key),
+          network_enabled: data?.network?.enabled ?? true,
+          allowed_domains_text: (data?.network?.allowed_domains ?? []).join("\n"),
+          blocked_domains_text: (data?.network?.blocked_domains ?? []).join("\n"),
+          max_search_results: data?.network?.max_search_results ?? 8,
+          fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
         });
         setShowPlatformLlmAdvanced(
           Boolean(
@@ -356,6 +383,12 @@ export function AdminPanel({ role }: AdminPanelProps) {
     }
   };
 
+  const parseLineList = (raw: string) =>
+    raw
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
   const handleSavePlatformLlm = async () => {
     if (!activePlatformId) return;
     try {
@@ -368,6 +401,13 @@ export function AdminPanel({ role }: AdminPanelProps) {
         api_key: platformLlmForm.api_key.trim() || undefined,
         extra_headers: parseJsonObject(platformLlmForm.extra_headers_text, "扩展请求头") as Record<string, string>,
         extra_body: parseJsonObject(platformLlmForm.extra_body_text, "扩展请求体"),
+        network: {
+          enabled: platformLlmForm.network_enabled,
+          allowed_domains: parseLineList(platformLlmForm.allowed_domains_text),
+          blocked_domains: parseLineList(platformLlmForm.blocked_domains_text),
+          max_search_results: platformLlmForm.max_search_results,
+          fetch_timeout_seconds: platformLlmForm.fetch_timeout_seconds,
+        },
       });
       const latest = await getPlatformLlmConfig(activePlatformId);
       const data = (latest.data ?? null) as {
@@ -377,6 +417,13 @@ export function AdminPanel({ role }: AdminPanelProps) {
         has_api_key: boolean;
         extra_headers?: Record<string, string>;
         extra_body?: Record<string, unknown>;
+        network?: {
+          enabled?: boolean;
+          allowed_domains?: string[];
+          blocked_domains?: string[];
+          max_search_results?: number;
+          fetch_timeout_seconds?: number;
+        };
       } | null;
       setPlatformLlmForm({
         enabled: data?.enabled ?? true,
@@ -386,6 +433,11 @@ export function AdminPanel({ role }: AdminPanelProps) {
         extra_headers_text: data?.extra_headers && Object.keys(data.extra_headers).length > 0 ? JSON.stringify(data.extra_headers, null, 2) : "",
         extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
         has_api_key: Boolean(data?.has_api_key),
+        network_enabled: data?.network?.enabled ?? true,
+        allowed_domains_text: (data?.network?.allowed_domains ?? []).join("\n"),
+        blocked_domains_text: (data?.network?.blocked_domains ?? []).join("\n"),
+        max_search_results: data?.network?.max_search_results ?? 8,
+        fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
       });
       setShowPlatformLlmAdvanced(
         Boolean(
@@ -415,6 +467,11 @@ export function AdminPanel({ role }: AdminPanelProps) {
         extra_headers_text: "",
         extra_body_text: "",
         has_api_key: false,
+        network_enabled: true,
+        allowed_domains_text: "",
+        blocked_domains_text: "",
+        max_search_results: 8,
+        fetch_timeout_seconds: 30,
       });
       setShowPlatformLlmAdvanced(false);
     } catch (err) {
@@ -596,6 +653,30 @@ export function AdminPanel({ role }: AdminPanelProps) {
                 name="platform-llm-extra-body"
                 placeholder='额外请求体 JSON，例如 {"reasoning":{"effort":"medium"}}'
               />
+            </details>
+            <details className="llm-advanced-panel">
+              <summary>联网策略</summary>
+              <label className="admin-panel__checkbox">
+                <input type="checkbox" checked={platformLlmForm.network_enabled} onChange={(e) => setPlatformLlmForm((current) => ({ ...current, network_enabled: e.target.checked }))} />
+                <span>启用联网工具</span>
+              </label>
+              <p className="admin-panel__hint">系统只使用模型原生联网搜索能力；这里保留的是平台治理策略，不再要求额外配置搜索服务。</p>
+              <label className="admin-panel__field">
+                <span>允许访问域名</span>
+                <textarea value={platformLlmForm.allowed_domains_text} onChange={(e) => setPlatformLlmForm((current) => ({ ...current, allowed_domains_text: e.target.value }))} placeholder={"每行一个\nexample.com"} />
+              </label>
+              <label className="admin-panel__field">
+                <span>禁止访问域名</span>
+                <textarea value={platformLlmForm.blocked_domains_text} onChange={(e) => setPlatformLlmForm((current) => ({ ...current, blocked_domains_text: e.target.value }))} placeholder={"每行一个\ninternal.example.com"} />
+              </label>
+              <label className="admin-panel__field">
+                <span>最大搜索结果数</span>
+                <input type="number" min={1} max={20} value={platformLlmForm.max_search_results} onChange={(e) => setPlatformLlmForm((current) => ({ ...current, max_search_results: Number(e.target.value || 8) }))} />
+              </label>
+              <label className="admin-panel__field">
+                <span>网页抓取超时（秒）</span>
+                <input type="number" min={1} max={120} value={platformLlmForm.fetch_timeout_seconds} onChange={(e) => setPlatformLlmForm((current) => ({ ...current, fetch_timeout_seconds: Number(e.target.value || 30) }))} />
+              </label>
             </details>
             <div className="admin-panel__actions">
               <button type="button" onClick={() => void handleSavePlatformLlm()} disabled={platformLlmBusy || !platformLlmForm.base_url.trim() || !platformLlmForm.model.trim()}>

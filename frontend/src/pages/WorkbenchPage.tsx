@@ -126,6 +126,7 @@ const Icons = {
   SidebarClose: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>,
   Send: () => <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>,
   Attach: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>,
+  Globe: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18"></path><path d="M12 3a15 15 0 0 0 0 18"></path></svg>,
   File: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>,
   Download: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>,
   Terminal: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>,
@@ -182,6 +183,7 @@ export function WorkbenchPage({
     has_api_key: false,
     resolved_scope: "global",
   });
+  const [allowNetwork, setAllowNetwork] = useState(true);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
 
   const historyRef = useRef<HTMLDivElement | null>(null);
@@ -332,8 +334,9 @@ export function WorkbenchPage({
 
   const loadSession = async (nextSessionId: string) => {
     const summaryResult = await getSessionSummary(nextSessionId);
-    const summary = (summaryResult.data ?? {}) as { messages?: SessionMessage[] };
+    const summary = (summaryResult.data ?? {}) as { messages?: SessionMessage[]; allow_network?: boolean };
     setMessages(createHistoryMessages(summary.messages ?? []));
+    setAllowNetwork(summary.allow_network ?? true);
     await refreshResources(nextSessionId);
   };
 
@@ -398,7 +401,7 @@ export function WorkbenchPage({
     let activeContentText = "";
 
     try {
-      await streamChat(sessionId, userText, (event) => {
+      await streamChat(sessionId, userText, allowNetwork, (event) => {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
 
         if (event.type === "reasoning_delta") {
@@ -869,10 +872,22 @@ export function WorkbenchPage({
               rows={1}
             />
             <div className="composer-actions">
-              <label className="icon-button attach-btn" title="上传文件">
-                <input type="file" onChange={(e) => { void handleUpload(e.target.files?.[0]); e.currentTarget.value = ""; }} />
-                <Icons.Attach />
-              </label>
+              <div className="composer-actions__left">
+                <label className="icon-button attach-btn" title="上传文件">
+                  <input type="file" onChange={(e) => { void handleUpload(e.target.files?.[0]); e.currentTarget.value = ""; }} />
+                  <Icons.Attach />
+                </label>
+                <button
+                  type="button"
+                  className={`network-toggle ${allowNetwork ? "active" : ""}`}
+                  onClick={() => setAllowNetwork((current) => !current)}
+                  aria-pressed={allowNetwork}
+                  title={allowNetwork ? "当前会话已开启联网搜索" : "当前会话未开启联网搜索"}
+                >
+                  <Icons.Globe />
+                  <span>联网搜索</span>
+                </button>
+              </div>
               <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
                 <Icons.Send />
               </button>

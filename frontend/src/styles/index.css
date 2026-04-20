@@ -257,11 +257,45 @@ a { text-decoration: none; color: var(--accent); }
 }
 .composer-input::placeholder { color: var(--text-tertiary); }
 
-.composer-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+.composer-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 4px; }
+
+.composer-actions__left { display: flex; align-items: center; gap: 10px; }
 
 .attach-btn input { display: none; }
 .attach-btn { color: var(--text-tertiary); padding: 6px; border-radius: 50%; }
 .attach-btn:hover { color: var(--text-primary); background: var(--bg-hover); transform: rotate(15deg); }
+
+.network-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 999px;
+  background: #f8fafc;
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+}
+
+.network-toggle:hover {
+  border-color: rgba(148, 163, 184, 0.6);
+  background: #eef2ff;
+  color: var(--text-primary);
+}
+
+.network-toggle.active {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+  box-shadow: 0 8px 20px -16px rgba(37, 99, 235, 0.6);
+}
+
+.network-toggle span {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
 
 .send-btn { background: #f1f5f9; color: #94a3b8; border-radius: 50%; padding: 8px; width: 36px; height: 36px; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
 .send-btn.active { background: var(--text-primary); color: #ffffff; }
@@ -765,6 +799,19 @@ a { text-decoration: none; color: var(--accent); }
 .admin-panel__checkbox input {
   width: 16px;
   height: 16px;
+}
+
+.admin-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.admin-panel__field > span {
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .admin-panel__list {

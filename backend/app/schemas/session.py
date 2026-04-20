@@ -17,6 +17,7 @@ class SessionSummary(BaseModel):
     host_name: str
     host_type: str
     message_count: int
+    allow_network: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     skills: list[SkillCard] = Field(default_factory=list)
     files: list[FileRecord] = Field(default_factory=list)

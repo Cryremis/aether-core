@@ -7,6 +7,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class LlmNetworkConfig(BaseModel):
+    """LLM 关联的联网能力与策略配置。"""
+
+    enabled: bool = True
+    allowed_domains: list[str] = Field(default_factory=list)
+    blocked_domains: list[str] = Field(default_factory=list)
+    max_search_results: int = 8
+    fetch_timeout_seconds: int = 30
+
+
 class LlmConfigUpdateRequest(BaseModel):
     """更新 LLM 配置请求。"""
 
@@ -19,6 +29,7 @@ class LlmConfigUpdateRequest(BaseModel):
     clear_api_key: bool = False
     extra_headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
+    network: LlmNetworkConfig = Field(default_factory=LlmNetworkConfig)
 
 
 class LlmConfigSummary(BaseModel):
@@ -32,6 +43,7 @@ class LlmConfigSummary(BaseModel):
     has_api_key: bool = False
     extra_headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
+    network: LlmNetworkConfig = Field(default_factory=LlmNetworkConfig)
     updated_at: datetime | None = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -47,3 +59,4 @@ class LlmResolvedConfig(BaseModel):
     has_api_key: bool = False
     extra_headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
+    network: LlmNetworkConfig = Field(default_factory=LlmNetworkConfig)

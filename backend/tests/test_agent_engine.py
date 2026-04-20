@@ -29,7 +29,7 @@ def initialize_store(tmp_path: Path) -> None:
 def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
-    async def fake_stream_chat_completion(messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
         yield {
             "choices": [
                 {
@@ -109,7 +109,7 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
     ]
     round_index = {"value": 0}
 
-    async def fake_stream_chat_completion(messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
         current = rounds[round_index["value"]]
         round_index["value"] += 1
         yield current
@@ -150,7 +150,7 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
     observed_messages: list[list[dict]] = []
     rounds = {"value": 0}
 
-    async def fake_stream_chat_completion(messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
         observed_messages.append(messages)
         if rounds["value"] == 0:
             rounds["value"] += 1

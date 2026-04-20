@@ -69,7 +69,18 @@ export type LlmConfigPayload = {
   clear_api_key?: boolean;
   extra_headers?: Record<string, string>;
   extra_body?: Record<string, unknown>;
+  network?: LlmNetworkConfigPayload;
 };
+
+export type LlmNetworkConfigPayload = {
+  enabled: boolean;
+  allowed_domains: string[];
+  blocked_domains: string[];
+  max_search_results: number;
+  fetch_timeout_seconds: number;
+};
+
+export type LlmNetworkConfigSummary = LlmNetworkConfigPayload;
 
 export type LlmConfigSummary = {
   enabled: boolean;
@@ -80,6 +91,7 @@ export type LlmConfigSummary = {
   has_api_key: boolean;
   extra_headers: Record<string, string>;
   extra_body: Record<string, unknown>;
+  network: LlmNetworkConfigSummary;
   updated_at?: string | null;
 };
 
@@ -477,6 +489,7 @@ export function getDownloadUrl(sessionId: string, fileId: string) {
 export async function streamChat(
   sessionId: string,
   message: string,
+  allowNetwork: boolean,
   onEvent: (event: Record<string, unknown>) => void,
 ) {
   const headers = new Headers({ "Content-Type": "application/json" });
@@ -491,6 +504,7 @@ export async function streamChat(
     body: JSON.stringify({
       session_id: sessionId,
       message,
+      allow_network: allowNetwork,
     }),
   });
 

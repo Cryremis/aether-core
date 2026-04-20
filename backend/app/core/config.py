@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_timeout_seconds: int = 180
     llm_max_tokens: int = 4000
+    llm_network_enabled: bool = True
+    llm_network_allowed_domains: list[str] = Field(default_factory=list)
+    llm_network_blocked_domains: list[str] = Field(default_factory=list)
+    llm_network_max_search_results: int = 8
+    llm_network_fetch_timeout_seconds: int = 30
+    llm_network_fetch_max_bytes: int = 2 * 1024 * 1024
+    llm_network_user_agent: str = "AetherCore/1.0"
 
     auth_secret_key: str = "aethercore-dev-secret-key"
     auth_algorithm: str = "HS256"
