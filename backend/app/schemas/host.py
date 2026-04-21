@@ -61,9 +61,12 @@ class HostContextDescriptor(BaseModel):
 class HostBindRequest(BaseModel):
     """宿主绑定请求。"""
 
+    platform_key: str
     host_name: str
     host_type: Literal["dash", "poc", "custom"] = "custom"
     session_id: str | None = None
+    conversation_id: str | None = None
+    conversation_key: str | None = None
     context: HostContextDescriptor = Field(default_factory=HostContextDescriptor)
     tools: list[HostToolDescriptor] = Field(default_factory=list)
     skills: list[HostSkillDescriptor] = Field(default_factory=list)

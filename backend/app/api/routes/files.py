@@ -22,8 +22,7 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
             raise HTTPException(status_code=403, detail="无权访问该会话")
     elif auth.kind == "embed":
         if (
-            conversation.get("conversation_id") != auth.conversation_id
-            or conversation.get("platform_id") != auth.platform_id
+            conversation.get("platform_id") != auth.platform_id
             or conversation.get("external_user_id") != auth.external_user_id
         ):
             raise HTTPException(status_code=403, detail="无权访问该会话")

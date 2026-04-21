@@ -34,9 +34,35 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background-color: var(--bg-body); color: var(--text-primary); overflow: hidden; -webkit-font-smoothing: antialiased; }
+html, body { 
+  background-color: transparent; 
+  color: var(--text-primary); 
+  overflow: hidden; 
+  -webkit-font-smoothing: antialiased; 
+}
 button, input, textarea, a { font: inherit; outline: none; }
 a { text-decoration: none; color: var(--accent); }
+
+/* ================= 滚动条样式 ================= */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-left: 1px solid var(--border-color);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
 /* ================= 动画定义 ================= */
 @keyframes slideUpFade {
@@ -2141,7 +2167,7 @@ a { text-decoration: none; color: var(--accent); }
 
 .app-layout {
   position: relative;
-  background: #f8fafc;
+  background: transparent;
   z-index: 1;
 }
 

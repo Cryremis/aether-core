@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import AuthContext, get_auth_context, require_admin
+from app.api.deps import AuthContext, get_auth_context
 from app.schemas.common import ApiResponse
 from app.schemas.session import SessionSummary
 from app.services.artifact_service import artifact_service
@@ -17,15 +17,59 @@ router = APIRouter(prefix="/api/v1/agent/sessions", tags=["sessions"])
 
 
 @router.post("/bootstrap")
-def bootstrap_admin_session(
+def bootstrap_session(
     session_id: str | None = None,
-    auth: AuthContext = Depends(require_admin),
+    auth: AuthContext = Depends(get_auth_context),
 ) -> ApiResponse:
-    assert auth.user is not None
-    try:
-        session = conversation_service.bootstrap_admin_workbench(auth.user, session_id=session_id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if auth.kind == "admin":
+        assert auth.user is not None
+        try:
+            session = conversation_service.bootstrap_admin_workbench(auth.user, session_id=session_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+    elif auth.kind == "embed":
+        if auth.platform_id is None or auth.external_user_id is None or auth.conversation_id is None:
+            raise HTTPException(status_code=401, detail="未授权")
+        source_conversation = (
+            store_service.get_conversation_by_session(session_id)
+            if session_id
+            else store_service.get_conversation(auth.conversation_id)
+        )
+        if source_conversation is None:
+            raise HTTPException(status_code=404, detail="来源会话不存在")
+        if (
+            source_conversation.get("platform_id") != auth.platform_id
+            or source_conversation.get("external_user_id") != auth.external_user_id
+        ):
+            raise HTTPException(status_code=403, detail="无权基于该会话创建新会话")
+        source_session = session_service.get_or_create(source_conversation["session_id"])
+        session = session_service.get_or_create()
+        conversation = store_service.create_conversation(
+            session_id=session.session_id,
+            title="新对话",
+            host_name=source_session.host_name,
+            host_type=source_session.host_type,
+            platform_id=auth.platform_id,
+            external_user_id=auth.external_user_id,
+            external_org_id=source_conversation.get("external_org_id"),
+            conversation_key=None,
+            metadata={},
+        )
+        session_service.attach_host(
+            session=session,
+            host_name=source_session.host_name,
+            host_type=source_session.host_type,
+            context=dict(source_session.host_context),
+            tools=[dict(item) for item in source_session.host_tools],
+            skills=[dict(item) for item in source_session.host_skills],
+            apis=[dict(item) for item in source_session.host_apis],
+        )
+        session.conversation_id = conversation["conversation_id"]
+        session.allow_network = source_session.allow_network
+        session_service.persist(session)
+    else:
+        raise HTTPException(status_code=401, detail="未授权")
+
     return ApiResponse(
         message="工作台会话已就绪",
         data={
@@ -64,8 +108,7 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
             raise HTTPException(status_code=403, detail="无权访问该会话")
     elif auth.kind == "embed":
         if (
-            conversation.get("conversation_id") != auth.conversation_id
-            or conversation.get("platform_id") != auth.platform_id
+            conversation.get("platform_id") != auth.platform_id
             or conversation.get("external_user_id") != auth.external_user_id
         ):
             raise HTTPException(status_code=403, detail="无权访问该会话")
@@ -99,8 +142,8 @@ def delete_session(session_id: str, auth: AuthContext = Depends(get_auth_context
             raise HTTPException(status_code=403, detail="无权删除该会话")
     elif auth.kind == "embed":
         if (
-            conversation.get("conversation_id") != auth.conversation_id
-            or conversation.get("platform_id") != auth.platform_id
+            conversation.get("platform_id") != auth.platform_id
+            or conversation.get("external_user_id") != auth.external_user_id
         ):
             raise HTTPException(status_code=403, detail="无权删除该会话")
     else:
@@ -121,8 +164,8 @@ def rename_session(session_id: str, title: str, auth: AuthContext = Depends(get_
             raise HTTPException(status_code=403, detail="无权重命名该会话")
     elif auth.kind == "embed":
         if (
-            conversation.get("conversation_id") != auth.conversation_id
-            or conversation.get("platform_id") != auth.platform_id
+            conversation.get("platform_id") != auth.platform_id
+            or conversation.get("external_user_id") != auth.external_user_id
         ):
             raise HTTPException(status_code=403, detail="无权重命名该会话")
     else:

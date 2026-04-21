@@ -388,14 +388,22 @@ export function WorkbenchPage({
 
   const loadSession = async (nextSessionId: string) => {
     const summaryResult = await getSessionSummary(nextSessionId);
-    const summary = (summaryResult.data ?? {}) as { messages?: SessionMessage[]; allow_network?: boolean };
+    const summary = (summaryResult.data ?? {}) as {
+      messages?: SessionMessage[];
+      allow_network?: boolean;
+      skills?: SkillItem[];
+      files?: FileItem[];
+    };
     setMessages(createHistoryMessages(summary.messages ?? []));
     setAllowNetwork(summary.allow_network ?? true);
-    await refreshResources(nextSessionId);
+    setSkills(summary.skills ?? []);
+    setFiles(summary.files ?? []);
   };
 
-useEffect(() => {
-    if (isNewSession) {
+  useEffect(() => {
+    const hasBootstrappedLocalSession = Boolean(localSessionId || newlyCreatedSessionRef.current);
+
+    if (isNewSession && !hasBootstrappedLocalSession && !isStreamingRef.current) {
       setLocalSessionId(null);
       newlyCreatedSessionRef.current = null;
       setMessages([]);
@@ -404,18 +412,22 @@ useEffect(() => {
       setLoading(false);
       return;
     }
+
     if (isStreamingRef.current) {
       return;
     }
+
     const targetSessionId = sessionId || localSessionId;
     if (!targetSessionId) {
       setLoading(false);
       return;
     }
+
     if (newlyCreatedSessionRef.current === targetSessionId) {
       newlyCreatedSessionRef.current = null;
       return;
     }
+
     setLoading(true);
     setError("");
     void loadSession(targetSessionId)
@@ -464,7 +476,7 @@ useEffect(() => {
     const wasNewSession = isNewSession && !effectiveSessionId;
     if (wasNewSession) {
       try {
-        const created = await bootstrapAdminSession();
+        const created = await bootstrapAdminSession(isEmbedMode ? sessionId || undefined : undefined);
         effectiveSessionId = String(created.data?.session_id ?? "");
         setLocalSessionId(effectiveSessionId);
         newlyCreatedSessionRef.current = effectiveSessionId;
@@ -556,9 +568,8 @@ useEffect(() => {
             block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block,
           );
           if (["sandbox_shell", "create_text_artifact"].includes(String(payload.tool_name ?? ""))) {
-            void refreshResources(sessionId);
+            void refreshResources(effectiveSessionId);
           }
-          void onSessionRefresh?.();
           return;
         }
 
@@ -576,8 +587,7 @@ useEffect(() => {
         }
 
         if (event.type === "artifact_created") {
-          void refreshResources(sessionId);
-          void onSessionRefresh?.();
+          void refreshResources(effectiveSessionId);
           return;
         }
 
@@ -663,6 +673,8 @@ useEffect(() => {
     return segments;
   };
 
+  const visibleConversations = conversations;
+
   return (
     <main className="app-layout">
       <aside
@@ -701,8 +713,8 @@ useEffect(() => {
                   </button>
                 </div>
                 <div className="item-list">
-                  {conversations.length === 0 ? <div className="empty-state">暂无历史会话</div> : null}
-                  {conversations.map((item) => (
+                  {visibleConversations.length === 0 ? <div className="empty-state">暂无历史会话</div> : null}
+                  {visibleConversations.map((item) => (
                     <div
                       key={item.conversation_id}
                       className={`history-item history-item--compact ${item.session_id === sessionId ? "is-active" : ""}`}
@@ -939,7 +951,7 @@ useEffect(() => {
                         <details key={segment.id} className={`tool-card ${segment.block.status}`}>
                           <summary className="tool-header">
                             <div className="tool-title">
-                              <svg className="tool-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                              <svg className="tool-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
                               {segment.block.title}
                             </div>
                             <div className="tool-status">
