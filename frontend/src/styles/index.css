@@ -45,20 +45,19 @@ a { text-decoration: none; color: var(--accent); }
 
 /* ================= 滚动条样式 ================= */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 10px;
   background: transparent;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
-  border-left: 1px solid var(--border-color);
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 5px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
+  background: rgba(148, 163, 184, 0.7);
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
@@ -229,7 +228,12 @@ a { text-decoration: none; color: var(--accent); }
 
 .error-toast { margin: 16px 20px 0; padding: 12px 18px; background: var(--error-bg); border-left: 4px solid var(--error); color: var(--error); font-size: 13px; font-weight: 500; border-radius: 6px; box-shadow: var(--shadow-sm); }
 
-.chat-area { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+.chat-area {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .chat-container { max-width: 840px; margin: 0 auto; padding: 32px 20px 40px; display: flex; flex-direction: column; gap: 36px; }
 
 .welcome-screen { text-align: center; margin-top: 12vh; color: var(--text-secondary); }
@@ -241,7 +245,13 @@ a { text-decoration: none; color: var(--accent); }
 .message-row.assistant { justify-content: flex-start; }
 
 .bubble { max-width: 85%; padding: 14px 20px; border-radius: var(--radius-lg); font-size: 15px; line-height: 1.6; }
-.user-bubble { background: var(--bg-user-msg); color: var(--text-primary); border-bottom-right-radius: 6px; box-shadow: inset 0 1px 1px rgba(255,255,255,0.5), 0 1px 2px rgba(0,0,0,0.02); }
+.user-bubble { 
+  background: #ffffff; 
+  color: var(--text-primary); 
+  border-bottom-right-radius: 6px; 
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03), 0 2px 6px rgba(0,0,0,0.02);
+  border: 1px solid rgba(226, 232, 240, 0.4);
+}
 
 .assistant-content { width: 100%; display: flex; flex-direction: column; gap: 16px; }
 .text-bubble { font-size: 15px; line-height: 1.7; color: var(--text-primary); max-width: 100%; }
@@ -264,9 +274,9 @@ a { text-decoration: none; color: var(--accent); }
 /* Tool 卡片玻璃态重塑 (告别黑框) */
 .tool-card {
   background: #ffffff; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.03); max-width: 720px; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.03); max-width: 720px; transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
-.tool-card:hover { border-color: #cbd5e1; box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.tool-card:hover { border-color: #cbd5e1; box-shadow: var(--shadow-md); }
 .tool-card.running { border-left: 3px solid var(--accent); }
 .tool-card.done { border-left: 3px solid var(--success); }
 
@@ -2223,48 +2233,32 @@ details.tool-card, details.code-block-wrapper, details.reasoning-block {
   overflow: hidden;
 }
 
-details.tool-card, 
-details.code-block-wrapper, 
+details.tool-card,
+details.code-block-wrapper,
 details.reasoning-block {
   overflow: hidden;
-  transition: all 0.3s ease; /* 增加整体卡片的平滑度 */
 }
 
-details::details-content {
-  transition: 
-    height 0.25s cubic-bezier(0.3, 0, 0.2, 1), 
-    opacity 0.6s ease, 
-    content-visibility 0.25s;
-  
-  transition-behavior: allow-discrete;
-  
-  height: 0;
-  opacity: 0;
-  overflow: hidden;
+details.tool-card.is-opening > .tool-body-wrapper,
+details.code-block-wrapper.is-opening > .code-content-wrapper,
+details.reasoning-block.is-opening > .reasoning-content {
+  animation: detailsSlideIn 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-details[open]::details-content {
-  height: auto;
-  opacity: 1;
-  display: block; /* 确保显示 */
+details.tool-card.is-closing > .tool-body-wrapper,
+details.code-block-wrapper.is-closing > .code-content-wrapper,
+details.reasoning-block.is-closing > .reasoning-content {
+  animation: detailsSlideOut 0.18s ease;
 }
 
-@starting-style {
-  details[open]::details-content {
-    height: 0;
-    opacity: 0;
-  }
-}
-
-@supports not selector(::details-content) {
-  details[open] > *:not(summary) {
-    animation: detailsSlideFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  }
-}
-
-@keyframes detailsSlideFade {
+@keyframes detailsSlideIn {
   0% { opacity: 0; transform: translateY(-10px); }
   100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes detailsSlideOut {
+  0% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-8px); }
 }
 
 .tool-body-wrapper, .code-content-wrapper {

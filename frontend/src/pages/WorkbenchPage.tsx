@@ -215,9 +215,32 @@ export function WorkbenchPage({
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
   const isStreamingRef = useRef(false);
   const newlyCreatedSessionRef = useRef<string | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const scrollFrameRef = useRef<number | null>(null);
 
   const historyRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const updateStickToBottom = (node: HTMLDivElement) => {
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom <= 80;
+  };
+
+  const scrollHistoryToBottom = () => {
+    const node = historyRef.current;
+    if (!node) return;
+    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      node.scrollTop = node.scrollHeight;
+      scrollFrameRef.current = null;
+    });
+  };
+
+  const handleHistoryScroll = () => {
+    const node = historyRef.current;
+    if (!node) return;
+    updateStickToBottom(node);
+  };
 
   const handleSidebarResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
     if (isMobile) return;
@@ -291,8 +314,39 @@ export function WorkbenchPage({
   useEffect(() => {
     const node = historyRef.current;
     if (!node) return;
-    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+    if (!shouldStickToBottomRef.current) return;
+    scrollHistoryToBottom();
   }, [messages, loading]);
+
+  useEffect(() => {
+    const node = historyRef.current;
+    if (!node) return;
+
+    const handleDetailsToggle = (event: Event) => {
+      const details = event.target;
+      if (!(details instanceof HTMLDetailsElement)) return;
+      if (!details.classList.contains("tool-card") && !details.classList.contains("code-block-wrapper") && !details.classList.contains("reasoning-block")) {
+        return;
+      }
+
+      details.classList.remove("is-opening", "is-closing");
+      void details.offsetHeight;
+      details.classList.add(details.open ? "is-opening" : "is-closing");
+
+      window.setTimeout(() => {
+        details.classList.remove("is-opening", "is-closing");
+      }, 240);
+    };
+
+    node.addEventListener("toggle", handleDetailsToggle, true);
+    return () => node.removeEventListener("toggle", handleDetailsToggle, true);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+    };
+  }, []);
 
   const loadUserLlmConfig = async () => {
     const result = await getUserLlmConfig();
@@ -487,6 +541,7 @@ export function WorkbenchPage({
     }
 
     isStreamingRef.current = true;
+    shouldStickToBottomRef.current = true;
     setBusy(true);
     setError("");
     setInput("");
@@ -918,7 +973,7 @@ export function WorkbenchPage({
 
         {error ? <div className="error-toast anim-shake">{error}</div> : null}
 
-        <div className="chat-area" ref={historyRef}>
+        <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll}>
           <div className="chat-container">
             {loading ? (
               <div className="welcome-screen anim-enter">
