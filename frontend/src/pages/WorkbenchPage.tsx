@@ -113,18 +113,30 @@ marked.use({
       const validLang = hljs.getLanguage(language) ? language : "plaintext";
       const highlighted = hljs.highlight(text, { language: validLang }).value;
       const encodedCode = encodeURIComponent(text);
+      const lineCount = text.split("\n").length;
+      const shouldCollapse = lineCount > 15;
 
       return `
-        <div class="code-block-wrapper">
-          <div class="code-header">
-            <span class="code-lang">${validLang}</span>
-            <button class="copy-button" data-code="${encodedCode}" type="button">
-              <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-              <span>复制</span>
-            </button>
+        <details class="code-block-wrapper ${shouldCollapse ? "collapsible" : ""}" ${shouldCollapse ? "" : "open"}>
+          <summary class="code-header">
+            <div class="code-header-left">
+              <svg class="code-toggle-icon" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              <span class="code-lang">${validLang}</span>
+            </div>
+            <div class="code-header-right">
+              ${shouldCollapse ? `<span class="code-expand-label">${lineCount} 行</span>` : ""}
+              <button class="copy-button" data-code="${encodedCode}" type="button">
+                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                <span>复制</span>
+              </button>
+            </div>
+          </summary>
+          <div class="code-content-wrapper">
+            <div class="code-content-inner">
+              <pre><code class="hljs language-${validLang}">${highlighted}</code></pre>
+            </div>
           </div>
-          <pre><code class="hljs language-${validLang}">${highlighted}</code></pre>
-        </div>
+        </details>
       `;
     },
   },
@@ -233,6 +245,9 @@ export function WorkbenchPage({
       const target = e.target as HTMLElement;
       const btn = target.closest(".copy-button") as HTMLButtonElement | null;
       if (!btn) return;
+
+      e.preventDefault();
+      e.stopPropagation();
 
       const rawCode = decodeURIComponent(btn.getAttribute("data-code") || "");
       try {
@@ -681,11 +696,9 @@ useEffect(() => {
               <div className="tab-pane">
                 <div className="pane-header">
                   <h3>历史会话</h3>
-                  {!isEmbedMode ? (
-                    <button type="button" className="action-button small" onClick={onNewConversation}>
-                      新建
-                    </button>
-                  ) : null}
+                  <button type="button" className="action-button small" onClick={onNewConversation}>
+                    新建
+                  </button>
                 </div>
                 <div className="item-list">
                   {conversations.length === 0 ? <div className="empty-state">暂无历史会话</div> : null}
@@ -782,7 +795,13 @@ useEffect(() => {
                 退出登录
               </button>
             </div>
-          ) : null}
+          ) : (
+            <div className="sidebar-footer">
+              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={() => void openLlmDialog()}>
+                模型配置
+              </button>
+            </div>
+          )}
         </div>
         {!isMobile ? (
           <div
@@ -919,24 +938,31 @@ useEffect(() => {
                       segment.kind === "tool" ? (
                         <details key={segment.id} className={`tool-card ${segment.block.status}`}>
                           <summary className="tool-header">
-                            <div className="tool-title"><Icons.Terminal /> {segment.block.title}</div>
+                            <div className="tool-title">
+                              <svg className="tool-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                              {segment.block.title}
+                            </div>
                             <div className="tool-status">
                               {segment.block.status === "running" ? <span className="status-run"><Icons.Loader /> 执行中...</span> : <span className="status-done"><Icons.Check /> 完成</span>}
                             </div>
                           </summary>
-                          <div className="tool-body">
-                            {segment.block.argumentsText ? (
-                              <div className="tool-section">
-                                <div className="section-label">Input Args</div>
-                                <pre className="code-block input">{segment.block.argumentsText}</pre>
+                          <div className="tool-body-wrapper">
+                            <div className="tool-body-inner">
+                              <div className="tool-body">
+                                {segment.block.argumentsText ? (
+                                  <div className="tool-section">
+                                    <div className="section-label">Input Args</div>
+                                    <pre className="code-block input">{segment.block.argumentsText}</pre>
+                                  </div>
+                                ) : null}
+                                {segment.block.outputText ? (
+                                  <div className="tool-section">
+                                    <div className="section-label">Output Result</div>
+                                    <pre className="code-block output">{segment.block.outputText}</pre>
+                                  </div>
+                                ) : null}
                               </div>
-                            ) : null}
-                            {segment.block.outputText ? (
-                              <div className="tool-section">
-                                <div className="section-label">Output Result</div>
-                                <pre className="code-block output">{segment.block.outputText}</pre>
-                              </div>
-                            ) : null}
+                            </div>
                           </div>
                         </details>
                       ) : (
