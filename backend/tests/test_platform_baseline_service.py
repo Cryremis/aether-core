@@ -79,8 +79,8 @@ def test_platform_baseline_materializes_into_new_host_session(tmp_path):
     )
 
     assert session.workspace is not None
-    assert (session.workspace.work_dir / "repo" / "main.py").exists()
     assert any(item["name"] == "main.py" for item in session.platform_files)
+    assert file_service.read_text(session, relative_path="work/repo/main.py").strip() == "print('hello')"
 
 
 def test_platform_baseline_file_manager_operations(tmp_path):

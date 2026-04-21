@@ -174,6 +174,9 @@ class DockerSandboxExecutor(SandboxExecutor):
             args.extend(["--user", "root"])
 
         if baseline_plan.mount_upper_workspace:
+            baseline_root = workspace.baseline_root
+            if baseline_root is None:
+                raise RuntimeError("mount_upper_workspace requires baseline_root")
             args.extend(
                 [
                     "--mount",
@@ -191,18 +194,19 @@ class DockerSandboxExecutor(SandboxExecutor):
                     "--mount",
                     (
                         "type=bind,"
-                        f"src={workspace.baseline_root.resolve()},"
+                        f"src={baseline_root.resolve()},"
                         "dst=/aether/baseline,readonly"
                     ),
                 ]
             )
         elif workspace.baseline_root is not None:
+            br = workspace.baseline_root
             args.extend(
                 [
                     "--mount",
                     (
                         "type=bind,"
-                        f"src={workspace.baseline_root.resolve()},"
+                        f"src={br.resolve()},"
                         "dst=/aether/baseline,readonly"
                     ),
                 ]
@@ -286,11 +290,9 @@ exec {process}
             return self._baseline_plan_cache
 
         supports_overlay = await self._supports_overlay_mount(docker_binary)
-        self._baseline_plan_cache = (
-            BaselineRuntimePlan(mode="overlay", mount_upper_workspace=True, requires_root=True)
-            if supports_overlay
-            else BaselineRuntimePlan(mode="copy", mount_upper_workspace=False, requires_root=False)
-        )
+        if not supports_overlay:
+            raise RuntimeError("当前 Docker 环境不支持 overlay baseline 挂载")
+        self._baseline_plan_cache = BaselineRuntimePlan(mode="overlay", mount_upper_workspace=True, requires_root=True)
         return self._baseline_plan_cache
 
     async def _supports_overlay_mount(self, docker_binary: str) -> bool:

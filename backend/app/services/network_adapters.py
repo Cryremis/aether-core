@@ -123,6 +123,14 @@ class GlmSearchAdapter:
 
     def resolve_endpoint(self, runtime_config: RuntimeLlmConfig) -> str | None:
         normalized = runtime_config.base_url.rstrip("/")
+        host = (urlparse(normalized).hostname or "").lower()
+        if not any(domain in host for domain in ("bigmodel.cn", "zhipuai.cn", "zhipuapi.cn")):
+            return None
+
+        model_name = runtime_config.model.lower()
+        if not model_name.startswith("glm"):
+            return None
+
         if normalized.endswith("/chat/completions"):
             return normalized
         if re.search(r"/v\d+$", normalized):

@@ -5,10 +5,9 @@ Ripgrep 封装服务，通过 sandbox_shell 在容器内执行搜索。
 """
 from __future__ import annotations
 
-import json
+import shlex
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from app.sandbox.runner import sandbox_runner
 from app.sandbox.models import SandboxWorkspace
@@ -45,6 +44,10 @@ MAX_COLUMNS = 500
 class RipgrepService:
     """通过沙箱容器执行 ripgrep 搜索。"""
 
+    def _build_command(self, cwd: str, args: list[str]) -> str:
+        quoted_args = " ".join(shlex.quote(arg) for arg in args)
+        return f"cd {shlex.quote(cwd)} && {quoted_args}"
+
     async def glob(
         self,
         workspace: SandboxWorkspace,
@@ -72,7 +75,7 @@ class RipgrepService:
         for ignore_pattern in ignore_patterns or []:
             args.extend(["--glob", f"!{ignore_pattern}"])
 
-        cmd = "cd " + cwd + " && " + " ".join(args)
+        cmd = self._build_command(cwd, args)
 
         result = await sandbox_runner.run_shell(
             workspace=workspace,
@@ -119,7 +122,10 @@ class RipgrepService:
         """在沙箱内执行 grep 搜索。"""
         start = time.perf_counter()
 
-        args = ["rg", "--hidden", "--max-columns", str(MAX_COLUMNS)]
+        args = ["rg", "--max-columns", str(MAX_COLUMNS)]
+
+        if hidden:
+            args.append("--hidden")
 
         for vcs_dir in VCS_DIRECTORIES:
             args.extend(["--glob", f"!{vcs_dir}"])
@@ -161,7 +167,7 @@ class RipgrepService:
         for ignore_pattern in ignore_patterns or []:
             args.extend(["--glob", f"!{ignore_pattern}"])
 
-        cmd = "cd " + cwd + " && " + " ".join(args)
+        cmd = self._build_command(cwd, args)
 
         result = await sandbox_runner.run_shell(
             workspace=workspace,

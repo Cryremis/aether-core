@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-import os
+import posixpath
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,6 +140,10 @@ class GrepArgs:
 class SearchService:
     """搜索工具服务，处理 glob 和 grep 工具调用。"""
 
+    def _normalize_container_path(self, path: str) -> str:
+        normalized = path.replace("\\", "/")
+        return posixpath.normpath(normalized)
+
     def get_schemas(self) -> list[dict[str, Any]]:
         """返回 glob 和 grep 工具的 schema 定义。"""
         return [
@@ -207,9 +211,9 @@ class SearchService:
         if path is None or not path.strip():
             return settings.sandbox_docker_work_dir
         
-        path = path.strip()
+        path = self._normalize_container_path(path.strip())
         
-        if os.path.isabs(path):
+        if path.startswith("/"):
             return path
         
         special_dirs = {
@@ -225,10 +229,10 @@ class SearchService:
             remainder = path[len(first_part):].strip("/\\")
             base = special_dirs[first_part]
             if remainder:
-                return os.path.join(base, remainder)
+                return posixpath.join(base, remainder)
             return base
         
-        return os.path.join(container_root, path)
+        return posixpath.join(container_root, path)
 
     async def execute_glob(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
         """执行 glob 工具。"""
