@@ -93,6 +93,10 @@ type WorkbenchPageProps = {
   onSessionSelect?: (sessionId: string) => void;
 };
 
+const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 460;
+const SIDEBAR_DEFAULT_WIDTH = 280;
+
 const RESULT_MESSAGES: Record<string, string> = {
   error_empty_response: "模型未返回可用正文",
   error_max_turns: "执行达到轮次上限",
@@ -179,6 +183,8 @@ export function WorkbenchPage({
   const [sidebarView, setSidebarView] = useState<SidebarView>("sessions");
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 1024);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [showLlmDialog, setShowLlmDialog] = useState(false);
   const [llmBusy, setLlmBusy] = useState(false);
   const [llmError, setLlmError] = useState("");
@@ -200,6 +206,27 @@ export function WorkbenchPage({
 
   const historyRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const handleSidebarResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (isMobile) return;
+
+    event.preventDefault();
+    setIsResizingSidebar(true);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = Math.min(Math.max(moveEvent.clientX, SIDEBAR_MIN_WIDTH), SIDEBAR_MAX_WIDTH);
+      setSidebarWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => {
+      setIsResizingSidebar(false);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
 
   useEffect(() => {
     const handleCopy = async (e: MouseEvent) => {
@@ -623,7 +650,10 @@ useEffect(() => {
 
   return (
     <main className="app-layout">
-      <aside className={`sidebar ${isSidebarOpen ? "is-open" : "is-closed"}`}>
+      <aside
+        className={`sidebar ${isSidebarOpen ? "is-open" : "is-closed"} ${isResizingSidebar ? "is-resizing" : ""}`}
+        style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
+      >
         <div className="sidebar-inner">
           <div className="sidebar-header">
             <div className="sidebar-header__title">
@@ -669,7 +699,7 @@ useEffect(() => {
                         className="history-item__main"
                         onClick={() => onSessionSelect?.(item.session_id)}
                       >
-                        <strong>{item.title || "新对话"}</strong>
+                        <span className="history-item__title" title={item.title || "新对话"}>{item.title || "新对话"}</span>
                       </button>
                       <div className="history-item__actions">
                         <button type="button" className="history-item__action-btn" title="重命名" onClick={(e) => { e.stopPropagation(); onRenameSession?.(item.session_id, item.title); }}>
@@ -754,6 +784,15 @@ useEffect(() => {
             </div>
           ) : null}
         </div>
+        {!isMobile ? (
+          <div
+            className="sidebar-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            onPointerDown={handleSidebarResizeStart}
+          />
+        ) : null}
       </aside>
 
       {isMobile && isSidebarOpen ? <div className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)}></div> : null}
