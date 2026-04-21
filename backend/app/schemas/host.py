@@ -4,6 +4,18 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class HostAuthDescriptor(BaseModel):
+    """宿主用户认证凭证。"""
+
+    token: str | None = None
+    token_header: str = "Authorization"
+    token_prefix: str = "Bearer"
+    custom_headers: dict[str, str] = Field(default_factory=dict)
+    refresh_token: str | None = None
+    refresh_endpoint: str | None = None
+    expires_at: float | None = None
+
+
 class HostToolDescriptor(BaseModel):
     """宿主注入的工具描述。"""
 
@@ -14,6 +26,8 @@ class HostToolDescriptor(BaseModel):
     method: str = "POST"
     headers: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
+    requires_auth: bool = True
+    auth_inject: bool = True
 
 
 class HostSkillDescriptor(BaseModel):
@@ -41,6 +55,7 @@ class HostContextDescriptor(BaseModel):
     user: dict[str, Any] = Field(default_factory=dict)
     page: dict[str, Any] = Field(default_factory=dict)
     extras: dict[str, Any] = Field(default_factory=dict)
+    auth: HostAuthDescriptor | None = None
 
 
 class HostBindRequest(BaseModel):
