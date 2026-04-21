@@ -10,6 +10,7 @@ RUN apt-get update \
         locales \
         python3 \
         python3-pip \
+        ripgrep \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 

@@ -14,6 +14,7 @@ from app.services.artifact_service import artifact_service
 from app.services.file_service import file_service
 from app.services.llm_config_service import RuntimeLlmConfig, llm_config_service
 from app.services.network_service import network_service
+from app.services.search_service import search_service
 from app.services.session_service import AgentSession
 from app.services.skill_service import skill_service
 from app.services.store import store_service
@@ -86,6 +87,14 @@ class ToolService:
                 },
             ),
         ]
+        for schema in search_service.get_schemas():
+            tools.append(
+                self._schema(
+                    schema["name"],
+                    schema["description"],
+                    schema["parameters"],
+                )
+            )
         if session.allow_network and runtime_config.network.enabled and network_service.supports_web_search(runtime_config):
             tools.append(
                 self._schema(
@@ -178,6 +187,10 @@ class ToolService:
                 "duration_ms": result.duration_ms,
                 "log_path": result.log_path,
             }
+        if tool_name == "glob":
+            return await search_service.execute_glob(session, arguments)
+        if tool_name == "grep":
+            return await search_service.execute_grep(session, arguments)
         if tool_name == "web_search":
             return await network_service.web_search(
                 session=session,
