@@ -23,7 +23,8 @@ from app.schemas.platform import (
     PlatformBaselineSummary,
     PlatformBaselineWriteRequest,
 )
-from app.services.session_service import AgentSession, session_service
+from app.services.session_service import session_service
+from app.services.session_types import AgentSession
 from app.services.skill_loader import skill_loader
 
 

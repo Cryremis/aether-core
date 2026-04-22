@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.services.ripgrep_service import ripgrep_service
-from app.services.session_service import AgentSession
+from app.services.session_types import AgentSession
 from app.sandbox.models import SandboxWorkspace
 from app.core.config import settings
 

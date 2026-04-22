@@ -1,12 +1,15 @@
 # backend/app/services/context/context_pipeline.py
+"""生产级上下文管线。"""
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from app.services.context.contracts import SessionPersister
 from app.services.context.context_budget import ContextBudget, ContextBudgetConfig
-from app.services.context.context_state_store import context_state_store
+from app.services.context.context_state_store import ContextStateStore, context_state_store
 from app.services.context.integrity import context_integrity_validator
 from app.services.context.message_adapter import context_message_adapter
 from app.services.context.runtime_types import (
@@ -21,8 +24,7 @@ from app.services.context.runtime_types import (
 )
 from app.services.context.token_estimation import TokenEstimator
 from app.services.context.truncate import truncate_json_content, truncate_tool_result
-if TYPE_CHECKING:
-    from app.services.session_service import AgentSession
+from app.services.session_types import AgentSession
 
 
 @dataclass
@@ -40,17 +42,25 @@ class ContextPipelineConfig:
 
 
 class ContextPipeline:
-    """Production context-management pipeline for AetherCore's runtime history."""
+    """AetherCore 运行时历史消息的生产级上下文管线。"""
 
     def __init__(
         self,
         config: ContextPipelineConfig | None = None,
         budget_config: ContextBudgetConfig | None = None,
         estimator: TokenEstimator | None = None,
+        state_store: ContextStateStore | None = None,
+        persister: SessionPersister | None = None,
     ):
         self.config = config or ContextPipelineConfig()
         self.budget = ContextBudget(config=budget_config or ContextBudgetConfig())
         self.estimator = estimator or TokenEstimator()
+        self.state_store = state_store or ContextStateStore(persister=persister)
+        self._persister = persister
+
+    def bind_persister(self, persister: SessionPersister) -> None:
+        self._persister = persister
+        self.state_store.bind_persister(persister)
 
     def prepare_for_llm(
         self,
@@ -62,11 +72,9 @@ class ContextPipeline:
     ) -> PreparedContext:
         changed = context_message_adapter.normalize_session(session)
         if changed:
-            from app.services.session_service import session_service
+            self._persist_session(session)
 
-            session_service.persist(session)
-
-        state = context_state_store.get(session)
+        state = self.state_store.get(session)
         state = self._refresh_state_thresholds(state, str(llm_runtime.model))
 
         runtime_messages = [
@@ -81,7 +89,7 @@ class ContextPipeline:
         if token_estimate <= state.target_input_tokens:
             api_messages = context_message_adapter.to_api_messages(runtime_messages)
             self._validate_or_raise(api_messages, state, token_estimate)
-            context_state_store.save(session, state)
+            self.state_store.save(session, state)
             return PreparedContext(messages=api_messages, state=state, events=events)
 
         compacted = self._apply_proactive_compaction(session=session, state=state, turn_index=turn_index)
@@ -97,7 +105,7 @@ class ContextPipeline:
 
         api_messages = context_message_adapter.to_api_messages(runtime_messages)
         if token_estimate > state.blocking_limit:
-            context_state_store.save(session, state)
+            self.state_store.save(session, state)
             raise ContextOverflowError(
                 "context window exceeded after proactive compaction",
                 state=state,
@@ -105,7 +113,7 @@ class ContextPipeline:
             )
 
         self._validate_or_raise(api_messages, state, token_estimate)
-        context_state_store.save(session, state)
+        self.state_store.save(session, state)
         return PreparedContext(
             messages=api_messages,
             state=state,
@@ -123,7 +131,7 @@ class ContextPipeline:
         turn_index: int,
         error_message: str,
     ) -> PreparedContext:
-        state = self._refresh_state_thresholds(context_state_store.get(session), str(llm_runtime.model))
+        state = self._refresh_state_thresholds(self.state_store.get(session), str(llm_runtime.model))
         if state.reactive_retry_count >= self.config.reactive_max_retries:
             raise ContextOverflowError(
                 f"reactive compaction retries exhausted: {error_message}",
@@ -146,7 +154,7 @@ class ContextPipeline:
 
         api_messages = context_message_adapter.to_api_messages(runtime_messages)
         self._validate_or_raise(api_messages, state, token_estimate)
-        context_state_store.save(session, state)
+        self.state_store.save(session, state)
         return PreparedContext(
             messages=api_messages,
             state=state,
@@ -156,17 +164,17 @@ class ContextPipeline:
         )
 
     def update_api_usage(self, session: AgentSession, usage: dict[str, int]) -> ContextSessionState:
-        state = context_state_store.get(session)
+        state = self.state_store.get(session)
         state.last_api_usage = dict(usage)
         state.last_known_token_estimate = self.estimator.count_from_usage(usage)
         state.percent_used = self._safe_percent(state.last_known_token_estimate, state.effective_window)
-        context_state_store.save(session, state)
+        self.state_store.save(session, state)
         return state
 
     def reset_reactive_retry(self, session: AgentSession) -> None:
-        state = context_state_store.get(session)
+        state = self.state_store.get(session)
         state.reactive_retry_count = 0
-        context_state_store.save(session, state)
+        self.state_store.save(session, state)
 
     def _apply_proactive_compaction(
         self,
@@ -183,8 +191,6 @@ class ContextPipeline:
             keep_recent_turns=self.config.keep_recent_turns,
         )
         if truncated_count > 0:
-            from app.services.session_service import session_service
-
             session.messages = truncated_messages
             state.compaction_count += 1
             state.last_compaction_at = utc_now_iso()
@@ -198,7 +204,7 @@ class ContextPipeline:
                 messages_affected=truncated_count,
                 reason="truncate older tool results before full summarization",
             )
-            session_service.persist(session)
+            self._persist_session(session)
             return PreparedContext(
                 messages=[],
                 state=state,
@@ -215,7 +221,7 @@ class ContextPipeline:
         )
         if summary_messages is None:
             state.consecutive_compaction_failures += 1
-            context_state_store.save(session, state)
+            self.state_store.save(session, state)
             return PreparedContext(messages=[], state=state)
 
         session.messages = summary_messages
@@ -233,9 +239,7 @@ class ContextPipeline:
             messages_affected=max(0, len(original_messages) - len(summary_messages)),
             reason="summarize stable transcript history to recover input budget",
         )
-        from app.services.session_service import session_service
-
-        session_service.persist(session)
+        self._persist_session(session)
         return PreparedContext(
             messages=[],
             state=state,
@@ -260,8 +264,6 @@ class ContextPipeline:
             aggressive=True,
         )
         if truncated_count > 0:
-            from app.services.session_service import session_service
-
             session.messages = truncated_messages
             state.compaction_count += 1
             state.last_compaction_at = utc_now_iso()
@@ -275,7 +277,7 @@ class ContextPipeline:
                 messages_affected=truncated_count,
                 reason=f"reactive overflow recovery: {error_message}",
             )
-            session_service.persist(session)
+            self._persist_session(session)
             return PreparedContext(
                 messages=[],
                 state=state,
@@ -300,7 +302,7 @@ class ContextPipeline:
         )
         if summary_messages is None:
             state.consecutive_compaction_failures += 1
-            context_state_store.save(session, state)
+            self.state_store.save(session, state)
             raise ContextOverflowError(
                 f"reactive compaction failed: {error_message}",
                 state=state,
@@ -322,9 +324,7 @@ class ContextPipeline:
             messages_affected=max(0, len(original_messages) - len(summary_messages)),
             reason=f"reactive overflow recovery: {error_message}",
         )
-        from app.services.session_service import session_service
-
-        session_service.persist(session)
+        self._persist_session(session)
         return PreparedContext(
             messages=[],
             state=state,
@@ -535,5 +535,10 @@ class ContextPipeline:
             return 0.0
         return round(token_estimate / effective_window * 100, 2)
 
+    def _persist_session(self, session: AgentSession) -> None:
+        if self._persister is None:
+            raise RuntimeError("ContextPipeline requires a bound SessionPersister")
+        self._persister.persist(session)
 
-context_pipeline = ContextPipeline()
+
+context_pipeline = ContextPipeline(state_store=context_state_store)

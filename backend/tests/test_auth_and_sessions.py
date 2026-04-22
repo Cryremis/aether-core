@@ -11,7 +11,8 @@ from app.core.config import settings
 from app.main import app
 from app.services.auth_service import auth_service
 from app.services.conversation_service import conversation_service
-from app.services.session_service import AgentSession, session_service
+from app.services.session_service import session_service
+from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.tool_service import tool_service
 

@@ -7,7 +7,8 @@ from pathlib import Path
 
 from app.schemas.files import FileRecord
 from app.sandbox.manager import sandbox_manager
-from app.services.session_service import AgentSession, session_service
+from app.services.session_service import session_service
+from app.services.session_types import AgentSession
 
 
 class ArtifactService:

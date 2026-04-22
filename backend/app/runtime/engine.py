@@ -17,7 +17,8 @@ from app.services.context.message_adapter import context_message_adapter
 from app.services.context.runtime_types import ContextEventType, ContextOverflowError
 from app.services.llm_client import llm_client
 from app.services.llm_config_service import llm_config_service
-from app.services.session_service import AgentSession, session_service
+from app.services.session_service import session_service
+from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.tool_service import tool_service
 

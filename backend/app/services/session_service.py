@@ -1,49 +1,26 @@
 # backend/app/services/session_service.py
+"""会话服务。
+
+负责会话生命周期、元数据落盘与工作区绑定。
+会话数据模型定义位于 session_types，避免类型与服务实现耦合。
+"""
+
+from __future__ import annotations
+
 import json
 import time
 import uuid
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
 from app.sandbox.manager import sandbox_manager
-from app.sandbox.models import SandboxWorkspace
-from app.services.context.runtime_types import CONTEXT_MESSAGE_SCHEMA_VERSION
-
-
-@dataclass
-class AgentSession:
-    """AetherCore 会话状态。"""
-
-    session_id: str
-    conversation_id: str | None = None
-    host_name: str = ""
-    host_type: str = "custom"
-    baseline_root: str = ""
-    messages: list[dict[str, Any]] = field(default_factory=list)
-    host_context: dict[str, Any] = field(default_factory=dict)
-    platform_files: list[dict[str, Any]] = field(default_factory=list)
-    platform_skills: list[dict[str, Any]] = field(default_factory=list)
-    host_tools: list[dict[str, Any]] = field(default_factory=list)
-    host_skills: list[dict[str, Any]] = field(default_factory=list)
-    uploaded_skills: list[dict[str, Any]] = field(default_factory=list)
-    host_apis: list[dict[str, Any]] = field(default_factory=list)
-    artifacts: list[dict[str, Any]] = field(default_factory=list)
-    uploads: list[dict[str, Any]] = field(default_factory=list)
-    context_state: dict[str, Any] = field(default_factory=dict)
-    message_schema_version: int = CONTEXT_MESSAGE_SCHEMA_VERSION
-    allow_network: bool = True
-    created_at: float = field(default_factory=time.time)
-    last_access: float = field(default_factory=time.time)
-    workspace: SandboxWorkspace | None = None
-
-    def touch(self) -> None:
-        self.last_access = time.time()
+from app.services.context.bootstrap import configure_context_runtime
+from app.services.session_types import AgentSession
 
 
 class SessionService:
-    """管理 AetherCore 会话与会话工作区。"""
+    """管理 AetherCore 会话与对应工作区。"""
 
     def __init__(self) -> None:
         self._sessions: dict[str, AgentSession] = {}
@@ -144,8 +121,8 @@ class SessionService:
             context_state=payload.get("context_state", {}),
             message_schema_version=int(payload.get("message_schema_version", 1)),
             allow_network=bool(payload.get("allow_network", True)),
-            created_at=payload.get("created_at", time.time()),
-            last_access=payload.get("last_access", time.time()),
+            created_at=float(payload.get("created_at", time.time())),
+            last_access=float(payload.get("last_access", time.time())),
             workspace=sandbox_manager.ensure_workspace(
                 session_id,
                 Path(payload["baseline_root"]) if payload.get("baseline_root") else None,
@@ -187,9 +164,11 @@ class SessionService:
         session_dir = settings.sessions_root / session_id
         if session_dir.exists():
             import shutil
+
             shutil.rmtree(session_dir, ignore_errors=True)
             return True
         return metadata_path.exists()
 
 
 session_service = SessionService()
+configure_context_runtime(session_service)

@@ -1,4 +1,6 @@
 # backend/app/services/context/integrity.py
+"""上下文完整性校验器。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,7 +15,7 @@ class IntegrityReport:
 
 
 class ContextIntegrityValidator:
-    """Validate provider-facing message invariants after compaction."""
+    """校验压缩后 provider 请求消息的不变量。"""
 
     def validate(self, messages: list[dict[str, Any]]) -> IntegrityReport:
         errors: list[str] = []
@@ -52,4 +54,3 @@ class ContextIntegrityValidator:
 
 
 context_integrity_validator = ContextIntegrityValidator()
-

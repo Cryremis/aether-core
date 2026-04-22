@@ -10,7 +10,8 @@ from fastapi import UploadFile
 from app.core.config import settings
 from app.schemas.files import FileRecord
 from app.sandbox.manager import sandbox_manager
-from app.services.session_service import AgentSession, session_service
+from app.services.session_service import session_service
+from app.services.session_types import AgentSession
 
 
 class FileService:

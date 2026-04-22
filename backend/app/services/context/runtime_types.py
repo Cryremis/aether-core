@@ -1,4 +1,6 @@
 # backend/app/services/context/runtime_types.py
+"""上下文运行时共享类型。"""
+
 from __future__ import annotations
 
 import uuid
@@ -7,8 +9,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-
-CONTEXT_MESSAGE_SCHEMA_VERSION = 2
+from app.services.session_types import CONTEXT_MESSAGE_SCHEMA_VERSION
 
 
 def utc_now_iso() -> str:
@@ -122,4 +123,3 @@ class ContextOverflowError(RuntimeError):
         super().__init__(message)
         self.state = state
         self.token_estimate = token_estimate
-

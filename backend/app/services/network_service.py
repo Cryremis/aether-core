@@ -13,7 +13,7 @@ import httpx
 from app.core.config import settings
 from app.services.llm_config_service import RuntimeLlmConfig
 from app.services.network_adapters import NATIVE_SEARCH_ADAPTERS
-from app.services.session_service import AgentSession
+from app.services.session_types import AgentSession
 
 
 class NetworkPolicyError(RuntimeError):

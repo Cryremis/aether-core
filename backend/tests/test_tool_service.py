@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.schemas.llm import LlmNetworkConfig
 from app.services.llm_config_service import RuntimeLlmConfig
-from app.services.session_service import AgentSession
+from app.services.session_types import AgentSession
 from app.services.tool_service import tool_service
 
 

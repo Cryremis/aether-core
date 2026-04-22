@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from app.services.search_service import search_service
-from app.services.session_service import AgentSession
+from app.services.session_types import AgentSession
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 
 

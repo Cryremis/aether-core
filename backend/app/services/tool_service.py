@@ -16,7 +16,8 @@ from app.services.artifact_service import artifact_service
 from app.services.file_service import file_service
 from app.services.llm_config_service import RuntimeLlmConfig, llm_config_service
 from app.services.network_service import network_service
-from app.services.session_service import AgentSession, session_service
+from app.services.session_service import session_service
+from app.services.session_types import AgentSession
 from app.services.search_service import search_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service

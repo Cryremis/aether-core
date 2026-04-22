@@ -10,7 +10,7 @@ import httpx
 from app.core.config import settings
 from app.runtime.engine import agent_engine
 from app.services.context.context_pipeline import context_pipeline
-from app.services.session_service import AgentSession
+from app.services.session_types import AgentSession
 from app.services.store import store_service
 
 

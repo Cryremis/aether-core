@@ -1,6 +1,6 @@
 # backend/app/runtime/event_protocol.py
 from app.schemas.agent import AgentEvent
-from app.services.session_service import AgentSession
+from app.services.session_types import AgentSession
 
 
 def make_event(session: AgentSession, event_type: str, **payload: object) -> AgentEvent:

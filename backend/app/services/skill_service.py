@@ -9,7 +9,8 @@ from typing import Any
 
 from app.core.config import settings
 from app.schemas.agent import SkillCard
-from app.services.session_service import AgentSession, session_service
+from app.services.session_service import session_service
+from app.services.session_types import AgentSession
 from app.services.skill_loader import skill_loader
 
 

@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from app.schemas.platform import ConversationSummary
 from app.services.platform_baseline_service import platform_baseline_service
-from app.services.session_service import AgentSession, session_service
+from app.services.session_service import session_service
+from app.services.session_types import AgentSession
 from app.services.store import StoreUser, store_service
 from app.services.token_service import token_service
 

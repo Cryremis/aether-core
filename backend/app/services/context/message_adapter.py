@@ -1,18 +1,18 @@
 # backend/app/services/context/message_adapter.py
+"""上下文消息适配器。"""
+
 from __future__ import annotations
 
 import copy
 import json
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from app.services.context.runtime_types import (
     CONTEXT_MESSAGE_SCHEMA_VERSION,
     new_message_id,
     utc_now_iso,
 )
-
-if TYPE_CHECKING:
-    from app.services.session_service import AgentSession
+from app.services.session_types import AgentSession
 
 
 RUNTIME_META_KEYS = {
@@ -27,7 +27,7 @@ RUNTIME_META_KEYS = {
 
 
 class ContextMessageAdapter:
-    """Normalize AetherCore's OpenAI-compatible messages for context management."""
+    """为上下文管理规范化 AetherCore 消息结构。"""
 
     def make_user_message(self, content: str, *, turn_index: int) -> dict[str, Any]:
         return self.ensure_runtime_metadata(
