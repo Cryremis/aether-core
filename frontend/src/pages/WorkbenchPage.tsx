@@ -58,6 +58,19 @@ type ChatMessage =
   | { id: string; role: "user"; content: string }
   | { id: string; role: "assistant"; blocks: AssistantBlock[] };
 
+type ContextStatus = {
+  model: string;
+  estimatedTokens: number;
+  effectiveWindow: number;
+  contextWindow: number;
+  targetInputTokens: number;
+  warningThreshold: number;
+  blockingLimit: number;
+  percentUsed: number;
+  state: "idle" | "warning" | "compacted" | "recovered" | "blocked";
+  detail: string;
+};
+
 type SidebarView = "sessions" | "files" | "skills";
 type LlmDialogState = {
   enabled: boolean;
@@ -170,6 +183,13 @@ function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
   );
 }
 
+function formatTokenCount(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2).replace(/\.00$/, "")}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  return String(Math.round(value));
+}
+
 export function WorkbenchPage({
   conversations,
   currentUser,
@@ -213,6 +233,7 @@ export function WorkbenchPage({
   const [allowNetwork, setAllowNetwork] = useState(true);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
+  const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
   const isStreamingRef = useRef(false);
   const newlyCreatedSessionRef = useRef<string | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -495,6 +516,8 @@ export function WorkbenchPage({
   }, [sessionId, isNewSession, localSessionId]);
 
   const canSend = useMemo(() => input.trim().length > 0 && (sessionId || localSessionId || isNewSession) && !busy, [busy, input, sessionId, localSessionId, isNewSession]);
+  const contextUsagePercent = Math.max(0, Math.min(100, Math.round(contextStatus?.percentUsed ?? 0)));
+  const contextStateTone = contextStatus?.state ?? "idle";
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
     setMessages((current) =>
@@ -564,6 +587,90 @@ export function WorkbenchPage({
       }
       await streamChat(effectiveSessionId, userText, allowNetwork, (event) => {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
+
+        if (event.type === "context_status") {
+          setContextStatus({
+            model: String(payload.model ?? ""),
+            estimatedTokens: Number(payload.estimated_tokens ?? 0),
+            effectiveWindow: Number(payload.effective_window ?? 0),
+            contextWindow: Number(payload.context_window ?? 0),
+            targetInputTokens: Number(payload.target_input_tokens ?? 0),
+            warningThreshold: Number(payload.warning_threshold ?? 0),
+            blockingLimit: Number(payload.blocking_limit ?? 0),
+            percentUsed: Number(payload.percent_used ?? 0),
+            state: "idle",
+            detail: "上下文稳定",
+          });
+          return;
+        }
+
+        if (event.type === "context_warning") {
+          setContextStatus((current) => ({
+            model: current?.model ?? "",
+            estimatedTokens: Number(payload.estimated_tokens ?? current?.estimatedTokens ?? 0),
+            effectiveWindow: current?.effectiveWindow ?? 0,
+            contextWindow: current?.contextWindow ?? 0,
+            targetInputTokens: current?.targetInputTokens ?? 0,
+            warningThreshold: Number(payload.warning_threshold ?? current?.warningThreshold ?? 0),
+            blockingLimit: Number(payload.blocking_limit ?? current?.blockingLimit ?? 0),
+            percentUsed: Number(payload.percent_used ?? current?.percentUsed ?? 0),
+            state: "warning",
+            detail: "接近压缩阈值",
+          }));
+          return;
+        }
+
+        if (event.type === "context_compacted") {
+          setContextStatus((current) => {
+            const nextEstimated = Number(payload.tokens_after ?? current?.estimatedTokens ?? 0);
+            const effectiveWindow = current?.effectiveWindow ?? 0;
+            return {
+              model: current?.model ?? "",
+              estimatedTokens: nextEstimated,
+              effectiveWindow,
+              contextWindow: current?.contextWindow ?? 0,
+              targetInputTokens: current?.targetInputTokens ?? 0,
+              warningThreshold: current?.warningThreshold ?? 0,
+              blockingLimit: current?.blockingLimit ?? 0,
+              percentUsed: effectiveWindow > 0 ? Number(((nextEstimated / effectiveWindow) * 100).toFixed(2)) : current?.percentUsed ?? 0,
+              state: "compacted",
+              detail: `已压缩 ${String(payload.strategy ?? "context")}，节省 ${formatTokenCount(Number(payload.tokens_saved ?? 0))} tokens`,
+            };
+          });
+          return;
+        }
+
+        if (event.type === "context_recovered") {
+          setContextStatus((current) => ({
+            model: current?.model ?? "",
+            estimatedTokens: current?.estimatedTokens ?? 0,
+            effectiveWindow: current?.effectiveWindow ?? 0,
+            contextWindow: current?.contextWindow ?? 0,
+            targetInputTokens: current?.targetInputTokens ?? 0,
+            warningThreshold: current?.warningThreshold ?? 0,
+            blockingLimit: current?.blockingLimit ?? 0,
+            percentUsed: current?.percentUsed ?? 0,
+            state: "recovered",
+            detail: `上下文已恢复，采用 ${String(payload.strategy ?? "recovery")}`,
+          }));
+          return;
+        }
+
+        if (event.type === "context_blocked") {
+          setContextStatus((current) => ({
+            model: current?.model ?? "",
+            estimatedTokens: Number(payload.estimated_tokens ?? current?.estimatedTokens ?? 0),
+            effectiveWindow: Number(payload.effective_window ?? current?.effectiveWindow ?? 0),
+            contextWindow: current?.contextWindow ?? 0,
+            targetInputTokens: current?.targetInputTokens ?? 0,
+            warningThreshold: current?.warningThreshold ?? 0,
+            blockingLimit: Number(payload.blocking_limit ?? current?.blockingLimit ?? 0),
+            percentUsed: 100,
+            state: "blocked",
+            detail: String(payload.message ?? "上下文已阻塞"),
+          }));
+          return;
+        }
 
         if (event.type === "reasoning_delta") {
           if (!activeReasoningId) {
@@ -968,6 +1075,36 @@ export function WorkbenchPage({
               {isSidebarOpen ? <Icons.SidebarClose /> : <Icons.Menu />}
             </button>
             <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? "新会话" : `Session ID: ${sessionId || localSessionId || "Initializing..."}`}</span>
+          </div>
+          <div className="nav-right">
+{contextStatus ? (
+              <div className={`context-pill context-pill--${contextStateTone}`}>
+                <div className="context-pill__compact">
+                  <span className="context-pill__model" title={contextStatus.model}>{contextStatus.model || "Model"}</span>
+                  <span className="context-pill__usage">{formatTokenCount(contextStatus.estimatedTokens)} / {formatTokenCount(contextStatus.effectiveWindow || contextStatus.contextWindow)}</span>
+                </div>
+                <div className="context-pill__popup">
+                  <div className="context-pill__detail">
+                    <div className="context-pill__meter">
+                      <div className="context-pill__meter-bar" style={{ width: `${contextUsagePercent}%` }} />
+                    </div>
+                    <div className="context-pill__row">
+                      <span className="context-pill__row-label">Usage</span>
+                      <span className="context-pill__row-value">{contextUsagePercent}%</span>
+                    </div>
+                    <div className="context-pill__row">
+                      <span className="context-pill__row-label">Target</span>
+                      <span className="context-pill__row-value">{formatTokenCount(contextStatus.targetInputTokens)}</span>
+                    </div>
+                    <div className="context-pill__row">
+                      <span className="context-pill__row-label">Block</span>
+                      <span className="context-pill__row-value">{formatTokenCount(contextStatus.blockingLimit)}</span>
+                    </div>
+                    {contextStatus.detail ? <div className="context-pill__detail-text">{contextStatus.detail}</div> : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </header>
 
