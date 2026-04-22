@@ -9,6 +9,7 @@ from typing import Any
 from app.core.config import settings
 from app.sandbox.manager import sandbox_manager
 from app.sandbox.models import SandboxWorkspace
+from app.services.context.runtime_types import CONTEXT_MESSAGE_SCHEMA_VERSION
 
 
 @dataclass
@@ -30,6 +31,8 @@ class AgentSession:
     host_apis: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     uploads: list[dict[str, Any]] = field(default_factory=list)
+    context_state: dict[str, Any] = field(default_factory=dict)
+    message_schema_version: int = CONTEXT_MESSAGE_SCHEMA_VERSION
     allow_network: bool = True
     created_at: float = field(default_factory=time.time)
     last_access: float = field(default_factory=time.time)
@@ -138,6 +141,8 @@ class SessionService:
             host_apis=payload.get("host_apis", []),
             artifacts=payload.get("artifacts", []),
             uploads=payload.get("uploads", []),
+            context_state=payload.get("context_state", {}),
+            message_schema_version=int(payload.get("message_schema_version", 1)),
             allow_network=bool(payload.get("allow_network", True)),
             created_at=payload.get("created_at", time.time()),
             last_access=payload.get("last_access", time.time()),
@@ -167,6 +172,8 @@ class SessionService:
             "host_apis": session.host_apis,
             "artifacts": session.artifacts,
             "uploads": session.uploads,
+            "context_state": session.context_state,
+            "message_schema_version": session.message_schema_version,
             "allow_network": session.allow_network,
             "created_at": session.created_at,
             "last_access": session.last_access,

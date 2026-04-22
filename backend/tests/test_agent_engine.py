@@ -5,8 +5,11 @@ import asyncio
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+import httpx
+
 from app.core.config import settings
 from app.runtime.engine import agent_engine
+from app.services.context.context_pipeline import context_pipeline
 from app.services.session_service import AgentSession
 from app.services.store import store_service
 
@@ -26,6 +29,46 @@ def initialize_store(tmp_path: Path) -> None:
     store_service.initialize()
 
 
+def seed_verbose_history(session: AgentSession, turns: int = 6) -> None:
+    for turn in range(1, turns + 1):
+        session.messages.extend(
+            [
+                {
+                    "role": "user",
+                    "content": f"user turn {turn}",
+                    "turn_index": turn,
+                    "timestamp": f"2026-01-{turn:02d}T00:00:00+00:00",
+                },
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": f"call_{turn}",
+                            "type": "function",
+                            "function": {"name": "sandbox_shell", "arguments": '{"command":"echo hello"}'},
+                        }
+                    ],
+                    "turn_index": turn,
+                    "timestamp": f"2026-01-{turn:02d}T00:00:01+00:00",
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": f"call_{turn}",
+                    "tool_name": "sandbox_shell",
+                    "content": "x" * 5000,
+                    "turn_index": turn,
+                    "timestamp": f"2026-01-{turn:02d}T00:00:02+00:00",
+                },
+                {
+                    "role": "assistant",
+                    "content": f"assistant turn {turn}",
+                    "turn_index": turn,
+                    "timestamp": f"2026-01-{turn:02d}T00:00:03+00:00",
+                },
+            ]
+        )
+
+
 def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
@@ -33,7 +76,7 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
         yield {
             "choices": [
                 {
-                    "delta": {"content": "这是模型真实返回的最终答案"},
+                    "delta": {"content": "this is the real model answer"},
                     "finish_reason": "stop",
                 }
             ]
@@ -46,13 +89,13 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
 
     session = AgentSession(session_id="sess_engine_success")
-    events = asyncio.run(collect_stream(session, "请直接回答"))
+    events = asyncio.run(collect_stream(session, "reply directly"))
 
     result_events = [item for item in events if item["type"] == "result"]
     assert len(result_events) == 1
     assert result_events[0]["payload"]["subtype"] == "success"
-    assert result_events[0]["payload"]["result"] == "这是模型真实返回的最终答案"
-    assert session.messages[-1]["content"] == "这是模型真实返回的最终答案"
+    assert result_events[0]["payload"]["result"] == "this is the real model answer"
+    assert session.messages[-1]["content"] == "this is the real model answer"
     assert session.messages[-1]["blocks"][-1]["kind"] == "content"
 
 
@@ -101,7 +144,7 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
         {
             "choices": [
                 {
-                    "delta": {"content": "重复工具调用后仍然继续完成任务"},
+                    "delta": {"content": "finished after repeated tool calls"},
                     "finish_reason": "stop",
                 }
             ]
@@ -134,14 +177,16 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
     monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
 
     session = AgentSession(session_id="sess_engine_long_run")
-    events = asyncio.run(collect_stream(session, "继续长程任务"))
+    events = asyncio.run(collect_stream(session, "continue long task"))
 
     result_events = [item for item in events if item["type"] == "result"]
     assert len(result_events) == 1
     assert result_events[0]["payload"]["subtype"] == "success"
-    assert result_events[0]["payload"]["result"] == "重复工具调用后仍然继续完成任务"
+    assert result_events[0]["payload"]["result"] == "finished after repeated tool calls"
     assert all(item["payload"].get("subtype") != "error_stalled" for item in result_events)
     assert any(block["kind"] == "tool" for block in session.messages[-1]["blocks"])
+    assert any(message.get("tool_calls") for message in session.messages if message.get("role") == "assistant")
+    assert any(message.get("role") == "tool" for message in session.messages)
 
 
 def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_path):
@@ -178,7 +223,7 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
         yield {
             "choices": [
                 {
-                    "delta": {"content": "已按技能要求完成分析"},
+                    "delta": {"content": "skill workflow finished"},
                     "finish_reason": "stop",
                 }
             ]
@@ -191,7 +236,7 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
             "injected_messages": [
                 {
                     "role": "user",
-                    "content": '<aether_skill name="data-analysis" source="built_in">技能正文</aether_skill>',
+                    "content": '<aether_skill name="data-analysis" source="built_in">skill loaded</aether_skill>',
                 }
             ],
         }
@@ -204,7 +249,7 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
     monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
 
     session = AgentSession(session_id="sess_engine_skill")
-    events = asyncio.run(collect_stream(session, "帮我做数据分析"))
+    events = asyncio.run(collect_stream(session, "analyze data"))
 
     assert len(observed_messages) == 2
     assert any(
@@ -214,4 +259,81 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
     result_events = [item for item in events if item["type"] == "result"]
     assert len(result_events) == 1
     assert result_events[0]["payload"]["subtype"] == "success"
-    assert result_events[0]["payload"]["result"] == "已按技能要求完成分析"
+    assert result_events[0]["payload"]["result"] == "skill workflow finished"
+
+
+def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    session = AgentSession(session_id="sess_engine_proactive")
+    seed_verbose_history(session, turns=6)
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "done after proactive compact"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr(context_pipeline.budget, "get_context_window_for_model", lambda model, betas=None: 12000)
+    monkeypatch.setattr(context_pipeline.budget, "get_effective_context_window", lambda model, max_output_tokens=None, betas=None: 10000)
+    monkeypatch.setattr(context_pipeline.budget, "get_warning_threshold", lambda model, max_output_tokens=None, betas=None: 6000)
+    monkeypatch.setattr(context_pipeline.budget, "get_error_threshold", lambda model, max_output_tokens=None, betas=None: 8000)
+    monkeypatch.setattr(context_pipeline.budget, "get_blocking_limit", lambda model, max_output_tokens=None, betas=None: 12000)
+    monkeypatch.setattr(context_pipeline.budget, "get_auto_compact_threshold", lambda model, max_output_tokens=None, betas=None: 7000)
+
+    events = asyncio.run(collect_stream(session, "new task"))
+
+    assert any(item["type"] == "context_compacted" for item in events)
+    assert any(message.get("is_compact_summary") for message in session.messages) or any(
+        item.get("compression_meta", {}).get("strategy") == "tool_result_truncate"
+        for item in session.messages
+        if item.get("role") == "tool"
+    )
+    assert session.context_state["compaction_count"] >= 1
+
+
+def test_agent_engine_recovers_from_prompt_too_long(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    session = AgentSession(session_id="sess_engine_reactive")
+    seed_verbose_history(session, turns=7)
+    call_count = {"value": 0}
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            request = httpx.Request("POST", "https://example.invalid/chat/completions")
+            response = httpx.Response(
+                400,
+                request=request,
+                json={"error": {"message": "prompt is too long: 9000 tokens > 4096 maximum"}},
+            )
+            raise httpx.HTTPStatusError("prompt too long", request=request, response=response)
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "done after recovery"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    events = asyncio.run(collect_stream(session, "recover please"))
+
+    assert call_count["value"] == 2
+    assert any(item["type"] == "context_recovered" for item in events)
+    assert any(item["type"] == "result" and item["payload"]["subtype"] == "success" for item in events)
+    assert any(message.get("is_compact_summary") for message in session.messages)

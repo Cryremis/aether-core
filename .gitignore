@@ -12,6 +12,7 @@ backend/.env
 *.egg-info/
 node_modules/
 dist/
+docs/
 .DS_Store
 Thumbs.db
 storage/sessions/

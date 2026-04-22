@@ -57,6 +57,31 @@ from app.services.context.truncate import (
     truncate_path_middle,
     truncate_to_width,
 )
+from app.services.context.runtime_types import (
+    CONTEXT_MESSAGE_SCHEMA_VERSION,
+    ContextEventType,
+    CompactionStrategyName,
+    ContextSessionState,
+    ContextOverflowError,
+)
+from app.services.context.message_adapter import (
+    ContextMessageAdapter,
+    context_message_adapter,
+)
+from app.services.context.context_state_store import (
+    ContextStateStore,
+    context_state_store,
+)
+from app.services.context.integrity import (
+    ContextIntegrityValidator,
+    IntegrityReport,
+    context_integrity_validator,
+)
+from app.services.context.context_pipeline import (
+    ContextPipeline,
+    ContextPipelineConfig,
+    context_pipeline,
+)
 
 __all__ = [
     "TokenEstimator",
@@ -88,4 +113,19 @@ __all__ = [
     "truncate_text",
     "truncate_path_middle",
     "truncate_to_width",
+    "CONTEXT_MESSAGE_SCHEMA_VERSION",
+    "ContextEventType",
+    "CompactionStrategyName",
+    "ContextSessionState",
+    "ContextOverflowError",
+    "ContextMessageAdapter",
+    "context_message_adapter",
+    "ContextStateStore",
+    "context_state_store",
+    "ContextIntegrityValidator",
+    "IntegrityReport",
+    "context_integrity_validator",
+    "ContextPipeline",
+    "ContextPipelineConfig",
+    "context_pipeline",
 ]
