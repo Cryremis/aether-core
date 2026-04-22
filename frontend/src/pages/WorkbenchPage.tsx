@@ -2,7 +2,7 @@
 import { marked } from "marked";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark-dimmed.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   bootstrapAdminSession,
@@ -169,6 +169,78 @@ const Icons = {
   Sparkles: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>,
 };
 
+type ComposerProps = {
+  busy: boolean;
+  disabled: boolean;
+  allowNetwork: boolean;
+  onAllowNetworkChange: (value: boolean) => void;
+  onSend: (text: string) => void;
+  onUpload: (file: File) => void;
+};
+
+function Composer({ busy, disabled, allowNetwork, onAllowNetworkChange, onSend, onUpload }: ComposerProps) {
+  const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = "auto";
+    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+  }, [input]);
+
+  const canSend = input.trim().length > 0 && !busy && !disabled;
+
+  const handleSend = () => {
+    if (!canSend) return;
+    onSend(input.trim());
+    setInput("");
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+  };
+
+  return (
+    <div className="composer-area">
+      <div className="composer-box">
+        <textarea
+          ref={textareaRef}
+          className="composer-input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+          placeholder="发送指令，与系统深度交互..."
+          rows={1}
+        />
+        <div className="composer-actions">
+          <div className="composer-actions__left">
+            <label className="icon-button attach-btn" title="上传文件">
+              <input type="file" onChange={(e) => { if (e.target.files?.[0]) onUpload(e.target.files[0]); e.currentTarget.value = ""; }} />
+              <Icons.Attach />
+            </label>
+            <button
+              type="button"
+              className={`network-toggle ${allowNetwork ? "active" : ""}`}
+              onClick={() => onAllowNetworkChange(!allowNetwork)}
+              aria-pressed={allowNetwork}
+              title={allowNetwork ? "当前会话已开启联网搜索" : "当前会话未开启联网搜索"}
+            >
+              <Icons.Globe />
+              <span>联网搜索</span>
+            </button>
+          </div>
+          <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
+            <Icons.Send />
+          </button>
+        </div>
+      </div>
+      <div className="composer-footer">AetherCore System · Advanced Mode</div>
+    </div>
+  );
+}
+
 function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
   return items.map((item, index) =>
     item.role === "assistant"
@@ -205,7 +277,6 @@ export function WorkbenchPage({
   onSessionRefresh,
   onSessionSelect,
 }: WorkbenchPageProps) {
-  const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -236,11 +307,10 @@ export function WorkbenchPage({
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
   const isStreamingRef = useRef(false);
   const newlyCreatedSessionRef = useRef<string | null>(null);
-  const shouldStickToBottomRef = useRef(true);
+const shouldStickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
 
   const historyRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const updateStickToBottom = (node: HTMLDivElement) => {
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
@@ -322,15 +392,9 @@ export function WorkbenchPage({
       if (mobile && isSidebarOpen) setIsSidebarOpen(false);
       if (!mobile && !isSidebarOpen) setIsSidebarOpen(true);
     };
-    window.addEventListener("resize", handleResize);
+window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [isSidebarOpen]);
-
-  useEffect(() => {
-    if (!textareaRef.current) return;
-    textareaRef.current.style.height = "auto";
-    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
-  }, [input]);
 
   useEffect(() => {
     const node = historyRef.current;
@@ -515,7 +579,7 @@ export function WorkbenchPage({
       .finally(() => setLoading(false));
   }, [sessionId, isNewSession, localSessionId]);
 
-  const canSend = useMemo(() => input.trim().length > 0 && (sessionId || localSessionId || isNewSession) && !busy, [busy, input, sessionId, localSessionId, isNewSession]);
+const composerDisabled = !(sessionId || localSessionId || isNewSession);
   const contextUsagePercent = Math.max(0, Math.min(100, Math.round(contextStatus?.percentUsed ?? 0)));
   const contextStateTone = contextStatus?.state ?? "idle";
 
@@ -541,12 +605,11 @@ export function WorkbenchPage({
       const firstToken = rawCommand.split(/\s+/)[0] || "shell";
       return { title: firstToken, meta: String(inputValue.shell ?? "powershell") };
     }
-    return { title: toolName, meta: "tool" };
+return { title: toolName, meta: "tool" };
   };
 
-  const handleSend = async () => {
-    if (!canSend) return;
-    const userText = input.trim();
+  const handleSend = async (userText: string) => {
+    if (!userText) return;
     const assistantId = `assistant-${Date.now()}`;
 
     let effectiveSessionId = sessionId || localSessionId;
@@ -567,8 +630,6 @@ export function WorkbenchPage({
     shouldStickToBottomRef.current = true;
     setBusy(true);
     setError("");
-    setInput("");
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
 
     setMessages((current) => [
       ...current,
@@ -1191,46 +1252,14 @@ export function WorkbenchPage({
           </div>
         </div>
 
-        <div className="composer-area">
-          <div className="composer-box">
-            <textarea
-              ref={textareaRef}
-              className="composer-input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleSend();
-                }
-              }}
-              placeholder="发送指令，与系统深度交互..."
-              rows={1}
-            />
-            <div className="composer-actions">
-              <div className="composer-actions__left">
-                <label className="icon-button attach-btn" title="上传文件">
-                  <input type="file" onChange={(e) => { void handleUpload(e.target.files?.[0]); e.currentTarget.value = ""; }} />
-                  <Icons.Attach />
-                </label>
-                <button
-                  type="button"
-                  className={`network-toggle ${allowNetwork ? "active" : ""}`}
-                  onClick={() => setAllowNetwork((current) => !current)}
-                  aria-pressed={allowNetwork}
-                  title={allowNetwork ? "当前会话已开启联网搜索" : "当前会话未开启联网搜索"}
-                >
-                  <Icons.Globe />
-                  <span>联网搜索</span>
-                </button>
-              </div>
-              <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
-                <Icons.Send />
-              </button>
-            </div>
-          </div>
-          <div className="composer-footer">AetherCore System · Advanced Mode</div>
-        </div>
+        <Composer
+          busy={busy}
+          disabled={composerDisabled}
+          allowNetwork={allowNetwork}
+          onAllowNetworkChange={setAllowNetwork}
+          onSend={(text) => void handleSend(text)}
+          onUpload={(file) => void handleUpload(file)}
+        />
       </section>
     </main>
   );
