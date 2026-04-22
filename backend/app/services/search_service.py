@@ -1,7 +1,6 @@
 # backend/app/services/search_service.py
 """
 搜索工具服务，提供 Glob 和 Grep 工具。
-参考 Claude Code 的 GlobTool 和 GrepTool 实现。
 """
 from __future__ import annotations
 

@@ -1,7 +1,6 @@
 # backend/app/services/ripgrep_service.py
 """
 Ripgrep 封装服务，通过 sandbox_shell 在容器内执行搜索。
-参考 Claude Code 的 GlobTool 和 GrepTool 实现。
 """
 from __future__ import annotations
 
