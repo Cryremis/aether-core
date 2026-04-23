@@ -268,12 +268,13 @@ a { text-decoration: none; color: var(--accent); }
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: nowrap;
 }
 
 .context-pill__model {
   font-weight: 600;
   color: var(--text-primary);
-  max-width: 120px;
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2509,17 +2510,28 @@ a { text-decoration: none; color: var(--accent); }
   }
 
   .top-nav {
-    align-items: flex-start;
-    flex-direction: column;
+    min-height: 48px;
+    padding: 8px 12px;
   }
 
-.nav-right {
-    width: 100%;
+  .nav-left {
+    flex: 1 1 auto;
+    min-width: 60px;
+  }
+
+  .nav-right {
+    flex: 0 0 auto;
+  }
+
+  .session-badge {
+    flex-shrink: 1;
+    min-width: 60px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .context-pill {
-    width: 100%;
-    justify-content: flex-start;
+    flex-shrink: 0;
   }
 
   .context-pill__popup {

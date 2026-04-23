@@ -547,11 +547,36 @@ window.addEventListener("resize", handleResize);
       allow_network?: boolean;
       skills?: SkillItem[];
       files?: FileItem[];
+      context_state?: {
+        model_id?: string;
+        last_known_token_estimate?: number;
+        effective_window?: number;
+        context_window?: number;
+        target_input_tokens?: number;
+        warning_threshold?: number;
+        blocking_limit?: number;
+        percent_used?: number;
+      };
     };
     setMessages(createHistoryMessages(summary.messages ?? []));
     setAllowNetwork(summary.allow_network ?? true);
     setSkills(summary.skills ?? []);
     setFiles(summary.files ?? []);
+    
+    if (summary.context_state && summary.context_state.model_id) {
+      setContextStatus({
+        model: summary.context_state.model_id,
+        estimatedTokens: summary.context_state.last_known_token_estimate ?? 0,
+        effectiveWindow: summary.context_state.effective_window ?? 0,
+        contextWindow: summary.context_state.context_window ?? 0,
+        targetInputTokens: summary.context_state.target_input_tokens ?? 0,
+        warningThreshold: summary.context_state.warning_threshold ?? 0,
+        blockingLimit: summary.context_state.blocking_limit ?? 0,
+        percentUsed: summary.context_state.percent_used ?? 0,
+        state: "idle",
+        detail: "已恢复上下文状态",
+      });
+    }
   };
 
   useEffect(() => {
@@ -1180,7 +1205,7 @@ const roundStartTime = Date.now();
 {contextStatus ? (
               <div className={`context-pill context-pill--${contextStateTone}`}>
                 <div className="context-pill__compact">
-                  <span className="context-pill__model" title={contextStatus.model}>{contextStatus.model || "Model"}</span>
+                  <span className="context-pill__model" title={contextStatus.model || "等待首次对话"}>{contextStatus.model || "Model"}</span>
                   <span className="context-pill__usage">{formatTokenCount(contextStatus.estimatedTokens)} / {formatTokenCount(contextStatus.effectiveWindow || contextStatus.contextWindow)}</span>
                 </div>
                 <div className="context-pill__popup">

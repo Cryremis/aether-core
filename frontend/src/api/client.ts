@@ -247,14 +247,6 @@ export async function getPlatformIntegrationGuide(platformId: number) {
   return response.json();
 }
 
-export async function getGlobalLlmConfig() {
-  const response = await apiFetch("/llm/global");
-  if (!response.ok) {
-    throw new Error(`获取全局 LLM 配置失败: ${response.status}`);
-  }
-  return response.json();
-}
-
 export async function getUserLlmConfig() {
   const response = await apiFetch("/llm/user");
   if (!response.ok) {

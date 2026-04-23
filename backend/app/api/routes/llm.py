@@ -12,13 +12,6 @@ from app.services.store import store_service
 router = APIRouter(prefix="/api/v1/llm", tags=["llm"])
 
 
-@router.get("/global")
-def get_global_llm_config(auth: AuthContext = Depends(require_admin)) -> ApiResponse:
-    _ = auth
-    summary = llm_config_service.get_global_summary()
-    return ApiResponse(message="全局 LLM 配置", data=summary.model_dump(mode="json"))
-
-
 @router.get("/user")
 def get_user_llm_config(auth: AuthContext = Depends(require_admin)) -> ApiResponse:
     assert auth.user is not None

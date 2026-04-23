@@ -21,3 +21,4 @@ class SessionSummary(BaseModel):
     skills: list[SkillCard] = Field(default_factory=list)
     files: list[FileRecord] = Field(default_factory=list)
     messages: list[dict[str, Any]] = Field(default_factory=list)
+    context_state: dict[str, Any] = Field(default_factory=dict)

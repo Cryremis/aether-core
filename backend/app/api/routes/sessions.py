@@ -124,6 +124,7 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         skills=skill_service.list_for_session(session),
         files=[*file_service.list_uploads(session), *artifact_service.list_artifacts(session)],
         messages=session.messages,
+        context_state=session.context_state,
     )
     return ApiResponse(message="会话摘要", data=summary.model_dump(mode="json"))
 
