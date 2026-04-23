@@ -32,7 +32,7 @@ type SkillItem = {
 };
 
 type SessionMessage = {
-  role: string;
+  role: "user" | "assistant" | "tool";
   content: string;
   blocks?: AssistantBlock[];
 };
@@ -242,19 +242,21 @@ function Composer({ busy, disabled, allowNetwork, onAllowNetworkChange, onSend, 
 }
 
 function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
-  return items.map((item, index) =>
-    item.role === "assistant"
-      ? {
-          id: `history-assistant-${index}`,
-          role: "assistant",
-          blocks: item.blocks?.length
-            ? item.blocks
-            : [{ id: `history-content-${index}`, kind: "content", content: item.content, status: "done" }],
-          elapsedMs: null,
-          streaming: false,
-        }
-      : { id: `history-user-${index}`, role: "user", content: item.content },
-  );
+  return items
+    .filter((item) => item.role !== "tool")
+    .map((item, index) =>
+      item.role === "assistant"
+        ? {
+            id: `history-assistant-${index}`,
+            role: "assistant",
+            blocks: item.blocks?.length
+              ? item.blocks
+              : [{ id: `history-content-${index}`, kind: "content", content: item.content, status: "done" }],
+            elapsedMs: null,
+            streaming: false,
+          }
+        : { id: `history-user-${index}`, role: "user", content: item.content },
+    );
 }
 
 function formatTokenCount(value: number) {
