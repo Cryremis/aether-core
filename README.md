@@ -1,40 +1,221 @@
-# AetherCore/README.md
-
 # AetherCore
 
-AetherCore 是一个独立于业务平台的通用 Agent Runtime 平台。
-当前仓库包含三个子项目：
+[中文](./README.zh-CN.md)
 
-- `backend`：独立后端服务，负责会话、宿主注入、文件与技能管理、运行时编排、沙箱执行。
-- `frontend`：独立工作台前端，面向用户呈现 Agent 对话、工具调用、思考过程、文件与技能。
-- `host-adapters/dash`：面向 `ascend-compete-dash` 的宿主接入适配层。
+> Agent infrastructure for teams that want to embed powerful AI agents into multiple products without rebuilding the runtime layer every time.
 
-## 设计原则
+AetherCore is an Agent-as-a-Service platform that gives your products a shared agent runtime, embedded workbench, sandboxed execution, host integration layer, file and skill system, and long-context orchestration in one deployable stack.
 
-- 与宿主平台解耦：平台通过宿主注入协议传递上下文、工具、技能与 API 描述。
-- 执行强隔离：文件、技能与脚本执行都必须落在会话沙箱目录与容器沙箱中。
-- 协议优先：前后端、宿主与运行时之间统一走结构化协议，便于扩展与治理。
-- 失败关闭：容器沙箱不可用时直接失败，不能回退到宿主机直跑。
+Instead of rebuilding chat orchestration, tool execution, session storage, sandboxing, and embedded UX for every new product, you can plug them into AetherCore and reuse the same intelligence layer across projects.
 
-## 沙箱说明
+## Why AetherCore
 
-- 默认执行器为 `docker`，配置项位于 `backend/.env`。
-- 需要预先构建专用镜像：`docker build -t aethercore-sandbox:latest -f docker/sandbox/Dockerfile .`
-- 容器执行默认开启：
-  - 只挂载会话沙箱目录
-  - 只读根文件系统
-  - `--network none`
-  - 非 root 用户
-  - CPU / 内存 / PIDs 限制
-- `local` 执行器仅供开发排障使用，且必须显式开启 `SANDBOX_LOCAL_ENABLED=true`。
+Most teams do not just need "a chatbot." They need a reusable agent platform that can:
 
-## 当前阶段
+- run safely in a sandbox,
+- support long, tool-heavy sessions,
+- plug into existing products,
+- manage files, skills, and outputs,
+- expose both standalone and embedded workbench experiences.
 
-当前版本已完成首轮工程化骨架，并具备以下能力：
+AetherCore is built for that layer.
 
-- 独立后端服务与 `/api/v1` 路由结构
-- 宿主注册与会话绑定协议
-- 会话工作区、文件上传、产物下载与技能注入
-- 基于模型原生工具调用的运行时循环
-- 工作台聊天界面与工具/思考过程展示
-- 基于 Docker 的受限执行沙箱
+## Highlights
+
+- `Embed once, reuse everywhere`
+  Connect multiple products to the same agent runtime through platform registration and host bind flows.
+
+- `Standalone + embedded workbench`
+  Use AetherCore directly as an internal workbench, or open it inside another product with an embed token.
+
+- `Sandbox-first execution`
+  Run commands in a Docker-first, fail-closed sandbox instead of relying on the host machine.
+
+- `Files, skills, and artifacts`
+  Upload working files, install reusable skills, and generate downloadable outputs inside a session.
+
+- `Streaming runtime`
+  Stream reasoning, content, and tool events through the same agent loop.
+
+- `Long-context protection`
+  Track token usage, compact history, and recover from context-overflow situations before sessions become unusable.
+
+- `Platform baselines`
+  Preload per-platform files, skills, and workspace material into new sessions.
+
+## What It Looks Like
+
+```mermaid
+flowchart LR
+    A["Host Product"] --> B["AetherCore Host Bind"]
+    B --> C["Session + Platform Context"]
+    C --> D["Agent Runtime"]
+    D --> E["LLM"]
+    D --> F["Sandbox Tools"]
+    D --> G["Host Tools"]
+    D --> H["Files / Skills / Artifacts"]
+    C --> I["Workbench UI"]
+    A --> I
+```
+
+## Core Use Cases
+
+- Add an agent workbench to an existing SaaS or internal platform.
+- Centralize agent runtime infrastructure across multiple products.
+- Run tool-using agents with sandboxed command execution.
+- Support workflows that mix chat, files, reusable skills, and generated outputs.
+- Give each host platform its own baseline workspace and configuration.
+
+## Quick Start
+
+### Prerequisites
+
+- Python `3.11+`
+- Node.js `20+`
+- Docker
+
+### 1. Configure the backend
+
+Create `backend/.env` from [backend/.env.example](/C:/Work/AetherCore/backend/.env.example), then set at least:
+
+- `LLM_BASE_URL`
+- `LLM_MODEL`
+- `LLM_API_KEY`
+- `AUTH_SECRET_KEY`
+
+For production-style configuration, start from [backend/.env.production.example](/C:/Work/AetherCore/backend/.env.production.example).
+
+### 2. Install dependencies
+
+```bash
+cd backend
+pip install -e .[dev]
+```
+
+```bash
+cd frontend
+npm install
+```
+
+### 3. Build the sandbox image
+
+```bash
+docker build -t aethercore-sandbox:latest -f docker/sandbox/Dockerfile .
+```
+
+### 4. Start the dev stack
+
+```bash
+python run_dev.py start
+```
+
+Useful commands:
+
+```bash
+python run_dev.py restart
+python run_dev.py status
+python run_dev.py build frontend
+```
+
+Default local ports:
+
+- backend: `127.0.0.1:8100`
+- frontend: `127.0.0.1:5178`
+
+## Embed Into Your Product
+
+The typical integration flow is:
+
+1. Register a platform in AetherCore.
+2. Keep the `host_secret` on your backend only.
+3. Expose a host-side bind endpoint such as `/api/v1/aethercore/embed/bind`.
+4. Return `token` and `session_id` to the browser.
+5. Mount the embedded workbench with the universal adapter.
+
+Minimal example:
+
+```html
+<script src="/static/aethercore-embed.js"></script>
+<script>
+  window.mountAetherCore({
+    platformKey: "your-platform-key",
+    bindUrl: "/api/v1/aethercore/embed/bind",
+    workbenchUrl: "https://ac.example.com",
+    getUserId: function () {
+      return window.currentUser?.id || "anonymous";
+    }
+  });
+</script>
+```
+
+Related files:
+
+- [host-adapters/universal/aethercore-embed.js](/C:/Work/AetherCore/host-adapters/universal/aethercore-embed.js)
+- [host-adapters/universal/README.md](/C:/Work/AetherCore/host-adapters/universal/README.md)
+- [docs/host-integration.md](/C:/Work/AetherCore/docs/host-integration.md)
+- [docs/host-integration-standard.md](/C:/Work/AetherCore/docs/host-integration-standard.md)
+
+## Repository Structure
+
+```text
+AetherCore/
+  backend/          FastAPI runtime and APIs
+  frontend/         React workbench
+  host-adapters/    Embed shells and host integration assets
+  docs/             Architecture and integration documents
+  docker/           Sandbox image definitions
+  ops/              Runtime and deployment notes
+```
+
+## Current Capabilities
+
+Today, the repository already includes:
+
+- admin login and standalone workbench access,
+- embedded workbench access with platform bootstrap/bind flows,
+- streaming agent chat via `/api/v1/agent/chat`,
+- session history, rename, clone/bootstrap, and delete flows,
+- file upload and artifact download,
+- skill upload and skill injection,
+- user-level and platform-level LLM overrides,
+- platform baselines,
+- sandbox command execution,
+- host tool injection,
+- token-aware context management and overflow recovery.
+
+## Important APIs
+
+- `/api/v1/auth`
+- `/api/v1/platforms`
+- `/api/v1/host`
+- `/api/v1/agent`
+- `/api/v1/agent/sessions`
+- `/api/v1/agent/files`
+- `/api/v1/agent/skills`
+- `/api/v1/llm`
+- `/api/v1/health`
+
+## Running In Production
+
+Production-oriented runtime helpers are included:
+
+```bash
+python run.py start
+python run.py status
+python run.py health
+```
+
+See also:
+
+- [run.py](/C:/Work/AetherCore/run.py)
+- [run_dev.py](/C:/Work/AetherCore/run_dev.py)
+- [process_control.py](/C:/Work/AetherCore/process_control.py)
+- [ops/production/README.md](/C:/Work/AetherCore/ops/production/README.md)
+
+## Documentation
+
+- [docs/architecture.md](/C:/Work/AetherCore/docs/architecture.md)
+- [docs/context_management_mechanism.md](/C:/Work/AetherCore/docs/context_management_mechanism.md)
+- [docs/host-integration.md](/C:/Work/AetherCore/docs/host-integration.md)
+- [docs/host-integration-standard.md](/C:/Work/AetherCore/docs/host-integration-standard.md)
+
