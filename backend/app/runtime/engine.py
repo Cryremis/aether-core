@@ -458,6 +458,12 @@ class AgentEngine:
             context_pipeline.reset_reactive_retry(session)
             final_answer = assistant_content.strip()
             if final_answer:
+                final_elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                persisted_assistant_blocks.append({
+                    "id": f"elapsed_{uuid.uuid4().hex[:8]}",
+                    "kind": "elapsed",
+                    "elapsed_ms": final_elapsed_ms,
+                })
                 session.messages.append(
                     context_message_adapter.make_assistant_message(
                         content=final_answer,

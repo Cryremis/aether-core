@@ -40,6 +40,7 @@ type SessionMessage = {
 type AssistantBlock =
   | { id: string; kind: "reasoning"; content: string }
   | { id: string; kind: "content"; content: string; status: "streaming" | "done" }
+  | { id: string; kind: "elapsed"; elapsed_ms: number }
   | {
       id: string;
       kind: "tool";
@@ -249,10 +250,10 @@ function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
         ? {
             id: `history-assistant-${index}`,
             role: "assistant",
-            blocks: item.blocks?.length
-              ? item.blocks
+            blocks: (item.blocks ?? []).filter((b) => b.kind !== "elapsed").length
+              ? (item.blocks ?? []).filter((b) => b.kind !== "elapsed")
               : [{ id: `history-content-${index}`, kind: "content", content: item.content, status: "done" }],
-            elapsedMs: null,
+            elapsedMs: (item.blocks ?? []).find((b) => b.kind === "elapsed")?.elapsed_ms ?? null,
             streaming: false,
           }
         : { id: `history-user-${index}`, role: "user", content: item.content },
