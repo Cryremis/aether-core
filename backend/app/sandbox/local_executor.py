@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -28,14 +30,15 @@ class LocalSandboxExecutor(SandboxExecutor):
 
         program, args = self._build_shell_command(shell, command)
         started_at = time.perf_counter()
-        process = await asyncio.create_subprocess_exec(
-            program,
-            *args,
-            cwd=str(workspace.work_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._build_env(workspace),
-        )
+        kwargs: dict = {
+            "cwd": str(workspace.work_dir),
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "env": self._build_env(workspace),
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        process = await asyncio.create_subprocess_exec(program, *args, **kwargs)
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
