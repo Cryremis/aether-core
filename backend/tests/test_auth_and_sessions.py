@@ -73,7 +73,6 @@ def test_conversations_are_isolated_for_admins_and_host_users(tmp_path):
         conversation_id=None,
         conversation_key="conversation-a",
         host_name="Dash",
-        host_type="embedded",
     )
     second_session, _ = conversation_service.bootstrap_host_workbench(
         platform_key=platform["platform_key"],
@@ -83,7 +82,6 @@ def test_conversations_are_isolated_for_admins_and_host_users(tmp_path):
         conversation_id=None,
         conversation_key="conversation-b",
         host_name="Dash",
-        host_type="embedded",
     )
 
     first_user_items = conversation_service.list_for_host_user(
@@ -125,7 +123,6 @@ def test_embed_bootstrap_rejects_platform_key_mismatch(tmp_path):
             "conversation_id": None,
             "conversation_key": "embed-conversation",
             "host_name": "Dash",
-            "host_type": "embedded",
         },
     )
 
@@ -182,7 +179,6 @@ def test_host_bind_requires_platform_secret_and_matching_platform_key(tmp_path):
     payload = {
         "platform_key": platform["platform_key"],
         "host_name": "POC",
-        "host_type": "poc",
         "context": {
             "user": {"id": "user-1", "name": "User 1"},
             "extras": {"host_callback_base_url": "http://localhost:8000"},
@@ -229,7 +225,6 @@ def test_host_bind_uses_conversation_key_to_control_reuse(tmp_path):
             json={
                 "platform_key": platform["platform_key"],
                 "host_name": "POC",
-                "host_type": "poc",
                 "conversation_key": conversation_key,
                 "context": {
                     "user": {"id": "user-1", "name": "User 1"},

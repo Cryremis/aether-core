@@ -15,7 +15,6 @@ class SessionSummary(BaseModel):
     conversation_id: str | None = None
     title: str = "新对话"
     host_name: str
-    host_type: str
     message_count: int
     allow_network: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -30,14 +30,12 @@ class ConversationService:
             session_id=session.session_id,
             title="新对话",
             host_name="AetherCore",
-            host_type="standalone",
             platform_id=platform["platform_id"],
             owner_user_id=user.user_id,
             metadata={"owner_name": user.full_name},
         )
         session.conversation_id = conversation["conversation_id"]
         session.host_name = "AetherCore"
-        session.host_type = "standalone"
         platform_baseline_service.materialize_to_session("standalone", session)
         session_service.persist(session)
         return session
@@ -52,7 +50,6 @@ class ConversationService:
         conversation_id: str | None,
         conversation_key: str | None,
         host_name: str | None,
-        host_type: str | None,
     ) -> tuple[AgentSession, str]:
         platform = store_service.get_platform_by_key(platform_key)
         if platform is None:
@@ -70,7 +67,6 @@ class ConversationService:
                 session_id=session.session_id,
                 title="新对话",
                 host_name=host_name or platform["display_name"],
-                host_type=host_type or platform["host_type"],
                 platform_id=platform["platform_id"],
                 external_user_id=external_user_id,
                 external_org_id=external_org_id,
@@ -78,7 +74,6 @@ class ConversationService:
                 metadata={"external_user_name": external_user_name},
             )
             session.host_name = host_name or platform["display_name"]
-            session.host_type = host_type or platform["host_type"]
             platform_baseline_service.materialize_to_session(platform["platform_key"], session)
         else:
             session = session_service.get_or_create(conversation["session_id"])
@@ -110,7 +105,6 @@ class ConversationService:
             session_id=row["session_id"],
             title=row["title"],
             host_name=row["host_name"],
-            host_type=row["host_type"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             last_message_at=row["last_message_at"],

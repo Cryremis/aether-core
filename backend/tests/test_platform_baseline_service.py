@@ -75,7 +75,6 @@ def test_platform_baseline_materializes_into_new_host_session(tmp_path):
         conversation_id=None,
         conversation_key="conv-001",
         host_name="ATK",
-        host_type="embedded",
     )
 
     assert session.workspace is not None

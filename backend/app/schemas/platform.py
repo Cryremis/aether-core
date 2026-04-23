@@ -115,7 +115,6 @@ class EmbedBootstrapRequest(BaseModel):
     conversation_id: str | None = None
     conversation_key: str | None = None
     host_name: str | None = None
-    host_type: str | None = None
 
 
 class EmbedBootstrapResponse(BaseModel):
@@ -125,7 +124,6 @@ class EmbedBootstrapResponse(BaseModel):
     session_id: str
     embed_token: str
     host_name: str
-    host_type: str
 
 
 class ConversationSummary(BaseModel):
@@ -135,7 +133,6 @@ class ConversationSummary(BaseModel):
     session_id: str
     title: str
     host_name: str
-    host_type: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_message_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

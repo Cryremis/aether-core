@@ -33,7 +33,6 @@ class HostRegistry:
                 session_id=session.session_id,
                 title="新对话",
                 host_name=request.host_name,
-                host_type=request.host_type,
                 platform_id=int(platform["platform_id"]),
                 external_user_id=str(external_user_id),
                 external_org_id=None,
@@ -48,7 +47,6 @@ class HostRegistry:
         session_service.attach_host(
             session=session,
             host_name=request.host_name,
-            host_type=request.host_type,
             context=_to_dict(request.context),
             tools=[_to_dict(item) for item in request.tools],
             skills=[
@@ -73,7 +71,6 @@ class HostRegistry:
         return {
             "platform_key": platform["platform_key"],
             "host_name": request.host_name,
-            "host_type": request.host_type,
             "session_id": session.session_id,
             "conversation_id": conversation["conversation_id"],
             "conversation_key": conversation.get("conversation_key"),

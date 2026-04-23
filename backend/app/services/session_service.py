@@ -48,14 +48,12 @@ class SessionService:
         self,
         session: AgentSession,
         host_name: str,
-        host_type: str,
         context: dict[str, Any],
         tools: list[dict[str, Any]],
         skills: list[dict[str, Any]],
         apis: list[dict[str, Any]],
     ) -> AgentSession:
         session.host_name = host_name
-        session.host_type = host_type
         session.host_context = context
         session.host_tools = tools
         session.host_skills = skills
@@ -106,7 +104,6 @@ class SessionService:
             session_id=session_id,
             conversation_id=payload.get("conversation_id"),
             host_name=payload.get("host_name", ""),
-            host_type=payload.get("host_type", "custom"),
             baseline_root=payload.get("baseline_root", ""),
             messages=payload.get("messages", []),
             host_context=payload.get("host_context", {}),
@@ -137,7 +134,6 @@ class SessionService:
             "session_id": session.session_id,
             "conversation_id": session.conversation_id,
             "host_name": session.host_name,
-            "host_type": session.host_type,
             "baseline_root": session.baseline_root,
             "messages": session.messages,
             "host_context": session.host_context,

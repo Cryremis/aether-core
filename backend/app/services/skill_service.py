@@ -48,7 +48,6 @@ class SkillService:
             "6. 技能不是普通提示词片段。若用户任务明显匹配某个技能，必须先调用 invoke_skill 加载该技能，再继续执行任务。\n"
             "7. 不要只提到某个技能而不调用 invoke_skill；技能加载后，严格遵循该技能中的工作流与约束。\n\n"
             f"## 宿主信息\n宿主名称: {session.host_name or 'AetherCore'}\n"
-            f"宿主类型: {session.host_type}\n"
             f"宿主上下文: {context}\n\n"
             f"## 沙箱路径约定\n输入目录: {session.workspace.input_dir if session.workspace else ''}\n"
             f"技能目录: {session.workspace.skills_dir if session.workspace else ''}\n"

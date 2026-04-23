@@ -63,7 +63,6 @@ class HostBindRequest(BaseModel):
 
     platform_key: str
     host_name: str
-    host_type: Literal["dash", "poc", "custom"] = "custom"
     session_id: str | None = None
     conversation_id: str | None = None
     conversation_key: str | None = None
@@ -77,7 +76,6 @@ class HostBindingSummary(BaseModel):
     """宿主绑定摘要。"""
 
     host_name: str
-    host_type: str
     session_id: str
     tool_count: int
     skill_count: int

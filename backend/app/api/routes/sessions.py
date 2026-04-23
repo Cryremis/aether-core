@@ -48,7 +48,6 @@ def bootstrap_session(
             session_id=session.session_id,
             title="新对话",
             host_name=source_session.host_name,
-            host_type=source_session.host_type,
             platform_id=auth.platform_id,
             external_user_id=auth.external_user_id,
             external_org_id=source_conversation.get("external_org_id"),
@@ -58,7 +57,6 @@ def bootstrap_session(
         session_service.attach_host(
             session=session,
             host_name=source_session.host_name,
-            host_type=source_session.host_type,
             context=dict(source_session.host_context),
             tools=[dict(item) for item in source_session.host_tools],
             skills=[dict(item) for item in source_session.host_skills],
@@ -76,7 +74,6 @@ def bootstrap_session(
             "session_id": session.session_id,
             "conversation_id": session.conversation_id,
             "host_name": session.host_name,
-            "host_type": session.host_type,
         },
     )
 
@@ -121,7 +118,6 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         conversation_id=session.conversation_id,
         title=conversation.get("title") or "新对话",
         host_name=session.host_name,
-        host_type=session.host_type,
         message_count=len(session.messages),
         allow_network=session.allow_network,
         created_at=datetime.fromisoformat(conversation["created_at"]) if conversation.get("created_at") else datetime.now(timezone.utc),

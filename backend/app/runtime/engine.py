@@ -92,7 +92,6 @@ class AgentEngine:
                 session_id=session.session_id,
                 title=message.strip()[:80] or "新对话",
                 host_name=session.host_name or "AetherCore",
-                host_type=session.host_type or "standalone",
             )
         new_title = message.strip()[:80] or "新对话" if is_new_conversation else None
         store_service.touch_conversation(

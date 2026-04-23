@@ -143,7 +143,7 @@ class StoreService:
                     conversation_key TEXT,
                     title TEXT NOT NULL,
                     host_name TEXT NOT NULL,
-                    host_type TEXT NOT NULL,
+                    host_type TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     last_message_at TEXT NOT NULL,
@@ -540,7 +540,6 @@ class StoreService:
         session_id: str,
         title: str,
         host_name: str,
-        host_type: str,
         platform_id: int | None = None,
         owner_user_id: int | None = None,
         external_user_id: str | None = None,
@@ -555,9 +554,9 @@ class StoreService:
                 """
                 INSERT INTO conversations(
                     conversation_id, session_id, platform_id, owner_user_id, external_user_id,
-                    external_org_id, conversation_key, title, host_name, host_type, created_at,
+                    external_org_id, conversation_key, title, host_name, created_at,
                     updated_at, last_message_at, message_count, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     conversation_id,
@@ -569,7 +568,6 @@ class StoreService:
                     conversation_key,
                     title,
                     host_name,
-                    host_type,
                     now,
                     now,
                     now,

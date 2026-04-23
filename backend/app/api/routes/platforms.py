@@ -279,12 +279,10 @@ def bootstrap_embed(
         conversation_id=request.conversation_id,
         conversation_key=request.conversation_key,
         host_name=request.host_name,
-        host_type=request.host_type,
     )
     return EmbedBootstrapResponse(
         conversation_id=session.conversation_id or "",
         session_id=session.session_id,
         embed_token=embed_token,
         host_name=session.host_name,
-        host_type=session.host_type,
     )

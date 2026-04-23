@@ -24,7 +24,6 @@ class AgentSession:
     session_id: str
     conversation_id: str | None = None
     host_name: str = ""
-    host_type: str = "custom"
     baseline_root: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
     host_context: dict[str, Any] = field(default_factory=dict)
