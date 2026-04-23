@@ -10,10 +10,12 @@ import {
   downloadPlatformBaselineFile,
   getPlatformBaseline,
   getPlatformBaselineFileContent,
+  getPlatformIntegrationGuide,
   getPlatformLlmConfig,
   listAdminWhitelist,
   listPlatforms,
   movePlatformBaselinePath,
+  PlatformIntegrationGuide,
   savePlatformBaselineTextFile,
   updatePlatformLlmConfig,
   uploadPlatformBaselineFile,
@@ -130,6 +132,10 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const [platformLlmError, setPlatformLlmError] = useState("");
   const [platformLlmBusy, setPlatformLlmBusy] = useState(false);
   const [showPlatformLlmAdvanced, setShowPlatformLlmAdvanced] = useState(false);
+  const [integrationGuide, setIntegrationGuide] = useState<PlatformIntegrationGuide | null>(null);
+  const [integrationGuideError, setIntegrationGuideError] = useState("");
+  const [integrationGuideBusy, setIntegrationGuideBusy] = useState(false);
+  const [integrationGuidePlatformName, setIntegrationGuidePlatformName] = useState("");
 
   const fileManagerRef = useRef<HTMLDivElement>(null);
 
@@ -481,6 +487,75 @@ export function AdminPanel({ role }: AdminPanelProps) {
     }
   };
 
+  const handleOpenIntegrationGuide = async (platform: PlatformItem) => {
+    try {
+      setIntegrationGuideBusy(true);
+      setIntegrationGuideError("");
+      setIntegrationGuidePlatformName(platform.display_name);
+      const result = await getPlatformIntegrationGuide(platform.platform_id);
+      setIntegrationGuide((result.data ?? null) as PlatformIntegrationGuide | null);
+    } catch (err) {
+      setIntegrationGuideError(err instanceof Error ? err.message : "加载接入教程失败");
+      setIntegrationGuide(null);
+    } finally {
+      setIntegrationGuideBusy(false);
+    }
+  };
+
+  const closeIntegrationGuide = () => {
+    setIntegrationGuide(null);
+    setIntegrationGuideError("");
+    setIntegrationGuideBusy(false);
+    setIntegrationGuidePlatformName("");
+  };
+
+  const copyText = async (value: string) => {
+    await navigator.clipboard.writeText(value);
+  };
+
+  const renderHighlightedSnippet = (snippet: string | undefined) =>
+    snippet ? snippet.split("{{YOUR_PLATFORM_BASE_URL}}").flatMap((part, index) =>
+      index === 0
+        ? [part]
+        : [
+            <span key={`placeholder-${index}`} className="guide-placeholder">
+              {"{{YOUR_PLATFORM_BASE_URL}}"}
+            </span>,
+            part,
+          ],
+    ) : null;
+
+  const integrationGuideDetails = [
+    {
+      title: "推荐接入顺序",
+      body: "按页面顺序复制即可：先复制前端代码，再复制 .env 示例，最后复制后端 Bind 示例。默认代码已经填好平台信息，只需要检查你们平台自己的用户对象和公网地址。",
+    },
+    {
+      title: "前端这段代码负责什么",
+      body: "它负责浮球、抽屉、iframe、会话 key 持久化这些通用逻辑。大多数平台只需要确认 /static/aethercore-embed.js 是否能访问，以及 getUserId 能拿到当前登录用户 ID。",
+    },
+    {
+      title: ".env 怎么用",
+      body: ".env 示例里已经填好 AetherCore 地址、platform_key 和 platform_secret。你只需要把 PLATFORM_PUBLIC_BASE_URL 换成你们平台自己的公网根地址。如果你们框架不自动加载 .env，也可以把同样的值直接配成环境变量。",
+    },
+    {
+      title: "后端 Bind 示例怎么用",
+      body: "后端示例是完整 FastAPI 写法，不依赖你们项目里的 settings 对象。复制后通常只需要按你们平台的登录体系调整 request.state.user 这一行，其它逻辑就是调用 AetherCore 并返回 token 和 session_id。",
+    },
+    {
+      title: "需要你自己替换的内容",
+      body: "{{YOUR_PLATFORM_BASE_URL}} 需要换成你们平台对外可访问的根地址。高亮只用于提示你这里要检查，复制按钮复制出去的仍然是原始代码。",
+    },
+    {
+      title: "如果你只想先快速接起来",
+      body: "可以先按最小场景接入，不注入任何 tools、skills、apis，只验证浮球和对话工作台是否正常。安全加固和宿主能力注入可以后续再补。",
+    },
+    {
+      title: "关于安全",
+      body: "更推荐把 host_secret 放在服务端，由服务端代理 bind，这样更稳。如果你们当前阶段更在意快速验证，也可以先按自己的方式做 PoC，只要清楚这样会带来额外风险即可。",
+    },
+  ];
+
   // 面包屑解析
   const breadcrumbs = useMemo(() => {
     if (!currentBaselineDirectory) return[];
@@ -563,12 +638,12 @@ export function AdminPanel({ role }: AdminPanelProps) {
             <h4>管理员白名单</h4>
             <p className="admin-panel__hint">填写 W3 账号或工号。支持 `uuid`、`uid` 自动匹配。</p>
             <input value={providerUserId} onChange={(e) => setProviderUserId(e.target.value)} placeholder="W3账号或工号" />
-              <select value={whitelistRole} onChange={(e) => setWhitelistRole(e.target.value as AdminWhitelistRole)}>
+            <select value={whitelistRole} onChange={(e) => setWhitelistRole(e.target.value as AdminWhitelistRole)}>
               <option value="platform_admin">平台管理员</option>
               <option value="system_admin">系统管理员</option>
               <option value="debug">Debug 用户</option>
             </select>
-            <button type="submit" disabled={!providerUserId.trim()}>添加白名单</button>
+            <button type="submit" className="action-button w-full" disabled={!providerUserId.trim()}>添加白名单</button>
           </form>
           <form className="admin-panel__form" onSubmit={handleCreatePlatform}>
             <h4>注册新接入平台</h4>
@@ -576,7 +651,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
             <input value={platformKey} onChange={(e) => setPlatformKey(e.target.value)} placeholder="platform_key，例如 atk-assistant" />
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="平台显示名称" />
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="平台说明" />
-            <button type="submit" disabled={!platformKey.trim() || !displayName.trim()}>注册平台</button>
+            <button type="submit" className="action-button w-full" disabled={!platformKey.trim() || !displayName.trim()}>注册平台</button>
           </form>
         </div>
       ) : null}
@@ -589,7 +664,16 @@ export function AdminPanel({ role }: AdminPanelProps) {
             <article key={item.platform_id} className={`admin-panel__card ${activePlatformId === item.platform_id ? "is-active" : ""}`} onClick={() => void loadPlatformBaseline(item.platform_id)}>
               <div className="platform-card__head">
                 <strong>{item.display_name}</strong>
-                <span className="badge">{describePlatformType(item)}</span>
+                <button
+                  type="button"
+                  className="action-button small action-button--ghost"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleOpenIntegrationGuide(item);
+                  }}
+                >
+                  接入教程
+                </button>
               </div>
               <p>{item.platform_key}</p>
               <p className="desc">{item.description || "未填写平台说明"}</p>
@@ -679,10 +763,10 @@ export function AdminPanel({ role }: AdminPanelProps) {
               </label>
             </details>
             <div className="admin-panel__actions">
-              <button type="button" onClick={() => void handleSavePlatformLlm()} disabled={platformLlmBusy || !platformLlmForm.base_url.trim() || !platformLlmForm.model.trim()}>
+              <button type="button" className="action-button" onClick={() => void handleSavePlatformLlm()} disabled={platformLlmBusy || !platformLlmForm.base_url.trim() || !platformLlmForm.model.trim()}>
                 {platformLlmBusy ? "保存中..." : "保存平台 LLM"}
               </button>
-              <button type="button" className="danger-button" onClick={() => void handleResetPlatformLlm()} disabled={platformLlmBusy}>
+              <button type="button" className="action-button action-button--ghost" onClick={() => void handleResetPlatformLlm()} disabled={platformLlmBusy}>
                 清除覆盖
               </button>
             </div>
@@ -842,6 +926,80 @@ export function AdminPanel({ role }: AdminPanelProps) {
                 <code>{item.provider} : {item.provider_user_id}</code>
               </article>
             ))}
+          </div>
+        </div>
+      ) : null}
+
+      {(integrationGuide || integrationGuideBusy || integrationGuideError) ? (
+        <div className="guide-modal-backdrop" onClick={closeIntegrationGuide}>
+          <div className="guide-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="guide-modal__header">
+              <div>
+                <h4>接入教程</h4>
+                <p>{integrationGuidePlatformName || integrationGuide?.display_name || "平台接入说明"}：按顺序复制代码块，按提示替换高亮内容即可。</p>
+              </div>
+              <button type="button" className="icon-button" onClick={closeIntegrationGuide} aria-label="关闭接入教程">
+                ×
+              </button>
+            </div>
+
+            {integrationGuideBusy ? <div className="admin-panel__empty">接入教程加载中...</div> : null}
+            {integrationGuideError ? <div className="admin-panel__error">{integrationGuideError}</div> : null}
+
+            {integrationGuide ? (
+              <div className="guide-modal__body">
+                <section className="guide-section">
+                  <div className="guide-split-layout">
+                    <div className="guide-split-layout__code">
+                      <div className="guide-section">
+                        <h5>前端复制代码</h5>
+                        <div className="guide-section__head">
+                          <span className="guide-section__label">复制后放到全局布局页</span>
+                          <button type="button" className="action-button small" onClick={() => void copyText(integrationGuide.snippets.frontend)}>
+                            复制
+                          </button>
+                        </div>
+                        <pre className="guide-code-block"><code>{renderHighlightedSnippet(integrationGuide.snippets.frontend)}</code></pre>
+                      </div>
+
+                      <div className="guide-section">
+                        <h5>后端 .env 示例</h5>
+                        <div className="guide-section__head">
+                          <span className="guide-section__label">推荐放到你们后端服务的环境变量或 .env 文件</span>
+                          <button type="button" className="action-button small" onClick={() => void copyText(integrationGuide.snippets.backend_env)}>
+                            复制
+                          </button>
+                        </div>
+                        <pre className="guide-code-block guide-code-block--env"><code>{renderHighlightedSnippet(integrationGuide.snippets.backend_env)}</code></pre>
+                      </div>
+
+                      <div className="guide-section">
+                        <h5>后端 Bind 示例</h5>
+                        <div className="guide-section__head">
+                          <span className="guide-section__label">完整 FastAPI 示例，复制后按你们用户体系改 user 获取逻辑</span>
+                          <button type="button" className="action-button small" onClick={() => void copyText(integrationGuide.snippets.backend_fastapi)}>
+                            复制
+                          </button>
+                        </div>
+                        <pre className="guide-code-block"><code>{renderHighlightedSnippet(integrationGuide.snippets.backend_fastapi)}</code></pre>
+                      </div>
+                    </div>
+
+                    <aside className="guide-side-panel">
+                      <h6>接入说明</h6>
+                      <div className="guide-note-list">
+                        {integrationGuideDetails.map((item) => (
+                          <div key={item.title} className="guide-note-item">
+                            <strong>{item.title}</strong>
+                            <p>{item.body}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </aside>
+                  </div>
+                </section>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

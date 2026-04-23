@@ -20,6 +20,18 @@ export type PlatformCreatePayload = {
   owner_user_id?: number;
 };
 
+export type PlatformIntegrationGuide = {
+  platform_key: string;
+  display_name: string;
+  bind_api_path: string;
+  frontend_script_path: string;
+  snippets: {
+    frontend: string;
+    backend_env: string;
+    backend_fastapi: string;
+  };
+};
+
 export type PlatformBaselineFile = {
   name: string;
   relative_path: string;
@@ -223,6 +235,14 @@ export async function createPlatform(payload: PlatformCreatePayload) {
   });
   if (!response.ok) {
     throw new Error(`平台注册失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getPlatformIntegrationGuide(platformId: number) {
+  const response = await apiFetch(`/platforms/${platformId}/integration-guide`);
+  if (!response.ok) {
+    throw new Error(`获取平台接入教程失败: ${response.status}`);
   }
   return response.json();
 }
