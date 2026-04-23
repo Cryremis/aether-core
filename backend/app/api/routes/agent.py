@@ -13,6 +13,15 @@ from app.services.store import store_service
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
 
+class AbortRequest:
+    pass
+
+
+class AbortResponse:
+    success: bool
+    partial_content: str | None
+
+
 def _ensure_session_access(session_id: str, auth: AuthContext):
     conversation = store_service.get_conversation_by_session(session_id)
     if conversation is None:
@@ -59,3 +68,11 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+
+@router.post("/{session_id}/abort")
+async def abort_session(session_id: str, auth: AuthContext = Depends(get_auth_context)):
+    """中断当前回合，保存已生成的内容。"""
+    session = _ensure_session_access(session_id, auth)
+    session.request_abort()
+    return {"success": True, "partial_content": session.partial_content}

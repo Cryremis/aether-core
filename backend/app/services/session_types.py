@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -41,6 +42,18 @@ class AgentSession:
     created_at: float = field(default_factory=time.time)
     last_access: float = field(default_factory=time.time)
     workspace: SandboxWorkspace | None = None
+    abort_event: asyncio.Event = field(default_factory=asyncio.Event)
+    partial_content: str = ""
 
     def touch(self) -> None:
         self.last_access = time.time()
+
+    def request_abort(self) -> None:
+        self.abort_event.set()
+
+    def clear_abort(self) -> None:
+        self.abort_event.clear()
+        self.partial_content = ""
+
+    def is_aborted(self) -> bool:
+        return self.abort_event.is_set()

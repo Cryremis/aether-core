@@ -37,6 +37,7 @@ class AgentEvent(BaseModel):
         "result",
         "completed",
         "error",
+        "aborted",
     ]
     session_id: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

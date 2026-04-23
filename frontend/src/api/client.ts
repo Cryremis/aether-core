@@ -519,11 +519,22 @@ export function getDownloadUrl(sessionId: string, fileId: string) {
   return `${API_BASE}/agent/files/${encodeURIComponent(fileId)}/download?session_id=${encodeURIComponent(sessionId)}&access_token=${token}`;
 }
 
+export async function abortSession(sessionId: string) {
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/abort`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`中断会话失败: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function streamChat(
   sessionId: string,
   message: string,
   allowNetwork: boolean,
   onEvent: (event: Record<string, unknown>) => void,
+  abortSignal?: AbortSignal,
 ) {
   const headers = new Headers({ "Content-Type": "application/json" });
   const token = getAccessToken();
@@ -539,6 +550,7 @@ export async function streamChat(
       message,
       allow_network: allowNetwork,
     }),
+    signal: abortSignal,
   });
 
   if (!response.ok || !response.body) {

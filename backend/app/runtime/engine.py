@@ -111,6 +111,23 @@ class AgentEngine:
 
         while True:
             turn_count += 1
+            
+            if session.is_aborted():
+                yield make_event(
+                    session,
+                    "aborted",
+                    partial_content=session.partial_content,
+                    interrupt_point="turn_start",
+                )
+                yield make_event(
+                    session,
+                    "completed",
+                    elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                    subtype="aborted",
+                )
+                session.clear_abort()
+                return
+            
             runtime_seconds = int(time.perf_counter() - started_at)
             if settings.agent_max_runtime_seconds > 0 and runtime_seconds >= settings.agent_max_runtime_seconds:
                 yield make_event(
@@ -448,6 +465,23 @@ class AgentEngine:
                                 )
                             )
                         session_service.persist(session)
+                    
+                    if session.is_aborted():
+                        yield make_event(
+                            session,
+                            "aborted",
+                            partial_content=session.partial_content,
+                            interrupt_point="tool_finished",
+                        )
+                        yield make_event(
+                            session,
+                            "completed",
+                            elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                            subtype="aborted",
+                        )
+                        session.clear_abort()
+                        return
+                    
                 context_pipeline.reset_reactive_retry(session)
                 continue
 

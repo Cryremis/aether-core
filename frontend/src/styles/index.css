@@ -531,6 +531,68 @@ a { text-decoration: none; color: var(--accent); }
 .send-btn.active { background: var(--text-primary); color: #ffffff; }
 .send-btn.active:hover { background: #334155; transform: scale(1.08); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 
+.stop-btn { background: #fef2f2; color: var(--error); border-radius: 50%; padding: 8px; width: 36px; height: 36px; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); border: 1px solid rgba(239, 68, 68, 0.3); }
+.stop-btn:hover { background: var(--error); color: #ffffff; transform: scale(1.08); box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3); }
+
+.composer-actions__right { display: flex; align-items: center; gap: 8px; }
+
+.queued-messages-dock {
+  max-width: 840px;
+  margin: 0 auto 12px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 14px;
+  box-shadow: 0 2px 12px -4px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.queued-messages-dock__count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.queued-message-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-sidebar);
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.queued-message-item__content {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queued-message-item__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.queued-message-item__remove:hover {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
 .composer-footer { text-align: center; font-size: 11px; color: var(--text-tertiary); margin-top: 14px; font-weight: 500; letter-spacing: 0.02em; }
 
 /* ================= Markdown 苹果系美化排版 ================= */

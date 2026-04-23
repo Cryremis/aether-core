@@ -5,6 +5,7 @@ import "highlight.js/styles/github-dark-dimmed.css";
 import { useEffect, useRef, useState } from "react";
 
 import {
+  abortSession,
   bootstrapAdminSession,
   deleteUserLlmConfig,
   getDownloadUrl,
@@ -58,6 +59,12 @@ type AssistantSegment =
 type ChatMessage =
   | { id: string; role: "user"; content: string }
   | { id: string; role: "assistant"; blocks: AssistantBlock[]; elapsedMs: number | null; streaming: boolean };
+
+type QueuedMessage = {
+  id: string;
+  content: string;
+  queuedAt: number;
+};
 
 type ContextStatus = {
   model: string;
@@ -160,6 +167,7 @@ const Icons = {
   Menu: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>,
   SidebarClose: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>,
   Send: () => <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>,
+  Stop: () => <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>,
   Attach: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>,
   Globe: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18"></path><path d="M12 3a15 15 0 0 0 0 18"></path></svg>,
   File: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>,
@@ -168,18 +176,39 @@ const Icons = {
   Loader: () => <svg className="spin-anim" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>,
   Check: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="#10b981" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>,
   Sparkles: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>,
+  Close: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>,
 };
 
 type ComposerProps = {
   busy: boolean;
   disabled: boolean;
   allowNetwork: boolean;
+  queuedMessages: QueuedMessage[];
   onAllowNetworkChange: (value: boolean) => void;
   onSend: (text: string) => void;
+  onStop: () => void;
+  onRemoveQueued: (id: string) => void;
   onUpload: (file: File) => void;
 };
 
-function Composer({ busy, disabled, allowNetwork, onAllowNetworkChange, onSend, onUpload }: ComposerProps) {
+function QueuedMessagesDock({ messages, onRemove }: { messages: QueuedMessage[]; onRemove: (id: string) => void }) {
+  if (messages.length === 0) return null;
+  return (
+    <div className="queued-messages-dock">
+      <span className="queued-messages-dock__count">{messages.length} 条消息已排队</span>
+      {messages.map((msg) => (
+        <div key={msg.id} className="queued-message-item">
+          <span className="queued-message-item__content">{msg.content}</span>
+          <button type="button" className="queued-message-item__remove" onClick={() => onRemove(msg.id)}>
+            <Icons.Close />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Composer({ busy, disabled, allowNetwork, queuedMessages, onAllowNetworkChange, onSend, onStop, onRemoveQueued, onUpload }: ComposerProps) {
   const [input, setInput] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -189,7 +218,7 @@ function Composer({ busy, disabled, allowNetwork, onAllowNetworkChange, onSend, 
     textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
   }, [input]);
 
-  const canSend = input.trim().length > 0 && !busy && !disabled;
+  const canSend = input.trim().length > 0 && !disabled;
 
   const handleSend = () => {
     if (!canSend) return;
@@ -200,6 +229,7 @@ function Composer({ busy, disabled, allowNetwork, onAllowNetworkChange, onSend, 
 
   return (
     <div className="composer-area">
+      <QueuedMessagesDock messages={queuedMessages} onRemove={onRemoveQueued} />
       <div className="composer-box">
         <textarea
           ref={textareaRef}
@@ -212,7 +242,7 @@ function Composer({ busy, disabled, allowNetwork, onAllowNetworkChange, onSend, 
               handleSend();
             }
           }}
-          placeholder="发送指令，与系统深度交互..."
+          placeholder={busy ? "输入消息将在工具执行后发送..." : "发送指令，与系统深度交互..."}
           rows={1}
         />
         <div className="composer-actions">
@@ -232,9 +262,16 @@ function Composer({ busy, disabled, allowNetwork, onAllowNetworkChange, onSend, 
               <span>联网搜索</span>
             </button>
           </div>
-          <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
-            <Icons.Send />
-          </button>
+          <div className="composer-actions__right">
+            <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
+              <Icons.Send />
+            </button>
+            {busy && (
+              <button className="icon-button stop-btn" onClick={onStop} title="停止">
+                <Icons.Stop />
+              </button>
+            )}
+          </div>
         </div>
       </div>
       <div className="composer-footer">AetherCore System · Advanced Mode</div>
@@ -319,7 +356,10 @@ const [allowNetwork, setAllowNetwork] = useState(true);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const queuedMessagesRef = useRef<QueuedMessage[]>([]);
   const isStreamingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const newlyCreatedSessionRef = useRef<string | null>(null);
   const streamingTimerRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -650,6 +690,14 @@ return { title: toolName, meta: "tool" };
 
   const handleSend = async (userText: string) => {
     if (!userText) return;
+    
+    if (isStreamingRef.current) {
+      const newMsg = { id: `queued-${Date.now()}`, content: userText, queuedAt: Date.now() };
+      setQueuedMessages((current) => [...current, newMsg]);
+      queuedMessagesRef.current = [...queuedMessagesRef.current, newMsg];
+      return;
+    }
+    
     const assistantId = `assistant-${Date.now()}`;
 
     let effectiveSessionId = sessionId || localSessionId;
@@ -666,8 +714,10 @@ return { title: toolName, meta: "tool" };
       }
     }
 
-const roundStartTime = Date.now();
+    const roundStartTime = Date.now();
 
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
     isStreamingRef.current = true;
     shouldStickToBottomRef.current = true;
     setBusy(true);
@@ -691,6 +741,8 @@ const roundStartTime = Date.now();
     let activeReasoningId = "";
     let activeContentId = "";
     let activeContentText = "";
+    let wasAborted = false;
+    let partialContent = "";
 
     try {
       if (!effectiveSessionId) {
@@ -699,6 +751,17 @@ const roundStartTime = Date.now();
       }
       await streamChat(effectiveSessionId, userText, allowNetwork, (event) => {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
+
+        if (event.type === "aborted") {
+          wasAborted = true;
+          partialContent = String(payload.partial_content ?? "");
+          if (partialContent && activeContentId) {
+            updateAssistantBlock(assistantId, activeContentId, (block) =>
+              block.kind === "content" ? { ...block, content: partialContent, status: "done" } : block,
+            );
+          }
+          return;
+        }
 
         if (event.type === "context_status") {
           setContextStatus({
@@ -883,9 +946,13 @@ const roundStartTime = Date.now();
           });
           setError(typeof payload.message === "string" ? payload.message : "执行失败");
         }
-      });
+      }, abortController.signal);
     } catch (chatError) {
-      setError(chatError instanceof Error ? chatError.message : "对话执行失败");
+      if (chatError instanceof Error && chatError.name === "AbortError") {
+        wasAborted = true;
+      } else {
+        setError(chatError instanceof Error ? chatError.message : "对话执行失败");
+      }
     } finally {
       if (streamingTimerRef.current !== null) {
         window.clearInterval(streamingTimerRef.current);
@@ -898,12 +965,39 @@ const roundStartTime = Date.now();
         ),
       );
       isStreamingRef.current = false;
+      abortControllerRef.current = null;
       setBusy(false);
       if (wasNewSession && effectiveSessionId) {
         onSessionCreated?.(effectiveSessionId);
       }
       void onSessionRefresh?.();
+      
+      const currentQueue = queuedMessagesRef.current;
+      if (currentQueue.length > 0) {
+        const nextMessage = currentQueue[0];
+        queuedMessagesRef.current = currentQueue.slice(1);
+        setQueuedMessages(queuedMessagesRef.current);
+        void handleSend(nextMessage.content);
+      }
     }
+  };
+
+  const handleStop = async () => {
+    if (!abortControllerRef.current || !isStreamingRef.current) return;
+    const effectiveSessionId = sessionId || localSessionId;
+    if (effectiveSessionId) {
+      try {
+        await abortSession(effectiveSessionId);
+      } catch (err) {
+        console.error("中断请求失败:", err);
+      }
+    }
+    abortControllerRef.current.abort();
+  };
+
+  const handleRemoveQueued = (id: string) => {
+    queuedMessagesRef.current = queuedMessagesRef.current.filter((msg) => msg.id !== id);
+    setQueuedMessages(queuedMessagesRef.current);
   };
 
   const handleUpload = async (file: File | undefined) => {
@@ -1325,8 +1419,11 @@ const roundStartTime = Date.now();
           busy={busy}
           disabled={composerDisabled}
           allowNetwork={allowNetwork}
+          queuedMessages={queuedMessages}
           onAllowNetworkChange={setAllowNetwork}
           onSend={(text) => void handleSend(text)}
+          onStop={() => void handleStop()}
+          onRemoveQueued={handleRemoveQueued}
           onUpload={(file) => void handleUpload(file)}
         />
       </section>
