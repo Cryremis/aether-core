@@ -907,7 +907,10 @@ const roundStartTime = Date.now();
     }
   };
 
-  const renderMarkdown = (value: string) => ({ __html: marked.parse(value) as string });
+  const renderMarkdown = (value?: string | null) => {
+    const safeValue = typeof value === "string" ? value : "";
+    return { __html: marked.parse(safeValue) as string };
+  };
 
   const renderAssistantSegments = (blocks: AssistantBlock[]): AssistantSegment[] => {
     const segments: AssistantSegment[] = [];
