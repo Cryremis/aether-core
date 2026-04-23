@@ -56,7 +56,7 @@ type AssistantSegment =
 
 type ChatMessage =
   | { id: string; role: "user"; content: string }
-  | { id: string; role: "assistant"; blocks: AssistantBlock[] };
+  | { id: string; role: "assistant"; blocks: AssistantBlock[]; elapsedMs: number | null; streaming: boolean };
 
 type ContextStatus = {
   model: string;
@@ -250,6 +250,8 @@ function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
           blocks: item.blocks?.length
             ? item.blocks
             : [{ id: `history-content-${index}`, kind: "content", content: item.content, status: "done" }],
+          elapsedMs: null,
+          streaming: false,
         }
       : { id: `history-user-${index}`, role: "user", content: item.content },
   );
@@ -260,6 +262,15 @@ function formatTokenCount(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2).replace(/\.00$/, "")}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   return String(Math.round(value));
+}
+
+function formatElapsedMs(ms: number | null) {
+  if (ms === null) return null;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.round((ms % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
 }
 
 export function WorkbenchPage({
@@ -301,13 +312,14 @@ export function WorkbenchPage({
     has_api_key: false,
     resolved_scope: "global",
   });
-  const [allowNetwork, setAllowNetwork] = useState(true);
+const [allowNetwork, setAllowNetwork] = useState(true);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
   const isStreamingRef = useRef(false);
   const newlyCreatedSessionRef = useRef<string | null>(null);
-const shouldStickToBottomRef = useRef(true);
+  const streamingTimerRef = useRef<number | null>(null);
+  const shouldStickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
 
   const historyRef = useRef<HTMLDivElement | null>(null);
@@ -626,6 +638,8 @@ return { title: toolName, meta: "tool" };
       }
     }
 
+const roundStartTime = Date.now();
+
     isStreamingRef.current = true;
     shouldStickToBottomRef.current = true;
     setBusy(true);
@@ -633,9 +647,18 @@ return { title: toolName, meta: "tool" };
 
     setMessages((current) => [
       ...current,
-      { id: `user-${Date.now()}`, role: "user", content: userText },
-      { id: assistantId, role: "assistant", blocks: [] },
+      { id: `user-${roundStartTime}`, role: "user", content: userText },
+      { id: assistantId, role: "assistant", blocks: [], elapsedMs: 0, streaming: true },
     ]);
+
+    streamingTimerRef.current = window.setInterval(() => {
+      const elapsed = Date.now() - roundStartTime;
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs: elapsed } : item,
+        ),
+      );
+    }, 100);
 
     let activeReasoningId = "";
     let activeContentId = "";
@@ -836,6 +859,16 @@ return { title: toolName, meta: "tool" };
     } catch (chatError) {
       setError(chatError instanceof Error ? chatError.message : "对话执行失败");
     } finally {
+      if (streamingTimerRef.current !== null) {
+        window.clearInterval(streamingTimerRef.current);
+        streamingTimerRef.current = null;
+      }
+      const elapsedMs = Date.now() - roundStartTime;
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false } : item,
+        ),
+      );
       isStreamingRef.current = false;
       setBusy(false);
       if (wasNewSession && effectiveSessionId) {
@@ -1246,6 +1279,11 @@ return { title: toolName, meta: "tool" };
                       ),
                     )}
                   </div>
+                  {message.elapsedMs !== null && message.elapsedMs >= 0 ? (
+                    <div className="elapsed-badge">
+                      {formatElapsedMs(message.elapsedMs)}
+                    </div>
+                  ) : null}
                 </div>
               ),
             )}
