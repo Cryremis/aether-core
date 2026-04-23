@@ -13,7 +13,7 @@ class PasswordLoginRequest(BaseModel):
 
 
 class OAuthCallbackRequest(BaseModel):
-    """W3 OAuth 回调请求。"""
+    """OAuth 回调请求。"""
 
     code: str
     redirect_uri: str
@@ -43,7 +43,7 @@ class CurrentUserResponse(BaseModel):
 class AdminWhitelistCreateRequest(BaseModel):
     """管理员白名单创建请求。"""
 
-    provider: Literal["w3", "password"]
+    provider: str
     provider_user_id: str
     full_name: str | None = None
     email: str | None = None

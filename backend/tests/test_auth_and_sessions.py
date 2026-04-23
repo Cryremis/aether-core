@@ -129,21 +129,36 @@ def test_embed_bootstrap_rejects_platform_key_mismatch(tmp_path):
     assert response.status_code == 403
 
 
-def test_w3_whitelist_supports_account_or_employee_number(tmp_path, monkeypatch):
+def test_oauth_whitelist_supports_configured_match_fields(tmp_path, monkeypatch):
     initialize_isolated_runtime(tmp_path)
 
+    monkeypatch.setattr(settings, "auth_oauth_providers", "corp-sso")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_DISPLAY_NAME", "Company SSO")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_CLIENT_ID", "client-id")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_AUTHORIZE_URL", "https://sso.example.com/oauth2/authorize")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_TOKEN_URL", "https://sso.example.com/oauth2/token")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_USERINFO_URL", "https://sso.example.com/oauth2/userinfo")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_USER_ID_FIELDS", "uuid")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_USER_NAME_FIELDS", "displayNameCn")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_USER_EMAIL_FIELDS", "email")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_WHITELIST_MATCH_FIELDS", "uuid,uid,employeeNumber")
+    from app.services.oauth_service import oauth_service
+
+    oauth_service.reload()
+
     store_service.upsert_admin_whitelist(
-        provider="w3",
+        provider="corp-sso",
         provider_user_id="A1234567",
         full_name="A1234567",
         email=None,
         role="platform_admin",
     )
 
-    async def fake_exchange_code_for_token(code: str, redirect_uri: str):
+    async def fake_exchange_code_for_token(provider_key: str, code: str, redirect_uri: str):
         return {"access_token": "fake-token"}
 
-    async def fake_get_user_info(access_token: str):
+    async def fake_get_user_info(provider_key: str, access_token: str):
         return {
             "uuid": "uuid-001",
             "uid": "A1234567",
@@ -155,9 +170,9 @@ def test_w3_whitelist_supports_account_or_employee_number(tmp_path, monkeypatch)
     monkeypatch.setattr("app.services.auth_service.oauth_service.exchange_code_for_token", fake_exchange_code_for_token)
     monkeypatch.setattr("app.services.auth_service.oauth_service.get_user_info", fake_get_user_info)
 
-    result = asyncio.run(auth_service.login_with_w3("demo-code", "http://localhost/callback"))
+    result = asyncio.run(auth_service.login_with_oauth("corp-sso", "demo-code", "http://localhost/callback"))
 
-    assert result.user.provider == "w3"
+    assert result.user.provider == "corp-sso"
     assert result.user.full_name == "Zhang San"
     assert result.user.role == "platform_admin"
 

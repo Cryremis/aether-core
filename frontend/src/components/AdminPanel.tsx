@@ -110,6 +110,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; item: PlatformBaselineEntryItem | null }>({ visible: false, x: 0, y: 0, item: null });
 
   // Form States
+  const [providerKey, setProviderKey] = useState("password");
   const [providerUserId, setProviderUserId] = useState("");
   const [whitelistRole, setWhitelistRole] = useState<AdminWhitelistRole>("platform_admin");
   const[platformKey, setPlatformKey] = useState("");
@@ -266,7 +267,16 @@ export function AdminPanel({ role }: AdminPanelProps) {
   // Form Handlers
   const handleCreateWhitelist = async (e: FormEvent) => { /* 略，原逻辑保持 */
     e.preventDefault();
-    try { setError(""); await createAdminWhitelist({ provider: "w3", provider_user_id: providerUserId.trim(), role: whitelistRole }); setProviderUserId(""); await loadData(); } catch (err) { setError(err instanceof Error ? err.message : "新增白名单失败"); }
+    try {
+      setError("");
+      await createAdminWhitelist({
+        provider: providerKey.trim(),
+        provider_user_id: providerUserId.trim(),
+        role: whitelistRole,
+      });
+      setProviderUserId("");
+      await loadData();
+    } catch (err) { setError(err instanceof Error ? err.message : "新增白名单失败"); }
   };
 
   const handleCreatePlatform = async (e: FormEvent) => { /* 略，原逻辑保持 */
@@ -636,14 +646,15 @@ export function AdminPanel({ role }: AdminPanelProps) {
         <div className="admin-grid-forms">
           <form className="admin-panel__form" onSubmit={handleCreateWhitelist}>
             <h4>管理员白名单</h4>
-            <p className="admin-panel__hint">填写 W3 账号或工号。支持 `uuid`、`uid` 自动匹配。</p>
-            <input value={providerUserId} onChange={(e) => setProviderUserId(e.target.value)} placeholder="W3账号或工号" />
+            <p className="admin-panel__hint">按 provider key + 用户标识录入，例如 `password`、`corp-sso`、`github`。</p>
+            <input value={providerKey} onChange={(e) => setProviderKey(e.target.value)} placeholder="provider key，例如 github" />
+            <input value={providerUserId} onChange={(e) => setProviderUserId(e.target.value)} placeholder="用户唯一标识、工号或账号" />
             <select value={whitelistRole} onChange={(e) => setWhitelistRole(e.target.value as AdminWhitelistRole)}>
               <option value="platform_admin">平台管理员</option>
               <option value="system_admin">系统管理员</option>
               <option value="debug">Debug 用户</option>
             </select>
-            <button type="submit" className="action-button w-full" disabled={!providerUserId.trim()}>添加白名单</button>
+            <button type="submit" className="action-button w-full" disabled={!providerKey.trim() || !providerUserId.trim()}>添加白名单</button>
           </form>
           <form className="admin-panel__form" onSubmit={handleCreatePlatform}>
             <h4>注册新接入平台</h4>

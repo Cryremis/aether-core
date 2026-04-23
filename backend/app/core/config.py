@@ -40,12 +40,8 @@ class Settings(BaseSettings):
     auth_system_admin_password: str = "admin123456"
     auth_debug_username: str = "debug"
     auth_debug_password: str = "debug123456"
-    auth_w3_client_id: str = ""
-    auth_w3_client_secret: str = ""
-    auth_w3_base_url: str = ""
-    auth_w3_authorize_path: str = "/oauth2/authorize"
-    auth_w3_token_path: str = "/oauth2/accesstoken"
-    auth_w3_userinfo_path: str = "/oauth2/userinfo"
+    auth_oauth_providers: str = ""
+    auth_oauth_config_json: str = ""
 
     agent_max_turns: int = 0
     agent_max_runtime_seconds: int = 1800

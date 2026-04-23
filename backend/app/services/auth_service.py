@@ -22,16 +22,25 @@ class AuthResult:
 class AuthService:
     """管理员认证服务。"""
 
-    def _resolve_w3_whitelist(self, user_info: dict[str, Any]) -> dict[str, Any] | None:
-        identifiers = [
-            str(user_info.get("uuid") or "").strip(),
-            str(user_info.get("uid") or "").strip(),
-            str(user_info.get("employeeNumber") or "").strip(),
-        ]
-        for identifier in identifiers:
+    def _extract_first_non_empty(self, source: dict[str, Any], field_names: tuple[str, ...]) -> str:
+        for field_name in field_names:
+            value = str(source.get(field_name) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _resolve_oauth_whitelist(
+        self,
+        *,
+        provider_key: str,
+        user_info: dict[str, Any],
+        identifier_fields: tuple[str, ...],
+    ) -> dict[str, Any] | None:
+        for field_name in identifier_fields:
+            identifier = str(user_info.get(field_name) or "").strip()
             if not identifier:
                 continue
-            whitelist = store_service.get_whitelist_entry("w3", identifier)
+            whitelist = store_service.get_whitelist_entry(provider_key, identifier)
             if whitelist is not None:
                 return whitelist
         return None
@@ -43,28 +52,39 @@ class AuthService:
         token, expires_in = token_service.create_admin_token(user.user_id, user.role)
         return AuthResult(token=token, expires_in=expires_in, user=user)
 
-    async def login_with_w3(self, code: str, redirect_uri: str) -> AuthResult:
-        token_data = await oauth_service.exchange_code_for_token(code, redirect_uri)
-        access_token = token_data.get("access_token")
+    async def login_with_oauth(self, provider_key: str, code: str, redirect_uri: str) -> AuthResult:
+        provider_config = oauth_service.get_provider_config(provider_key)
+        token_data = await oauth_service.exchange_code_for_token(provider_key, code, redirect_uri)
+        access_token = str(token_data.get("access_token") or "").strip()
         if not access_token:
-            raise RuntimeError("W3 未返回 access_token")
-        user_info = await oauth_service.get_user_info(access_token)
-        provider_user_id = str(user_info.get("uuid") or "").strip()
-        if not provider_user_id:
-            raise RuntimeError("无法从 W3 获取唯一用户标识 uuid")
+            raise RuntimeError(f"{provider_config.display_name} 未返回 access_token")
 
-        user = store_service.get_user_by_provider("w3", provider_user_id)
+        user_info = await oauth_service.get_user_info(provider_key, access_token)
+        provider_user_id = self._extract_first_non_empty(user_info, provider_config.user_id_fields)
+        if not provider_user_id:
+            raise RuntimeError(f"无法从 {provider_config.display_name} 获取唯一用户标识")
+
+        user = store_service.get_user_by_provider(provider_key, provider_user_id)
         if user is None:
-            whitelist = self._resolve_w3_whitelist(user_info)
+            whitelist = self._resolve_oauth_whitelist(
+                provider_key=provider_key,
+                user_info=user_info,
+                identifier_fields=provider_config.whitelist_match_fields,
+            )
             if whitelist is None:
-                raise RuntimeError("当前 W3 账号未被授权为 AetherCore 管理员")
+                raise RuntimeError(
+                    f"当前 {provider_config.display_name} 账号未被授权为 AetherCore 管理员"
+                )
             user = store_service.create_user_from_whitelist(
-                provider="w3",
+                provider=provider_key,
                 provider_user_id=provider_user_id,
-                full_name=user_info.get("displayNameCn") or whitelist["full_name"],
-                email=user_info.get("email") or whitelist.get("email"),
+                full_name=self._extract_first_non_empty(user_info, provider_config.user_name_fields)
+                or whitelist["full_name"],
+                email=self._extract_first_non_empty(user_info, provider_config.user_email_fields)
+                or whitelist.get("email"),
                 role=whitelist["role"],
             )
+
         token, expires_in = token_service.create_admin_token(user.user_id, user.role)
         return AuthResult(token=token, expires_in=expires_in, user=user)
 

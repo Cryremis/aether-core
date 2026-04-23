@@ -886,7 +886,7 @@ a { text-decoration: none; color: var(--accent); }
 }
 
 .login-form button,
-.login-w3-button,
+.login-oauth-button,
 .history-sidebar__header button,
 .history-logout,
 .resource-upload,
@@ -898,7 +898,7 @@ a { text-decoration: none; color: var(--accent); }
 }
 
 .login-form button,
-.login-w3-button {
+.login-oauth-button {
   width: 100%;
   min-height: 44px;
   border-radius: 14px;
@@ -911,14 +911,20 @@ a { text-decoration: none; color: var(--accent); }
   margin-top: 4px;
 }
 
-.login-w3-button {
+.login-oauth-grid {
+  display: grid;
+  gap: 12px;
   margin-top: 12px;
+}
+
+.login-oauth-button {
+  margin-top: 0;
   background: #eff6ff;
   color: #1d4ed8;
 }
 
 .login-form button:hover:not(:disabled),
-.login-w3-button:hover:not(:disabled),
+.login-oauth-button:hover:not(:disabled),
 .history-sidebar__header button:hover,
 .history-logout:hover,
 .resource-upload:hover,
@@ -928,7 +934,7 @@ a { text-decoration: none; color: var(--accent); }
 }
 
 .login-form button:disabled,
-.login-w3-button:disabled,
+.login-oauth-button:disabled,
 .skill-form button:disabled,
 .chat-composer__send:disabled {
   opacity: 0.55;

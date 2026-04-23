@@ -5,11 +5,17 @@ export type PasswordLoginPayload = {
 };
 
 export type AdminWhitelistPayload = {
-  provider: "w3" | "password";
+  provider: string;
   provider_user_id: string;
   full_name?: string;
   email?: string;
   role: "system_admin" | "platform_admin" | "debug";
+};
+
+export type OAuthProviderConfig = {
+  provider_key: string;
+  display_name: string;
+  authorize_url_template: string;
 };
 
 export type PlatformCreatePayload = {
@@ -166,8 +172,8 @@ export async function loginWithPassword(payload: PasswordLoginPayload) {
   return response.json();
 }
 
-export async function loginWithW3Callback(code: string, redirectUri: string) {
-  const response = await fetch(`${API_BASE}/auth/login/w3/callback`, {
+export async function loginWithOAuthCallback(providerKey: string, code: string, redirectUri: string) {
+  const response = await fetch(`${API_BASE}/auth/login/oauth/${encodeURIComponent(providerKey)}/callback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -177,16 +183,16 @@ export async function loginWithW3Callback(code: string, redirectUri: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`W3 登录失败: ${response.status}`);
+    throw new Error(`OAuth login failed: ${response.status}`);
   }
 
   return response.json();
 }
 
-export async function getW3Config() {
-  const response = await fetch(`${API_BASE}/auth/w3/config`);
+export async function listOAuthProviders() {
+  const response = await fetch(`${API_BASE}/auth/oauth/providers`);
   if (!response.ok) {
-    throw new Error(`获取 W3 配置失败: ${response.status}`);
+    throw new Error(`Failed to load OAuth providers: ${response.status}`);
   }
   return response.json();
 }

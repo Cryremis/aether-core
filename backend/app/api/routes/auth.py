@@ -12,10 +12,8 @@ from app.schemas.auth import (
 )
 from app.schemas.common import ApiResponse
 from app.services.auth_service import auth_service
-from app.core.config import settings
 from app.services.oauth_service import oauth_service
 from app.services.store import store_service
-from app.services.llm_config_service import llm_config_service
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -33,10 +31,10 @@ def login_with_password(request: PasswordLoginRequest) -> AuthTokenResponse:
     )
 
 
-@router.post("/login/w3/callback", response_model=AuthTokenResponse)
-async def login_with_w3(request: OAuthCallbackRequest) -> AuthTokenResponse:
+@router.post("/login/oauth/{provider_key}/callback", response_model=AuthTokenResponse)
+async def login_with_oauth(provider_key: str, request: OAuthCallbackRequest) -> AuthTokenResponse:
     try:
-        result = await auth_service.login_with_w3(request.code, request.redirect_uri)
+        result = await auth_service.login_with_oauth(provider_key, request.code, request.redirect_uri)
     except RuntimeError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     return AuthTokenResponse(
@@ -46,14 +44,11 @@ async def login_with_w3(request: OAuthCallbackRequest) -> AuthTokenResponse:
     )
 
 
-@router.get("/w3/config")
-def get_w3_config() -> ApiResponse:
+@router.get("/oauth/providers")
+def list_oauth_providers() -> ApiResponse:
     return ApiResponse(
-        message="W3 OAuth 配置",
-        data={
-            "enabled": bool(settings.auth_w3_base_url and settings.auth_w3_client_id),
-            "authorize_url_template": oauth_service.build_authorize_url("{redirect_uri}") if settings.auth_w3_base_url and settings.auth_w3_client_id else "",
-        },
+        message="OAuth 提供方列表",
+        data=oauth_service.list_enabled_providers(),
     )
 
 
@@ -79,13 +74,16 @@ def create_admin_whitelist(
 ) -> ApiResponse:
     display_name = (request.full_name or "").strip() or request.provider_user_id.strip()
     row = store_service.upsert_admin_whitelist(
-        provider=request.provider,
+        provider=request.provider.strip(),
         provider_user_id=request.provider_user_id.strip(),
         full_name=display_name,
         email=request.email,
         role=request.role,
     )
-    return ApiResponse(message="管理员白名单已更新", data=AdminWhitelistRecord(**row).model_dump(mode="json"))
+    return ApiResponse(
+        message="管理员白名单已更新",
+        data=AdminWhitelistRecord(**row).model_dump(mode="json"),
+    )
 
 
 @router.get("/admin-whitelist")
