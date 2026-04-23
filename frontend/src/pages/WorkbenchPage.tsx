@@ -2,7 +2,7 @@
 import { marked } from "marked";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark-dimmed.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   abortSession,
@@ -364,22 +364,58 @@ const [allowNetwork, setAllowNetwork] = useState(true);
   const streamingTimerRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
+  const bottomAnchorFrameRef = useRef<number | null>(null);
+  const bottomAnchorUntilRef = useRef(0);
+  const detailsToggleShouldStickRef = useRef(false);
+  const pendingSessionBottomScrollRef = useRef(false);
 
   const historyRef = useRef<HTMLDivElement | null>(null);
 
-  const updateStickToBottom = (node: HTMLDivElement) => {
+  const isNearBottom = (node: HTMLDivElement, threshold = 80) => {
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
-    shouldStickToBottomRef.current = distanceFromBottom <= 80;
+    return distanceFromBottom <= threshold;
   };
 
-  const scrollHistoryToBottom = () => {
+  const updateStickToBottom = (node: HTMLDivElement) => {
+    shouldStickToBottomRef.current = isNearBottom(node);
+  };
+
+  const scrollHistoryToBottom = (behavior: ScrollBehavior = "auto") => {
     const node = historyRef.current;
     if (!node) return;
     if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
     scrollFrameRef.current = window.requestAnimationFrame(() => {
-      node.scrollTop = node.scrollHeight;
+      node.scrollTo({ top: node.scrollHeight, behavior });
       scrollFrameRef.current = null;
     });
+  };
+
+  const holdBottomAnchor = (durationMs = 320) => {
+    const node = historyRef.current;
+    if (!node) return;
+
+    bottomAnchorUntilRef.current = Math.max(bottomAnchorUntilRef.current, performance.now() + durationMs);
+    if (bottomAnchorFrameRef.current !== null) return;
+
+    const tick = () => {
+      const current = historyRef.current;
+      if (!current) {
+        bottomAnchorFrameRef.current = null;
+        return;
+      }
+
+      if (shouldStickToBottomRef.current) {
+        current.scrollTop = current.scrollHeight;
+      }
+
+      if (performance.now() < bottomAnchorUntilRef.current && shouldStickToBottomRef.current) {
+        bottomAnchorFrameRef.current = window.requestAnimationFrame(tick);
+      } else {
+        bottomAnchorFrameRef.current = null;
+      }
+    };
+
+    bottomAnchorFrameRef.current = window.requestAnimationFrame(tick);
   };
 
   const handleHistoryScroll = () => {
@@ -451,9 +487,16 @@ window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [isSidebarOpen]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = historyRef.current;
     if (!node) return;
+    if (pendingSessionBottomScrollRef.current && !loading) {
+      pendingSessionBottomScrollRef.current = false;
+      shouldStickToBottomRef.current = true;
+      scrollHistoryToBottom();
+      holdBottomAnchor();
+      return;
+    }
     if (!shouldStickToBottomRef.current) return;
     scrollHistoryToBottom();
   }, [messages, loading]);
@@ -462,6 +505,19 @@ window.addEventListener("resize", handleResize);
     const node = historyRef.current;
     if (!node) return;
 
+    const rememberBottomIntent = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const summary = target.closest("summary");
+      if (!summary || !node.contains(summary)) return;
+      const details = summary.closest("details");
+      if (!(details instanceof HTMLDetailsElement)) return;
+      if (!details.classList.contains("tool-card") && !details.classList.contains("code-block-wrapper") && !details.classList.contains("reasoning-block")) {
+        return;
+      }
+      detailsToggleShouldStickRef.current = isNearBottom(node);
+    };
+
     const handleDetailsToggle = (event: Event) => {
       const details = event.target;
       if (!(details instanceof HTMLDetailsElement)) return;
@@ -469,22 +525,38 @@ window.addEventListener("resize", handleResize);
         return;
       }
 
+      const shouldKeepBottom = detailsToggleShouldStickRef.current || isNearBottom(node);
+      detailsToggleShouldStickRef.current = false;
+
       details.classList.remove("is-opening", "is-closing");
       void details.offsetHeight;
       details.classList.add(details.open ? "is-opening" : "is-closing");
+
+      if (shouldKeepBottom) {
+        shouldStickToBottomRef.current = true;
+        scrollHistoryToBottom();
+        holdBottomAnchor();
+      }
 
       window.setTimeout(() => {
         details.classList.remove("is-opening", "is-closing");
       }, 240);
     };
 
+    node.addEventListener("pointerdown", rememberBottomIntent, true);
+    node.addEventListener("keydown", rememberBottomIntent, true);
     node.addEventListener("toggle", handleDetailsToggle, true);
-    return () => node.removeEventListener("toggle", handleDetailsToggle, true);
+    return () => {
+      node.removeEventListener("pointerdown", rememberBottomIntent, true);
+      node.removeEventListener("keydown", rememberBottomIntent, true);
+      node.removeEventListener("toggle", handleDetailsToggle, true);
+    };
   }, []);
 
   useEffect(() => {
     return () => {
       if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+      if (bottomAnchorFrameRef.current !== null) window.cancelAnimationFrame(bottomAnchorFrameRef.current);
     };
   }, []);
 
@@ -647,6 +719,8 @@ window.addEventListener("resize", handleResize);
       return;
     }
 
+    shouldStickToBottomRef.current = true;
+    pendingSessionBottomScrollRef.current = true;
     setLoading(true);
     setError("");
     void loadSession(targetSessionId)

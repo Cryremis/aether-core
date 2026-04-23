@@ -2698,32 +2698,36 @@ details.tool-card, details.code-block-wrapper, details.reasoning-block {
   overflow: hidden;
 }
 
-details.tool-card,
-details.code-block-wrapper,
-details.reasoning-block {
+details::details-content {
+  transition: height 0.25s cubic-bezier(0.3, 0, 0.2, 1), opacity 0.6s ease, content-visibility 0.25s;
+  transition-behavior: allow-discrete;
+  height: 0;
+  opacity: 0;
   overflow: hidden;
 }
 
-details.tool-card.is-opening > .tool-body-wrapper,
-details.code-block-wrapper.is-opening > .code-content-wrapper,
-details.reasoning-block.is-opening > .reasoning-content {
-  animation: detailsSlideIn 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+details[open]::details-content {
+  height: auto;
+  opacity: 1;
+  display: block;
 }
 
-details.tool-card.is-closing > .tool-body-wrapper,
-details.code-block-wrapper.is-closing > .code-content-wrapper,
-details.reasoning-block.is-closing > .reasoning-content {
-  animation: detailsSlideOut 0.18s ease;
+@starting-style {
+  details[open]::details-content {
+    height: 0;
+    opacity: 0;
+  }
 }
 
-@keyframes detailsSlideIn {
+@supports not selector(::details-content) {
+  details[open] > *:not(summary) {
+    animation: detailsSlideFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+@keyframes detailsSlideFade {
   0% { opacity: 0; transform: translateY(-10px); }
   100% { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes detailsSlideOut {
-  0% { opacity: 1; transform: translateY(0); }
-  100% { opacity: 0; transform: translateY(-8px); }
 }
 
 .tool-body-wrapper, .code-content-wrapper {
