@@ -688,10 +688,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
 return { title: toolName, meta: "tool" };
   };
 
-  const handleSend = async (userText: string) => {
+  const handleSend = async (userText: string, skipAddUserBubble = false, userBubblesToAdd?: { id: string; content: string }[]) => {
     if (!userText) return;
     
-    if (isStreamingRef.current) {
+    if (!skipAddUserBubble && isStreamingRef.current) {
       const newMsg = { id: `queued-${Date.now()}`, content: userText, queuedAt: Date.now() };
       setQueuedMessages((current) => [...current, newMsg]);
       queuedMessagesRef.current = [...queuedMessagesRef.current, newMsg];
@@ -723,11 +723,19 @@ return { title: toolName, meta: "tool" };
     setBusy(true);
     setError("");
 
-    setMessages((current) => [
-      ...current,
-      { id: `user-${roundStartTime}`, role: "user", content: userText },
-      { id: assistantId, role: "assistant", blocks: [], elapsedMs: 0, streaming: true },
-    ]);
+    if (skipAddUserBubble && userBubblesToAdd && userBubblesToAdd.length > 0) {
+      setMessages((current) => [
+        ...current,
+        ...userBubblesToAdd.map((b) => ({ id: b.id, role: "user" as const, content: b.content })),
+        { id: assistantId, role: "assistant", blocks: [], elapsedMs: 0, streaming: true },
+      ]);
+    } else {
+      setMessages((current) => [
+        ...current,
+        { id: `user-${roundStartTime}`, role: "user", content: userText },
+        { id: assistantId, role: "assistant", blocks: [], elapsedMs: 0, streaming: true },
+      ]);
+    }
 
     streamingTimerRef.current = window.setInterval(() => {
       const elapsed = Date.now() - roundStartTime;
@@ -974,10 +982,14 @@ return { title: toolName, meta: "tool" };
       
       const currentQueue = queuedMessagesRef.current;
       if (currentQueue.length > 0) {
-        const nextMessage = currentQueue[0];
-        queuedMessagesRef.current = currentQueue.slice(1);
-        setQueuedMessages(queuedMessagesRef.current);
-        void handleSend(nextMessage.content);
+        const userBubbles = currentQueue.map((msg, index) => ({
+          id: `user-queued-${Date.now() + index}`,
+          content: msg.content,
+        }));
+        const mergedContent = currentQueue.map((msg) => msg.content).join("\n\n");
+        queuedMessagesRef.current = [];
+        setQueuedMessages([]);
+        void handleSend(mergedContent, true, userBubbles);
       }
     }
   };
@@ -1044,7 +1056,10 @@ return { title: toolName, meta: "tool" };
         segments.push({ id: `tool-${block.id}`, kind: "tool", block });
         continue;
       }
-      currentBubble.push(block);
+      if (block.kind === "elapsed") {
+        continue;
+      }
+      currentBubble.push(block as Extract<AssistantBlock, { kind: "reasoning" | "content" }>);
     }
 
     if (currentBubble.length > 0) {
