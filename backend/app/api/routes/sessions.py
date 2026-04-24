@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.deps import AuthContext, get_auth_context
 from app.schemas.common import ApiResponse
 from app.schemas.session import SessionSummary
+from app.services.runtime_state import runtime_state_service
 from app.services.artifact_service import artifact_service
 from app.services.conversation_service import conversation_service
 from app.services.file_service import file_service
@@ -125,6 +126,8 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         files=[*file_service.list_uploads(session), *artifact_service.list_artifacts(session)],
         messages=session.messages,
         context_state=session.context_state,
+        workboard=runtime_state_service.get_workboard(session),
+        elicitation=runtime_state_service.get_elicitation(session),
     )
     return ApiResponse(message="会话摘要", data=summary.model_dump(mode="json"))
 

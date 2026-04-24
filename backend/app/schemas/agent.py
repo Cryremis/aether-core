@@ -13,6 +13,16 @@ class AgentChatRequest(BaseModel):
     allow_network: bool | None = None
 
 
+class ElicitationResponseItem(BaseModel):
+    question_id: str
+    selected_options: list[str] = Field(default_factory=list)
+    other_text: str | None = None
+    notes: str | None = None
+
+
+class AgentElicitationResponseRequest(BaseModel):
+    responses: list[ElicitationResponseItem] = Field(default_factory=list)
+
 class AgentEvent(BaseModel):
     """SSE 事件协议。"""
 
@@ -28,6 +38,12 @@ class AgentEvent(BaseModel):
         "tool_progress",
         "tool_finished",
         "artifact_created",
+        "workboard_snapshot",
+        "workboard_updated",
+        "elicitation_snapshot",
+        "ask_requested",
+        "ask_resolved",
+        "ask_cancelled",
         "context_status",
         "context_warning",
         "context_compacted",

@@ -97,6 +97,52 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
     assert result_events[0]["payload"]["result"] == "this is the real model answer"
     assert session.messages[-1]["content"] == "this is the real model answer"
     assert session.messages[-1]["blocks"][-1]["kind"] == "content"
+    event_types = [item["type"] for item in events]
+    assert "workboard_snapshot" in event_types
+    assert "elicitation_snapshot" in event_types
+
+
+def test_agent_engine_injects_runtime_state_context(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    observed_messages: list[list[dict]] = []
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        observed_messages.append(messages)
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "done"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = AgentSession(session_id="sess_engine_runtime_state")
+    from app.services.runtime_state import runtime_state_service
+
+    runtime_state_service.update_workboard(
+        session,
+        {"ops": [{"op": "add_item", "id": "task_1", "title": "Track work", "status": "in_progress"}]},
+    )
+    runtime_state_service.request_user_input(
+        session,
+        {
+            "title": "Need preference",
+            "questions": [{"id": "q1", "header": "Choice", "question": "Choose one", "options": [{"label": "A"}]}],
+        },
+    )
+
+    asyncio.run(collect_stream(session, "continue"))
+    system_messages = [message for message in observed_messages[0] if message.get("role") == "system"]
+    merged = "\n".join(str(message.get("content", "")) for message in system_messages)
+    assert "workboard_state" in merged
+    assert "elicitation_state" in merged
 
 
 def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monkeypatch, tmp_path):

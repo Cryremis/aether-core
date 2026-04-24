@@ -16,6 +16,7 @@ from app.services.artifact_service import artifact_service
 from app.services.file_service import file_service
 from app.services.llm_config_service import RuntimeLlmConfig, llm_config_service
 from app.services.network_service import network_service
+from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.search_service import search_service
@@ -85,6 +86,145 @@ class ToolService:
 
     def _register_builtin_tools(self) -> None:
         """注册所有内置工具。"""
+        self._registry.register(
+            "update_workboard",
+            "用结构化操作更新当前会话的任务清单，让 AI 和用户都能在聊天记录之外持续看到计划与进度。优先使用 add_item、update_item、remove_item、reorder_items 等细粒度操作。",
+            {
+                "properties": {
+                    "status": {"type": "string", "enum": ["idle", "active", "completed", "blocked"]},
+                    "archive_completed": {"type": "boolean"},
+                    "ops": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "op": {
+                                    "type": "string",
+                                    "enum": ["add_item", "update_item", "remove_item", "reorder_items", "replace_all"],
+                                },
+                                "id": {"type": "string"},
+                                "title": {"type": "string"},
+                                "active_form": {"type": "string"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed", "blocked", "cancelled"],
+                                },
+                                "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                                "owner": {"type": "string"},
+                                "depends_on": {"type": "array", "items": {"type": "string"}},
+                                "blocked_by": {"type": "array", "items": {"type": "string"}},
+                                "notes": {"type": "string"},
+                                "source": {"type": "string"},
+                                "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                                "ordered_ids": {"type": "array", "items": {"type": "string"}},
+                                "items": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "string"},
+                                            "title": {"type": "string"},
+                                            "active_form": {"type": "string"},
+                                            "status": {
+                                                "type": "string",
+                                                "enum": ["pending", "in_progress", "completed", "blocked", "cancelled"],
+                                            },
+                                            "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                                            "owner": {"type": "string"},
+                                            "depends_on": {"type": "array", "items": {"type": "string"}},
+                                            "blocked_by": {"type": "array", "items": {"type": "string"}},
+                                            "notes": {"type": "string"},
+                                            "source": {"type": "string"},
+                                            "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                                        },
+                                        "additionalProperties": False,
+                                    },
+                                },
+                            },
+                            "required": ["op"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "title": {"type": "string"},
+                                "active_form": {"type": "string"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed", "blocked", "cancelled"],
+                                },
+                                "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                                "owner": {"type": "string"},
+                                "depends_on": {"type": "array", "items": {"type": "string"}},
+                                "blocked_by": {"type": "array", "items": {"type": "string"}},
+                                "notes": {"type": "string"},
+                                "source": {"type": "string"},
+                                "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["title", "status"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "additionalProperties": False,
+            },
+            self._handle_update_workboard,
+            required=[],
+        )
+
+        self._registry.register(
+            "request_user_input",
+            "当你遇到不确定、被阻塞、需要用户明确决策或补充信息时，向用户发起结构化提问。它会在前端生成可持续存在的待回复状态，而不是只在普通聊天文本里提问。",
+            {
+                "properties": {
+                    "id": {"type": "string"},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["clarification", "confirmation", "decision", "missing_info", "approval"],
+                    },
+                    "title": {"type": "string"},
+                    "blocking": {"type": "boolean"},
+                    "source_agent": {"type": "string"},
+                    "related_work_items": {"type": "array", "items": {"type": "string"}},
+                    "preview_text": {"type": "string"},
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "header": {"type": "string"},
+                                "question": {"type": "string"},
+                                "multi_select": {"type": "boolean"},
+                                "allow_other": {"type": "boolean"},
+                                "allow_notes": {"type": "boolean"},
+                                "options": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": {"type": "string"},
+                                            "description": {"type": "string"},
+                                        },
+                                        "required": ["label"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                            },
+                            "required": ["header", "question"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "additionalProperties": False,
+            },
+            self._handle_request_user_input,
+            required=["title", "questions"],
+        )
         self._registry.register(
             "invoke_skill",
             "加载一个真实技能包，把该技能的 SKILL.md 指令注入当前对话上下文。若任务明显匹配某个技能，必须先调用它。",
@@ -161,6 +301,54 @@ class ToolService:
 
     async def _handle_invoke_skill(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
         return skill_service.invoke_skill(session, skill_name=str(arguments["skill_name"]))
+
+    async def _handle_update_workboard(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(arguments.get("ops"), list) and not isinstance(arguments.get("items"), list):
+            raise RuntimeError("update_workboard requires either ops or items")
+        state = runtime_state_service.update_workboard(session, arguments)
+        return {
+            "workboard": state.model_dump(mode="json"),
+            "public_output": {
+                "summary": f"任务清单已更新，共 {len(state.items)} 项",
+                "revision": state.revision,
+                "status": state.status,
+            },
+            "runtime_events": [
+                {
+                    "type": "workboard_updated",
+                    "payload": {
+                        "snapshot": state.model_dump(mode="json"),
+                    },
+                }
+            ],
+        }
+
+    async def _handle_request_user_input(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+        request = runtime_state_service.request_user_input(session, arguments)
+        state = runtime_state_service.get_elicitation(session)
+        return {
+            "elicitation": request.model_dump(mode="json"),
+            "public_output": {
+                "summary": f"已发起用户提问：{request.title}",
+                "request_id": request.id,
+                "blocking": request.blocking,
+            },
+            "runtime_events": [
+                {
+                    "type": "ask_requested",
+                    "payload": {
+                        "request": request.model_dump(mode="json"),
+                        "snapshot": state.model_dump(mode="json"),
+                    },
+                }
+            ],
+            "control": {
+                "type": "await_user_input",
+                "request_id": request.id,
+                "blocking": request.blocking,
+                "title": request.title,
+            },
+        }
 
     async def _handle_list_skills(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
         return {"items": [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]}

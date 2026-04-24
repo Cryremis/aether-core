@@ -17,6 +17,7 @@ from app.services.context.message_adapter import context_message_adapter
 from app.services.context.runtime_types import ContextEventType, ContextOverflowError
 from app.services.llm_client import llm_client
 from app.services.llm_config_service import llm_config_service
+from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
@@ -42,6 +43,25 @@ class AgentEngine:
 
     def _emit_context_event(self, session: AgentSession, event_type: ContextEventType, payload: dict[str, Any]):
         return make_event(session, event_type.value, **payload)
+
+    def _build_runtime_state_messages(self, session: AgentSession, turn_index: int) -> list[dict[str, Any]]:
+        sections = runtime_state_service.build_runtime_context_sections(session)
+        if not sections:
+            return []
+        return [
+            context_message_adapter.ensure_runtime_metadata(
+                {
+                    "role": "system",
+                    "content": (
+                        "Authoritative runtime state follows. Treat it as durable sidecar context for "
+                        "plans, progress, and pending user questions.\n\n" + "\n\n".join(sections)
+                    ),
+                    "visible_in_transcript": False,
+                },
+                turn_index=turn_index,
+                kind="runtime_state",
+            )
+        ]
 
     def _extract_llm_error_message(self, exc: httpx.HTTPStatusError) -> str:
         response = exc.response
@@ -108,6 +128,16 @@ class AgentEngine:
         stall_rounds = 0
         max_turns = settings.agent_max_turns if settings.agent_max_turns > 0 else None
         persisted_assistant_blocks: list[dict[str, Any]] = []
+        yield make_event(
+            session,
+            "workboard_snapshot",
+            snapshot=runtime_state_service.get_workboard(session).model_dump(mode="json"),
+        )
+        yield make_event(
+            session,
+            "elicitation_snapshot",
+            snapshot=runtime_state_service.get_elicitation(session).model_dump(mode="json"),
+        )
 
         while True:
             turn_count += 1
@@ -169,6 +199,7 @@ class AgentEngine:
 
             raw_messages: list[dict[str, Any]] = [
                 {"role": "system", "content": self._build_system_message(session)},
+                *self._build_runtime_state_messages(session, request_turn_index),
                 *session.messages,
             ]
             try:
@@ -430,6 +461,11 @@ class AgentEngine:
                             "summary": f"工具执行失败: {exc}",
                         }
                     visible_result = result.get("public_output", result) if isinstance(result, dict) else result
+                    for runtime_event in result.get("runtime_events", []) if isinstance(result, dict) else []:
+                        event_type = runtime_event.get("type")
+                        event_payload = runtime_event.get("payload") or {}
+                        if event_type:
+                            yield make_event(session, str(event_type), **event_payload)
                     yield make_event(
                         session,
                         "tool_finished",
@@ -465,6 +501,17 @@ class AgentEngine:
                                 )
                             )
                         session_service.persist(session)
+
+                    control = result.get("control", {}) if isinstance(result, dict) else {}
+                    if control.get("type") == "await_user_input" and control.get("blocking", True):
+                        yield make_event(
+                            session,
+                            "completed",
+                            elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                            subtype="awaiting_user_input",
+                            request_id=control.get("request_id"),
+                        )
+                        return
                     
                     if session.is_aborted():
                         yield make_event(
@@ -493,7 +540,7 @@ class AgentEngine:
             final_answer = assistant_content.strip()
             if final_answer:
                 final_elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-                persisted_assistant_blocks.append({
+                persisted_assistant_blocks.insert(0, {
                     "id": f"elapsed_{uuid.uuid4().hex[:8]}",
                     "kind": "elapsed",
                     "elapsed_ms": final_elapsed_ms,

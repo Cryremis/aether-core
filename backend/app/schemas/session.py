@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.agent import SkillCard
 from app.schemas.files import FileRecord
+from app.services.runtime_state.models import ElicitationState, WorkboardState
 
 
 class SessionSummary(BaseModel):
@@ -22,3 +23,5 @@ class SessionSummary(BaseModel):
     files: list[FileRecord] = Field(default_factory=list)
     messages: list[dict[str, Any]] = Field(default_factory=list)
     context_state: dict[str, Any] = Field(default_factory=dict)
+    workboard: WorkboardState = Field(default_factory=lambda: WorkboardState(session_id=""))
+    elicitation: ElicitationState = Field(default_factory=lambda: ElicitationState(session_id=""))

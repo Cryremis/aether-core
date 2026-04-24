@@ -8,16 +8,23 @@ import {
   abortSession,
   bootstrapAdminSession,
   deleteUserLlmConfig,
+  type ElicitationRequest,
+  type ElicitationResponseItem,
+  type ElicitationState,
   getDownloadUrl,
   getUserLlmConfig,
   getSessionSummary,
   listFiles,
   listSkills,
+  streamElicitationResponse,
   streamChat,
+  type WorkboardState,
   updateUserLlmConfig,
   uploadFile,
   uploadSkill,
 } from "../api/client";
+import { ElicitationPanel } from "../components/ElicitationPanel";
+import { WorkboardDock } from "../components/WorkboardDock";
 
 type FileItem = {
   file_id: string;
@@ -58,6 +65,13 @@ type AssistantSegment =
 
 type ChatMessage =
   | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "elicitation_response";
+      title: string;
+      summary: string;
+      answers: Array<{ id: string; header: string; value: string }>;
+    }
   | { id: string; role: "assistant"; blocks: AssistantBlock[]; elapsedMs: number | null; streaming: boolean };
 
 type QueuedMessage = {
@@ -352,7 +366,10 @@ export function WorkbenchPage({
     has_api_key: false,
     resolved_scope: "global",
   });
-const [allowNetwork, setAllowNetwork] = useState(true);
+  const [allowNetwork, setAllowNetwork] = useState(true);
+  const [workboard, setWorkboard] = useState<WorkboardState | null>(null);
+  const [elicitation, setElicitation] = useState<ElicitationState | null>(null);
+  const [elicitationBusy, setElicitationBusy] = useState(false);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
@@ -659,6 +676,8 @@ window.addEventListener("resize", handleResize);
       allow_network?: boolean;
       skills?: SkillItem[];
       files?: FileItem[];
+      workboard?: WorkboardState;
+      elicitation?: ElicitationState;
       context_state?: {
         model_id?: string;
         last_known_token_estimate?: number;
@@ -674,7 +693,8 @@ window.addEventListener("resize", handleResize);
     setAllowNetwork(summary.allow_network ?? true);
     setSkills(summary.skills ?? []);
     setFiles(summary.files ?? []);
-    
+    setWorkboard(summary.workboard ?? null);
+    setElicitation(summary.elicitation ?? null);
     if (summary.context_state && summary.context_state.model_id) {
       setContextStatus({
         model: summary.context_state.model_id,
@@ -700,6 +720,8 @@ window.addEventListener("resize", handleResize);
       setMessages([]);
       setSkills([]);
       setFiles([]);
+      setWorkboard(null);
+      setElicitation(null);
       setLoading(false);
       return;
     }
@@ -729,6 +751,8 @@ window.addEventListener("resize", handleResize);
         setMessages([]);
         setSkills([]);
         setFiles([]);
+        setWorkboard(null);
+        setElicitation(null);
       })
       .finally(() => setLoading(false));
   }, [sessionId, isNewSession, localSessionId]);
@@ -759,8 +783,31 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       const firstToken = rawCommand.split(/\s+/)[0] || "shell";
       return { title: firstToken, meta: String(inputValue.shell ?? "powershell") };
     }
-return { title: toolName, meta: "tool" };
+    return { title: toolName, meta: "tool" };
   };
+
+  const buildElicitationResponseMessage = (
+    request: ElicitationRequest,
+    responses: ElicitationResponseItem[],
+  ): Extract<ChatMessage, { role: "elicitation_response" }> => ({
+    id: `elicitation-response-${Date.now()}`,
+    role: "elicitation_response",
+    title: request.title,
+    summary: request.blocking ? "已提交给 AI，接下来会按你的回答继续执行" : "已提交给 AI，等待后续处理",
+    answers: request.questions.map((question) => {
+      const answer = responses.find((item) => item.question_id === question.id);
+      const parts = [
+        ...(answer?.selected_options ?? []),
+        ...(answer?.other_text ? [answer.other_text] : []),
+        ...(answer?.notes ? [`说明：${answer.notes}`] : []),
+      ].filter((item) => item && item.trim().length > 0);
+      return {
+        id: question.id,
+        header: question.header,
+        value: parts.join("、") || "未填写",
+      };
+    }),
+  });
 
   const handleSend = async (userText: string, skipAddUserBubble = false, userBubblesToAdd?: { id: string; content: string }[]) => {
     if (!userText) return;
@@ -833,6 +880,40 @@ return { title: toolName, meta: "tool" };
       }
       await streamChat(effectiveSessionId, userText, allowNetwork, (event) => {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
+
+        if (event.type === "workboard_snapshot" || event.type === "workboard_updated") {
+          const snapshot = payload.snapshot as WorkboardState | undefined;
+          if (snapshot) setWorkboard(snapshot);
+          return;
+        }
+
+        if (event.type === "elicitation_snapshot") {
+          const snapshot = payload.snapshot as ElicitationState | undefined;
+          if (snapshot) setElicitation(snapshot);
+          return;
+        }
+
+        if (event.type === "ask_requested") {
+          const snapshot = payload.snapshot as ElicitationState | undefined;
+          if (snapshot) {
+            setElicitation(snapshot);
+          } else if (payload.request) {
+            setElicitation((current) => ({
+              session_id: effectiveSessionId,
+              revision: (current?.revision ?? 0) + 1,
+              pending: payload.request as ElicitationRequest,
+              history: current?.history ?? [],
+              updated_at: new Date().toISOString(),
+            }));
+          }
+          return;
+        }
+
+        if (event.type === "ask_resolved" || event.type === "ask_cancelled") {
+          const snapshot = payload.snapshot as ElicitationState | undefined;
+          if (snapshot) setElicitation(snapshot);
+          return;
+        }
 
         if (event.type === "aborted") {
           wasAborted = true;
@@ -983,6 +1064,16 @@ return { title: toolName, meta: "tool" };
         }
 
         if (event.type === "tool_finished") {
+          const toolName = String(payload.tool_name ?? "");
+          const output = (payload.output ?? {}) as Record<string, unknown>;
+          if (toolName === "update_workboard") {
+            const nextWorkboard = (output.workboard ?? output.snapshot) as WorkboardState | undefined;
+            if (nextWorkboard) setWorkboard(nextWorkboard);
+          }
+          if (toolName === "request_user_input") {
+            const nextElicitation = (output.elicitation ?? output.snapshot) as ElicitationState | undefined;
+            if (nextElicitation) setElicitation(nextElicitation);
+          }
           updateAssistantBlock(assistantId, String(payload.id), (block) =>
             block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block,
           );
@@ -1079,6 +1170,186 @@ return { title: toolName, meta: "tool" };
       }
     }
     abortControllerRef.current.abort();
+  };
+
+  const handleElicitationSubmit = async (responses: ElicitationResponseItem[]) => {
+    const effectiveSessionId = sessionId || localSessionId;
+    const pendingRequest = elicitation?.pending;
+    if (!effectiveSessionId || !pendingRequest || isStreamingRef.current) return;
+
+    const assistantId = `assistant-ask-${Date.now()}`;
+    const roundStartTime = Date.now();
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    isStreamingRef.current = true;
+    shouldStickToBottomRef.current = true;
+    setBusy(true);
+    setElicitationBusy(true);
+    setError("");
+
+    setMessages((current) => [
+      ...current,
+      buildElicitationResponseMessage(pendingRequest, responses),
+      { id: assistantId, role: "assistant", blocks: [], elapsedMs: 0, streaming: true },
+    ]);
+
+    streamingTimerRef.current = window.setInterval(() => {
+      const elapsed = Date.now() - roundStartTime;
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs: elapsed } : item,
+        ),
+      );
+    }, 100);
+
+    let activeReasoningId = "";
+    let activeContentId = "";
+    let activeContentText = "";
+
+    try {
+      await streamElicitationResponse(effectiveSessionId, pendingRequest.id, responses, (event) => {
+        const payload = (event.payload ?? {}) as Record<string, unknown>;
+
+        if (event.type === "workboard_snapshot" || event.type === "workboard_updated") {
+          const snapshot = payload.snapshot as WorkboardState | undefined;
+          if (snapshot) setWorkboard(snapshot);
+          return;
+        }
+
+        if (event.type === "elicitation_snapshot" || event.type === "ask_resolved" || event.type === "ask_cancelled") {
+          const snapshot = payload.snapshot as ElicitationState | undefined;
+          if (snapshot) setElicitation(snapshot);
+          return;
+        }
+
+        if (event.type === "ask_requested") {
+          const snapshot = payload.snapshot as ElicitationState | undefined;
+          if (snapshot) setElicitation(snapshot);
+          return;
+        }
+
+        if (event.type === "reasoning_delta") {
+          if (!activeReasoningId) {
+            activeReasoningId = `reasoning-${Date.now()}`;
+            appendAssistantBlock(assistantId, { id: activeReasoningId, kind: "reasoning", content: String(payload.delta ?? "") });
+          } else {
+            updateAssistantBlock(assistantId, activeReasoningId, (block) =>
+              block.kind === "reasoning" ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` } : block,
+            );
+          }
+          return;
+        }
+
+        if (event.type === "content_delta") {
+          activeContentText += String(payload.delta ?? "");
+          if (!activeContentId) {
+            activeContentId = `content-${Date.now()}`;
+            appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: activeContentText, status: "streaming" });
+          } else {
+            updateAssistantBlock(assistantId, activeContentId, (block) =>
+              block.kind === "content" ? { ...block, content: activeContentText, status: "streaming" } : block,
+            );
+          }
+          return;
+        }
+
+        if (event.type === "content_completed") {
+          if (activeContentId && activeContentText) {
+            updateAssistantBlock(assistantId, activeContentId, (block) =>
+              block.kind === "content" ? { ...block, content: activeContentText, status: "done" } : block,
+            );
+          }
+          activeReasoningId = "";
+          return;
+        }
+
+        if (event.type === "tool_started") {
+          activeReasoningId = "";
+          activeContentId = "";
+          activeContentText = "";
+          const toolInput = (payload.input ?? {}) as Record<string, unknown>;
+          const display = getToolDisplay(String(payload.tool_name ?? "tool"), toolInput);
+          appendAssistantBlock(assistantId, {
+            id: String(payload.id ?? `tool-${Date.now()}`),
+            kind: "tool",
+            title: display.title,
+            meta: display.meta,
+            argumentsText: JSON.stringify(toolInput ?? {}, null, 2),
+            outputText: "",
+            status: "running",
+          });
+          return;
+        }
+
+        if (event.type === "tool_finished") {
+          const toolName = String(payload.tool_name ?? "");
+          const output = (payload.output ?? {}) as Record<string, unknown>;
+          if (toolName === "update_workboard") {
+            const nextWorkboard = (output.workboard ?? output.snapshot) as WorkboardState | undefined;
+            if (nextWorkboard) setWorkboard(nextWorkboard);
+          }
+          if (toolName === "request_user_input") {
+            const nextElicitation = (output.elicitation ?? output.snapshot) as ElicitationState | undefined;
+            if (nextElicitation) setElicitation(nextElicitation);
+          }
+          updateAssistantBlock(assistantId, String(payload.id), (block) =>
+            block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block,
+          );
+          if (["sandbox_shell", "create_text_artifact"].includes(String(payload.tool_name ?? ""))) {
+            void refreshResources(effectiveSessionId);
+          }
+          return;
+        }
+
+        if (event.type === "message" && typeof payload.summary === "string") {
+          activeContentText = payload.summary;
+          if (activeContentId) {
+            updateAssistantBlock(assistantId, activeContentId, (block) =>
+              block.kind === "content" ? { ...block, content: payload.summary as string, status: "done" } : block,
+            );
+          } else {
+            activeContentId = `content-${Date.now()}`;
+            appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: payload.summary, status: "done" });
+          }
+          return;
+        }
+
+        if (event.type === "artifact_created") {
+          void refreshResources(effectiveSessionId);
+          return;
+        }
+
+        if (event.type === "result") {
+          const subtype = String(payload.subtype ?? "");
+          if (subtype && subtype !== "success") setError(RESULT_MESSAGES[subtype] ?? "鎵ц澶辫触");
+          return;
+        }
+
+        if (event.type === "error") {
+          setError(typeof payload.message === "string" ? payload.message : "鎵ц澶辫触");
+        }
+      }, abortController.signal);
+    } catch (err) {
+      if (!(err instanceof Error && err.name === "AbortError")) {
+        setError(err instanceof Error ? err.message : "鎻愪氦鍥炵瓟澶辫触");
+      }
+    } finally {
+      if (streamingTimerRef.current !== null) {
+        window.clearInterval(streamingTimerRef.current);
+        streamingTimerRef.current = null;
+      }
+      const elapsedMs = Date.now() - roundStartTime;
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false } : item,
+        ),
+      );
+      isStreamingRef.current = false;
+      abortControllerRef.current = null;
+      setBusy(false);
+      setElicitationBusy(false);
+      void onSessionRefresh?.();
+    }
   };
 
   const handleRemoveQueued = (id: string) => {
@@ -1443,6 +1714,25 @@ return { title: toolName, meta: "tool" };
                     <div dangerouslySetInnerHTML={renderMarkdown(message.content)} className="markdown-body clean" />
                   </div>
                 </div>
+              ) : message.role === "elicitation_response" ? (
+        <div key={message.id} className="message-row message-row--elicitation-response msg-anim">
+                  <div className="elicitation-response-bubble">
+                    <div className="elicitation-response-bubble__eyebrow">
+                      <span className="elicitation-response-bubble__dot" />
+                      <span>问题已回复</span>
+                    </div>
+                    <div className="elicitation-response-bubble__title">{message.title}</div>
+                    <div className="elicitation-response-bubble__summary">{message.summary}</div>
+                    <div className="elicitation-response-bubble__answers">
+                      {message.answers.map((answer) => (
+                        <div key={answer.id} className="elicitation-response-bubble__answer">
+                          <span>{answer.header}</span>
+                          <strong>{answer.value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <div key={message.id} className="message-row assistant msg-anim">
                   <div className="assistant-content">
@@ -1463,13 +1753,13 @@ return { title: toolName, meta: "tool" };
                               <div className="tool-body">
                                 {segment.block.argumentsText ? (
                                   <div className="tool-section">
-                                    <div className="section-label">Input Args</div>
+                                    <div className="section-label">输入参数</div>
                                     <pre className="code-block input">{segment.block.argumentsText}</pre>
                                   </div>
                                 ) : null}
                                 {segment.block.outputText ? (
                                   <div className="tool-section">
-                                    <div className="section-label">Output Result</div>
+                                    <div className="section-label">输出结果</div>
                                     <pre className="code-block output">{segment.block.outputText}</pre>
                                   </div>
                                 ) : null}
@@ -1482,7 +1772,7 @@ return { title: toolName, meta: "tool" };
                           {segment.blocks.map((block) =>
                             block.kind === "reasoning" ? (
                               <details key={block.id} className="reasoning-block" open>
-                                <summary><Icons.Sparkles /> Thinking</summary>
+                                <summary><Icons.Sparkles /> 思考过程</summary>
                                 <div className="reasoning-content markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
                               </details>
                             ) : (
@@ -1502,6 +1792,11 @@ return { title: toolName, meta: "tool" };
               ),
             )}
           </div>
+        </div>
+
+        <div className="runtime-panels">
+          <WorkboardDock workboard={workboard} busy={busy} />
+          <ElicitationPanel request={elicitation?.pending ?? null} busy={busy || elicitationBusy} onSubmit={(responses) => void handleElicitationSubmit(responses)} />
         </div>
 
         <Composer

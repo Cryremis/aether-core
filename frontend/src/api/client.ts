@@ -117,6 +117,89 @@ export type ResolvedLlmConfig = LlmConfigSummary & {
   scope: "user" | "platform" | "global";
 };
 
+export type WorkItemStatus = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
+export type WorkboardStatus = "idle" | "active" | "completed" | "blocked";
+
+export type WorkItem = {
+  id: string;
+  title: string;
+  active_form?: string | null;
+  status: WorkItemStatus;
+  priority: "low" | "medium" | "high";
+  owner: string;
+  depends_on: string[];
+  blocked_by: string[];
+  notes?: string | null;
+  source: string;
+  evidence_refs: string[];
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+};
+
+export type WorkboardState = {
+  session_id: string;
+  revision: number;
+  status: WorkboardStatus;
+  items: WorkItem[];
+  updated_at: string;
+};
+
+export type ElicitationOption = {
+  label: string;
+  description?: string | null;
+};
+
+export type ElicitationQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  options: ElicitationOption[];
+  multi_select: boolean;
+  allow_other: boolean;
+  allow_notes: boolean;
+};
+
+export type ElicitationAnswer = {
+  question_id: string;
+  selected_options: string[];
+  other_text?: string | null;
+  notes?: string | null;
+  rendered_answer: string;
+};
+
+export type ElicitationRequest = {
+  id: string;
+  kind: "clarification" | "confirmation" | "decision" | "missing_info" | "approval";
+  title: string;
+  blocking: boolean;
+  source_agent?: string | null;
+  related_work_items: string[];
+  questions: ElicitationQuestion[];
+  preview_text?: string | null;
+  status: "pending" | "resolved" | "cancelled" | "expired";
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string | null;
+  cancelled_at?: string | null;
+  answers: ElicitationAnswer[];
+};
+
+export type ElicitationState = {
+  session_id: string;
+  revision: number;
+  pending: ElicitationRequest | null;
+  history: ElicitationRequest[];
+  updated_at: string;
+};
+
+export type ElicitationResponseItem = {
+  question_id: string;
+  selected_options: string[];
+  other_text?: string | null;
+  notes?: string | null;
+};
+
 const API_BASE = "/api/v1";
 const ACCESS_TOKEN_KEY = "aethercore_access_token";
 
@@ -542,20 +625,49 @@ export async function streamChat(
   onEvent: (event: Record<string, unknown>) => void,
   abortSignal?: AbortSignal,
 ) {
+  return streamSse(
+    "/agent/chat",
+    {
+      session_id: sessionId,
+      message,
+      allow_network: allowNetwork,
+    },
+    onEvent,
+    abortSignal,
+  );
+}
+
+export async function streamElicitationResponse(
+  sessionId: string,
+  requestId: string,
+  responses: ElicitationResponseItem[],
+  onEvent: (event: Record<string, unknown>) => void,
+  abortSignal?: AbortSignal,
+) {
+  return streamSse(
+    `/agent/${encodeURIComponent(sessionId)}/elicitation/${encodeURIComponent(requestId)}/respond`,
+    { responses },
+    onEvent,
+    abortSignal,
+  );
+}
+
+async function streamSse(
+  path: string,
+  payload: Record<string, unknown>,
+  onEvent: (event: Record<string, unknown>) => void,
+  abortSignal?: AbortSignal,
+) {
   const headers = new Headers({ "Content-Type": "application/json" });
   const token = getAccessToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE}/agent/chat`, {
+  const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      session_id: sessionId,
-      message,
-      allow_network: allowNetwork,
-    }),
+    body: JSON.stringify(payload),
     signal: abortSignal,
   });
 
