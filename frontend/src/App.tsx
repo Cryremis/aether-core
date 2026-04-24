@@ -1,5 +1,5 @@
 // frontend/src/App.tsx
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 
 import {
   bootstrapAdminSession,
@@ -11,9 +11,10 @@ import {
   renameSession,
   setAccessToken,
 } from "./api/client";
-import { AdminPage } from "./pages/AdminPage";
 import { LoginPage } from "./pages/LoginPage";
-import { WorkbenchPage } from "./pages/WorkbenchPage";
+
+const AdminPage = lazy(async () => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
+const WorkbenchPage = lazy(async () => import("./pages/WorkbenchPage").then((module) => ({ default: module.WorkbenchPage })));
 
 type ConversationItem = {
   conversation_id: string;
@@ -161,6 +162,14 @@ export default function App() {
   };
 
   const shell = useMemo(() => {
+    const pageFallback = (
+      <main className="login-screen">
+        <section className="login-card">
+          <p>正在加载界面...</p>
+        </section>
+      </main>
+    );
+
     if (!ready) {
       return (
         <main className="login-screen">
@@ -178,25 +187,27 @@ export default function App() {
     return (
       <div className="workspace-shell">
         <section className="workspace-shell__main">
-          {page === "admin" && currentUser ? (
-            <AdminPage role={currentUser.role} onBack={() => setPage("workbench")} />
-          ) : sessionId || isNewSession ? (
-            <WorkbenchPage
-              conversations={conversations}
-              currentUser={currentUser}
-              isEmbedMode={isEmbedMode}
-              sessionId={sessionId}
-              isNewSession={isNewSession}
-              onAdminToggle={() => setPage("admin")}
-              onLogout={handleLogout}
-              onNewConversation={handleNewConversation}
-              onDeleteSession={(id) => void handleDeleteSession(id)}
-              onRenameSession={(id, title) => void handleRenameSession(id, title)}
-              onSessionCreated={handleCreateSessionAndSelect}
-              onSessionRefresh={() => void refreshConversations(sessionId)}
-              onSessionSelect={(id) => { setSessionId(id); setIsNewSession(false); }}
-            />
-          ) : null}
+          <Suspense fallback={pageFallback}>
+            {page === "admin" && currentUser ? (
+              <AdminPage role={currentUser.role} onBack={() => setPage("workbench")} />
+            ) : sessionId || isNewSession ? (
+              <WorkbenchPage
+                conversations={conversations}
+                currentUser={currentUser}
+                isEmbedMode={isEmbedMode}
+                sessionId={sessionId}
+                isNewSession={isNewSession}
+                onAdminToggle={() => setPage("admin")}
+                onLogout={handleLogout}
+                onNewConversation={handleNewConversation}
+                onDeleteSession={(id) => void handleDeleteSession(id)}
+                onRenameSession={(id, title) => void handleRenameSession(id, title)}
+                onSessionCreated={handleCreateSessionAndSelect}
+                onSessionRefresh={() => void refreshConversations(sessionId)}
+                onSessionSelect={(id) => { setSessionId(id); setIsNewSession(false); }}
+              />
+            ) : null}
+          </Suspense>
         </section>
       </div>
     );
