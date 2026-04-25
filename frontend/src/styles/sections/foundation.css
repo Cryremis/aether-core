@@ -1,0 +1,92 @@
+/* frontend/src/styles/index.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+:root {
+  /* 现代亮色极简体系 */
+  --bg-body: #ffffff;
+  --bg-sidebar: #f8fafc;
+  --bg-hover: #f1f5f9;
+  --bg-user-msg: #f4f4f5;
+  
+  --border-color: #e2e8f0;
+  
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary: #94a3b8;
+  
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --error: #ef4444;
+  --error-bg: #fef2f2;
+  --success: #10b981;
+  
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+  
+  --shadow-sm: 0 2px 8px -2px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 8px 24px -4px rgb(0 0 0 / 0.08);
+  --shadow-float: 0 16px 48px -12px rgb(0 0 0 / 0.12);
+  
+  color-scheme: light;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { 
+  background-color: transparent; 
+  color: var(--text-primary); 
+  overflow: hidden; 
+  -webkit-font-smoothing: antialiased; 
+}
+button, input, textarea, a { font: inherit; outline: none; }
+a { text-decoration: none; color: var(--accent); }
+
+/* ================= 滚动条样式 ================= */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 10px;
+  background: transparent;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ================= 动画定义 ================= */
+@keyframes slideUpFade {
+  0% { opacity: 0; transform: translateY(16px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes slideRightFade {
+  0% { opacity: 0; transform: translateX(-12px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes spin { 100% { transform: rotate(360deg); } }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+@keyframes pulseGlow {
+  0%, 100% { opacity: 1; filter: drop-shadow(0 0 2px rgba(37,99,235,0.4)); }
+  50% { opacity: 0.6; filter: drop-shadow(0 0 6px rgba(37,99,235,0.8)); }
+}
+
+.anim-enter { animation: slideRightFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; opacity: 0; }
+.msg-anim { animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; transform-origin: bottom center; }
+.anim-shake { animation: shake 0.3s ease-in-out; }
+.spin-anim { animation: spin 1.2s linear infinite; }
+
