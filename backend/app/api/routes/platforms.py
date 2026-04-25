@@ -17,6 +17,7 @@ from app.schemas.platform import (
     PlatformSummary,
 )
 from app.services.conversation_service import conversation_service
+from app.services.platform_integration_service import platform_integration_service
 from app.services.platform_baseline_service import platform_baseline_service
 from app.services.store import store_service
 
@@ -109,6 +110,16 @@ def list_platforms(auth: AuthContext = Depends(require_admin)) -> ApiResponse:
             ).model_dump(mode="json")
         )
     return ApiResponse(message="平台列表", data=items)
+
+
+@router.get("/{platform_id}/integration-guide")
+def get_platform_integration_guide(
+    platform_id: int,
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    guide = platform_integration_service.build_guide(platform)
+    return ApiResponse(message="平台接入教程", data=guide.model_dump(mode="json"))
 
 
 @router.get("/{platform_id}/baseline")

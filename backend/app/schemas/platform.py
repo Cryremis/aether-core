@@ -99,6 +99,24 @@ class PlatformSummary(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class PlatformIntegrationGuideSnippets(BaseModel):
+    """平台接入教程代码片段。"""
+
+    frontend: str
+    backend_env: str
+    backend_fastapi: str
+
+
+class PlatformIntegrationGuide(BaseModel):
+    """平台接入教程。"""
+
+    platform_key: str
+    display_name: str
+    bind_api_path: str
+    frontend_script_path: str
+    snippets: PlatformIntegrationGuideSnippets
+
+
 class PlatformAdminAssignRequest(BaseModel):
     """平台管理员授权请求。"""
 

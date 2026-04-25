@@ -129,6 +129,45 @@ def test_embed_bootstrap_rejects_platform_key_mismatch(tmp_path):
     assert response.status_code == 403
 
 
+def test_platform_integration_guide_returns_expected_snippets(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+
+    platform = store_service.create_platform(
+        platform_key="guide-demo",
+        display_name="Guide Demo",
+        host_type="embedded",
+        description="integration guide test platform",
+        owner_user_id=admin.user_id,
+    )
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+
+    client = TestClient(app)
+    response = client.get(
+        f"/api/v1/platforms/{platform['platform_id']}/integration-guide",
+        headers={"Authorization": f"Bearer {login.token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+
+    assert payload["platform_key"] == "guide-demo"
+    assert payload["display_name"] == "Guide Demo"
+    assert payload["bind_api_path"] == "/api/v1/aethercore/embed/bind"
+    assert payload["frontend_script_path"] == "/static/aethercore-embed.js"
+    assert 'platformKey: "guide-demo"' in payload["snippets"]["frontend"]
+    assert "AETHERCORE_PLATFORM_KEY=guide-demo" in payload["snippets"]["backend_env"]
+    assert f"AETHERCORE_PLATFORM_SECRET={platform['host_secret']}" in payload["snippets"]["backend_env"]
+    assert '@router.post("/api/v1/aethercore/embed/bind")' in payload["snippets"]["backend_fastapi"]
+    assert "settings.AETHERCORE_PLATFORM_SECRET" in payload["snippets"]["backend_fastapi"]
+
+
 def test_oauth_whitelist_supports_configured_match_fields(tmp_path, monkeypatch):
     initialize_isolated_runtime(tmp_path)
 
