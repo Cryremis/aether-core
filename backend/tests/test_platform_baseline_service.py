@@ -1,20 +1,19 @@
-# backend/tests/test_platform_baseline_service.py
 from __future__ import annotations
 
 from pathlib import Path
 
 from app.core.config import settings
+from app.schemas.platform import (
+    PlatformBaselineDirectoryRequest,
+    PlatformBaselineMoveRequest,
+    PlatformBaselineWriteRequest,
+)
 from app.services.conversation_service import conversation_service
 from app.services.file_service import file_service
 from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
-from app.schemas.platform import (
-    PlatformBaselineDirectoryRequest,
-    PlatformBaselineMoveRequest,
-    PlatformBaselineWriteRequest,
-)
 
 
 def initialize_store(tmp_path: Path) -> None:
@@ -35,7 +34,7 @@ def test_platform_baseline_materializes_into_new_admin_session(tmp_path):
     skill_dir = standalone_root / "skills" / "analysis-helper"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
-        "# backend/tests/test_platform_baseline_service.py\n---\nname: analysis-helper\ndescription: 分析辅助技能\n---\n\n先读取文件，再分析。\n",
+        "---\nname: analysis-helper\ndescription: 分析辅助技能\n---\n\n先读取文件，再分析。\n",
         encoding="utf-8",
     )
 
@@ -80,6 +79,29 @@ def test_platform_baseline_materializes_into_new_host_session(tmp_path):
     assert session.workspace is not None
     assert any(item["name"] == "main.py" for item in session.platform_files)
     assert file_service.read_text(session, relative_path="work/repo/main.py").strip() == "print('hello')"
+
+
+def test_platform_skill_refreshes_for_existing_session(tmp_path):
+    initialize_store(tmp_path)
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+
+    session = conversation_service.bootstrap_admin_workbench(admin)
+    initial_names = {item.name for item in skill_service.list_for_session(session)}
+
+    standalone_root = platform_baseline_service.ensure_platform_root("standalone")
+    live_skill_dir = standalone_root / "skills" / "analysis-helper"
+    live_skill_dir.mkdir(parents=True, exist_ok=True)
+    (live_skill_dir / "SKILL.md").write_text(
+        "---\nname: analysis-helper\ndescription: 会话内实时可见的平台技能\n---\n\n刷新列表后即可出现。\n",
+        encoding="utf-8",
+    )
+
+    refreshed_names = {item.name for item in skill_service.list_for_session(session)}
+
+    assert "analysis-helper" not in initial_names
+    assert "analysis-helper" in refreshed_names
 
 
 def test_platform_baseline_file_manager_operations(tmp_path):

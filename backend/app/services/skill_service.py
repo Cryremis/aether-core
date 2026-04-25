@@ -19,16 +19,14 @@ class SkillService:
 
     def __init__(self) -> None:
         self._built_in_skills: list[dict[str, Any]] = []
+        self._built_in_snapshot: tuple[tuple[str, int, int], ...] = ()
 
     def ensure_built_in_layout(self) -> None:
-        settings.built_in_skills_dir.mkdir(parents=True, exist_ok=True)
+        self._built_in_root().mkdir(parents=True, exist_ok=True)
         self.reload_built_in_skills()
 
     def reload_built_in_skills(self) -> None:
-        self._built_in_skills = self._load_skills_from_disk(
-            settings.built_in_skills_dir,
-            source="built_in",
-        )
+        self._refresh_built_in_skills(force=True)
 
     def list_for_session(self, session: AgentSession) -> list[SkillCard]:
         return [self._to_card(item) for item in self._all_skill_definitions(session)]
@@ -117,9 +115,13 @@ class SkillService:
         return None
 
     def _all_skill_definitions(self, session: AgentSession) -> list[dict[str, Any]]:
+        self._refresh_built_in_skills()
+        self._refresh_platform_skills(session)
         skills = [*self._built_in_skills, *session.host_skills, *session.platform_skills]
+        platform_skill_names = {self._slugify(s.get("name", "")) for s in session.platform_skills}
         if session.workspace is not None:
             workspace_skills = self._load_skills_from_disk(session.workspace.skills_dir, source="upload")
+            workspace_skills = [s for s in workspace_skills if self._slugify(s.get("name", "")) not in platform_skill_names]
             if workspace_skills != session.uploaded_skills:
                 session.uploaded_skills = workspace_skills
             skills.extend(workspace_skills)
@@ -129,8 +131,34 @@ class SkillService:
         for item in skills:
             materialized = self._ensure_materialized(session, item)
             key = self._slugify(str(materialized.get("name", "")))
+            existing = deduped.get(key)
+            if existing and existing.get("source") == "platform":
+                continue
             deduped[key] = materialized
         return list(deduped.values())
+
+    def _refresh_built_in_skills(self, *, force: bool = False) -> None:
+        built_in_root = self._built_in_root()
+        snapshot = self._directory_snapshot(built_in_root)
+        if not force and snapshot == self._built_in_snapshot:
+            return
+        self._built_in_skills = self._load_skills_from_disk(
+            built_in_root,
+            source="built_in",
+        )
+        self._built_in_snapshot = snapshot
+
+    def _refresh_platform_skills(self, session: AgentSession) -> None:
+        if not session.baseline_root:
+            return
+        latest_platform_skills = self._load_skills_from_disk(Path(session.baseline_root) / "skills", source="platform")
+        if latest_platform_skills == session.platform_skills:
+            return
+        session_service.replace_platform_assets(
+            session,
+            files=session.platform_files,
+            skills=latest_platform_skills,
+        )
 
     def _load_skills_from_disk(self, root: Path, source: str) -> list[dict[str, Any]]:
         loaded = skill_loader.load_directory(root, source=source)
@@ -138,7 +166,38 @@ class SkillService:
             item["base_dir"] = str(Path(item["path"]).parent)
         return loaded
 
+    def _directory_snapshot(self, root: Path) -> tuple[tuple[str, int, int], ...]:
+        if not root.exists():
+            return ()
+        snapshot: list[tuple[str, int, int]] = []
+        for skill_file in sorted(root.glob("*/SKILL.md")):
+            stat = skill_file.stat()
+            snapshot.append((str(skill_file.resolve(strict=False)), stat.st_mtime_ns, stat.st_size))
+        return tuple(snapshot)
+
+    def _built_in_root(self) -> Path:
+        configured_root = settings.built_in_skills_dir
+        if configured_root.is_absolute():
+            return configured_root
+
+        if configured_root.parts and configured_root.parts[0] == settings.storage_root.name:
+            relative_parts = configured_root.parts[1:]
+            if relative_parts:
+                return settings.resolved_storage_root.joinpath(*relative_parts)
+            return settings.resolved_storage_root
+
+        storage_root = settings.storage_root
+        if not storage_root.is_absolute():
+            storage_parts = storage_root.parts
+            if configured_root.parts[: len(storage_parts)] == storage_parts:
+                return settings.resolved_storage_root / configured_root.relative_to(storage_root)
+
+        return settings.backend_root / configured_root
+
     def _ensure_materialized(self, session: AgentSession, item: dict[str, Any]) -> dict[str, Any]:
+        source = item.get("source", "")
+        if source in ("platform", "built_in"):
+            return item
         if item.get("path") or session.workspace is None or not item.get("content"):
             return item
 
