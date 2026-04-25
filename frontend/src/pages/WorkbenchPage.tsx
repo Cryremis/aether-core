@@ -1,20 +1,4 @@
 // frontend/src/pages/WorkbenchPage.tsx
-import { marked } from "marked";
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import css from "highlight.js/lib/languages/css";
-import diff from "highlight.js/lib/languages/diff";
-import javascript from "highlight.js/lib/languages/javascript";
-import json from "highlight.js/lib/languages/json";
-import markdown from "highlight.js/lib/languages/markdown";
-import plaintext from "highlight.js/lib/languages/plaintext";
-import powershell from "highlight.js/lib/languages/powershell";
-import python from "highlight.js/lib/languages/python";
-import sql from "highlight.js/lib/languages/sql";
-import typescript from "highlight.js/lib/languages/typescript";
-import xml from "highlight.js/lib/languages/xml";
-import yaml from "highlight.js/lib/languages/yaml";
-import "highlight.js/styles/github-dark-dimmed.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
@@ -38,108 +22,25 @@ import {
 } from "../api/client";
 import { ElicitationPanel } from "../components/ElicitationPanel";
 import { WorkboardDock } from "../components/WorkboardDock";
-
-type FileItem = {
-  file_id: string;
-  name: string;
-  category: string;
-  size: number;
-};
-
-type SkillItem = {
-  name: string;
-  description: string;
-  source: string;
-};
-
-type SessionMessage = {
-  role: "user" | "assistant" | "tool";
-  content: string;
-  blocks?: AssistantBlock[];
-};
-
-type AssistantBlock =
-  | { id: string; kind: "reasoning"; content: string }
-  | { id: string; kind: "content"; content: string; status: "streaming" | "done" }
-  | { id: string; kind: "elapsed"; elapsed_ms: number }
-  | {
-      id: string;
-      kind: "tool";
-      title: string;
-      meta: string;
-      argumentsText: string;
-      outputText: string;
-      status: "running" | "done";
-    };
-
-type AssistantSegment =
-  | { id: string; kind: "bubble"; blocks: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" }>> }
-  | { id: string; kind: "tool"; block: Extract<AssistantBlock, { kind: "tool" }> };
-
-type ChatMessage =
-  | { id: string; role: "user"; content: string }
-  | {
-      id: string;
-      role: "elicitation_response";
-      title: string;
-      summary: string;
-      answers: Array<{ id: string; header: string; value: string }>;
-    }
-  | { id: string; role: "assistant"; blocks: AssistantBlock[]; elapsedMs: number | null; streaming: boolean };
-
-type QueuedMessage = {
-  id: string;
-  content: string;
-  queuedAt: number;
-};
-
-type ContextStatus = {
-  model: string;
-  estimatedTokens: number;
-  effectiveWindow: number;
-  contextWindow: number;
-  targetInputTokens: number;
-  warningThreshold: number;
-  blockingLimit: number;
-  percentUsed: number;
-  state: "idle" | "warning" | "compacted" | "recovered" | "blocked";
-  detail: string;
-};
-
-type SidebarView = "sessions" | "files" | "skills";
-type LlmDialogState = {
-  enabled: boolean;
-  base_url: string;
-  model: string;
-  api_key: string;
-  extra_headers_text: string;
-  extra_body_text: string;
-  has_api_key: boolean;
-  resolved_scope: "user" | "platform" | "global";
-};
-
-type WorkbenchPageProps = {
-  conversations: Array<{
-    conversation_id: string;
-    session_id: string;
-    title: string;
-  }>;
-  currentUser?: {
-    full_name: string;
-    role: string;
-  } | null;
-  isEmbedMode?: boolean;
-  sessionId: string;
-  isNewSession?: boolean;
-  onAdminToggle?: () => void;
-  onLogout?: () => void;
-  onNewConversation?: () => void;
-  onDeleteSession?: (sessionId: string) => void;
-  onRenameSession?: (sessionId: string, currentTitle: string) => void;
-  onSessionCreated?: (sessionId: string) => void;
-  onSessionRefresh?: () => void;
-  onSessionSelect?: (sessionId: string) => void;
-};
+import { ChatTimeline } from "../components/workbench/ChatTimeline";
+import { Composer } from "../components/workbench/Composer";
+import { ContextStatusPill } from "../components/workbench/ContextStatusPill";
+import { LlmConfigDialog } from "../components/workbench/LlmConfigDialog";
+import { WorkbenchIcons as Icons } from "../components/workbench/WorkbenchIcons";
+import { WorkbenchSidebar } from "../components/workbench/WorkbenchSidebar";
+import { formatTokenCount } from "./workbench/markdown";
+import type {
+  AssistantBlock,
+  ChatMessage,
+  ContextStatus,
+  FileItem,
+  LlmDialogState,
+  QueuedMessage,
+  SessionMessage,
+  SidebarView,
+  SkillItem,
+  WorkbenchPageProps,
+} from "./workbench/types";
 
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 460;
@@ -150,187 +51,6 @@ const RESULT_MESSAGES: Record<string, string> = {
   error_max_turns: "执行达到轮次上限",
   error_runtime_limit: "执行达到运行时限",
 };
-
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("sh", bash);
-hljs.registerLanguage("shell", bash);
-hljs.registerLanguage("css", css);
-hljs.registerLanguage("diff", diff);
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("js", javascript);
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("markdown", markdown);
-hljs.registerLanguage("md", markdown);
-hljs.registerLanguage("plaintext", plaintext);
-hljs.registerLanguage("text", plaintext);
-hljs.registerLanguage("txt", plaintext);
-hljs.registerLanguage("powershell", powershell);
-hljs.registerLanguage("ps1", powershell);
-hljs.registerLanguage("python", python);
-hljs.registerLanguage("py", python);
-hljs.registerLanguage("sql", sql);
-hljs.registerLanguage("typescript", typescript);
-hljs.registerLanguage("ts", typescript);
-hljs.registerLanguage("tsx", typescript);
-hljs.registerLanguage("html", xml);
-hljs.registerLanguage("xml", xml);
-hljs.registerLanguage("yaml", yaml);
-hljs.registerLanguage("yml", yaml);
-
-marked.setOptions({ breaks: true, gfm: true });
-
-marked.use({
-  renderer: {
-    code(codeArg: unknown, langArg?: string) {
-      const text = typeof codeArg === "object" && codeArg && "text" in codeArg ? String((codeArg as { text: unknown }).text ?? "") : String(codeArg ?? "");
-      const language = typeof codeArg === "object" && codeArg && "lang" in codeArg ? String((codeArg as { lang: unknown }).lang ?? "") : (langArg ?? "plaintext");
-      const validLang = hljs.getLanguage(language) ? language : "plaintext";
-      const highlighted = hljs.highlight(text, { language: validLang }).value;
-      const encodedCode = encodeURIComponent(text);
-      const lineCount = text.split("\n").length;
-      const shouldCollapse = lineCount > 15;
-
-      return `
-        <details class="code-block-wrapper ${shouldCollapse ? "collapsible" : ""}" ${shouldCollapse ? "" : "open"}>
-          <summary class="code-header">
-            <div class="code-header-left">
-              <svg class="code-toggle-icon" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-              <span class="code-lang">${validLang}</span>
-            </div>
-            <div class="code-header-right">
-              ${shouldCollapse ? `<span class="code-expand-label">${lineCount} 行</span>` : ""}
-              <button class="copy-button" data-code="${encodedCode}" type="button">
-                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                <span>复制</span>
-              </button>
-            </div>
-          </summary>
-          <div class="code-content-wrapper">
-            <div class="code-content-inner">
-              <pre><code class="hljs language-${validLang}">${highlighted}</code></pre>
-            </div>
-          </div>
-        </details>
-      `;
-    },
-  },
-});
-
-const Icons = {
-  Menu: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>,
-  SidebarClose: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>,
-  Send: () => <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>,
-  Stop: () => <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>,
-  Attach: () => <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>,
-  Globe: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a15 15 0 0 1 0 18"></path><path d="M12 3a15 15 0 0 0 0 18"></path></svg>,
-  File: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>,
-  Download: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>,
-  Terminal: () => <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>,
-  Loader: () => <svg className="spin-anim" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>,
-  Check: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="#10b981" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>,
-  Sparkles: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>,
-  Close: () => <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>,
-};
-
-type ComposerProps = {
-  busy: boolean;
-  disabled: boolean;
-  allowNetwork: boolean;
-  queuedMessages: QueuedMessage[];
-  onAllowNetworkChange: (value: boolean) => void;
-  onSend: (text: string) => void;
-  onStop: () => void;
-  onRemoveQueued: (id: string) => void;
-  onUpload: (file: File) => void;
-};
-
-function QueuedMessagesDock({ messages, onRemove }: { messages: QueuedMessage[]; onRemove: (id: string) => void }) {
-  if (messages.length === 0) return null;
-  return (
-    <div className="queued-messages-dock">
-      <span className="queued-messages-dock__count">{messages.length} 条消息已排队</span>
-      {messages.map((msg) => (
-        <div key={msg.id} className="queued-message-item">
-          <span className="queued-message-item__content">{msg.content}</span>
-          <button type="button" className="queued-message-item__remove" onClick={() => onRemove(msg.id)}>
-            <Icons.Close />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Composer({ busy, disabled, allowNetwork, queuedMessages, onAllowNetworkChange, onSend, onStop, onRemoveQueued, onUpload }: ComposerProps) {
-  const [input, setInput] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    if (!textareaRef.current) return;
-    textareaRef.current.style.height = "auto";
-    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
-  }, [input]);
-
-  const canSend = input.trim().length > 0 && !disabled;
-
-  const handleSend = () => {
-    if (!canSend) return;
-    onSend(input.trim());
-    setInput("");
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
-  };
-
-  return (
-    <div className="composer-area">
-      <QueuedMessagesDock messages={queuedMessages} onRemove={onRemoveQueued} />
-      <div className="composer-box">
-        <textarea
-          ref={textareaRef}
-          className="composer-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder={busy ? "输入消息将在工具执行后发送..." : "发送指令，与系统深度交互..."}
-          rows={1}
-        />
-        <div className="composer-actions">
-          <div className="composer-actions__left">
-            <label className="icon-button attach-btn" title="上传文件">
-              <input type="file" onChange={(e) => { if (e.target.files?.[0]) onUpload(e.target.files[0]); e.currentTarget.value = ""; }} />
-              <Icons.Attach />
-            </label>
-            <button
-              type="button"
-              className={`network-toggle ${allowNetwork ? "active" : ""}`}
-              onClick={() => onAllowNetworkChange(!allowNetwork)}
-              aria-pressed={allowNetwork}
-              title={allowNetwork ? "当前会话已开启联网搜索" : "当前会话未开启联网搜索"}
-            >
-              <Icons.Globe />
-              <span>联网搜索</span>
-            </button>
-          </div>
-          <div className="composer-actions__right">
-            <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
-              <Icons.Send />
-            </button>
-            {busy && (
-              <button className="icon-button stop-btn" onClick={onStop} title="停止">
-                <Icons.Stop />
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-      <div className="composer-footer">AetherCore System · Advanced Mode</div>
-    </div>
-  );
-}
 
 function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
   return items
@@ -350,21 +70,6 @@ function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
     );
 }
 
-function formatTokenCount(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0";
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2).replace(/\.00$/, "")}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  return String(Math.round(value));
-}
-
-function formatElapsedMs(ms: number | null) {
-  if (ms === null) return null;
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.round((ms % 60000) / 1000);
-  return `${minutes}m ${seconds}s`;
-}
 
 export function WorkbenchPage({
   conversations,
@@ -797,8 +502,6 @@ window.addEventListener("resize", handleResize);
   }, [sessionId, isNewSession, localSessionId]);
 
 const composerDisabled = !(sessionId || localSessionId || isNewSession);
-  const contextUsagePercent = Math.max(0, Math.min(100, Math.round(contextStatus?.percentUsed ?? 0)));
-  const contextStateTone = contextStatus?.state ?? "idle";
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
     setMessages((current) =>
@@ -1422,269 +1125,47 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     }
   };
 
-  const renderMarkdown = (value?: string | null) => {
-    const safeValue = typeof value === "string" ? value : "";
-    return { __html: marked.parse(safeValue) as string };
-  };
-
-  const renderAssistantSegments = (blocks: AssistantBlock[]): AssistantSegment[] => {
-    const segments: AssistantSegment[] = [];
-    let currentBubble: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" }>> = [];
-
-    for (const block of blocks) {
-      if (block.kind === "tool") {
-        if (currentBubble.length > 0) {
-          segments.push({ id: `bubble-${currentBubble[0].id}`, kind: "bubble", blocks: currentBubble });
-          currentBubble = [];
-        }
-        segments.push({ id: `tool-${block.id}`, kind: "tool", block });
-        continue;
-      }
-      if (block.kind === "elapsed") {
-        continue;
-      }
-      currentBubble.push(block as Extract<AssistantBlock, { kind: "reasoning" | "content" }>);
-    }
-
-    if (currentBubble.length > 0) {
-      segments.push({ id: `bubble-${currentBubble[0].id}`, kind: "bubble", blocks: currentBubble });
-    }
-
-    return segments;
-  };
-
-  const visibleConversations = conversations;
-
   return (
     <main className="app-layout">
-      <aside
-        className={`sidebar ${isSidebarOpen ? "is-open" : "is-closed"} ${isResizingSidebar ? "is-resizing" : ""}`}
-        style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
-      >
-        <div className="sidebar-inner">
-          <div className="sidebar-header">
-            <div className="sidebar-header__title">
-              <h1 className="brand-title">AetherCore</h1>
-              {!isEmbedMode && currentUser ? (
-                <p className="sidebar-user-meta">
-                  {currentUser.full_name}
-                  <span>{currentUser.role}</span>
-                </p>
-              ) : (
-                <p className="sidebar-user-meta">嵌入工作台</p>
-              )}
-            </div>
-            {isMobile ? <button className="icon-button" onClick={() => setIsSidebarOpen(false)}><Icons.Menu /></button> : null}
-          </div>
+      <WorkbenchSidebar
+        conversations={conversations}
+        currentUser={currentUser}
+        isEmbedMode={isEmbedMode}
+        isMobile={isMobile}
+        isSidebarOpen={isSidebarOpen}
+        isResizingSidebar={isResizingSidebar}
+        sidebarWidth={sidebarWidth}
+        sidebarView={sidebarView}
+        sessionId={sessionId}
+        files={files}
+        skills={skills}
+        onCloseSidebar={() => setIsSidebarOpen(false)}
+        onSidebarViewChange={setSidebarView}
+        onNewConversation={onNewConversation}
+        onSessionSelect={onSessionSelect}
+        onRenameSession={onRenameSession}
+        onDeleteSession={onDeleteSession}
+        onUploadFile={handleUpload}
+        onUploadSkill={handleUploadSkill}
+        onOpenLlmDialog={() => void openLlmDialog()}
+        onAdminToggle={onAdminToggle}
+        onLogout={onLogout}
+        onSidebarResizeStart={handleSidebarResizeStart}
+        getDownloadUrl={(fileId) => getDownloadUrl(sessionId, fileId)}
+      />
 
-          <div className="segment-control">
-            <button className={`segment-btn ${sidebarView === "sessions" ? "active" : ""}`} onClick={() => setSidebarView("sessions")}>会话</button>
-            <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => setSidebarView("files")}>文件</button>
-            <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => setSidebarView("skills")}>技能</button>
-          </div>
-
-          <div className="sidebar-content">
-            {sidebarView === "sessions" ? (
-              <div className="tab-pane">
-                <div className="pane-header">
-                  <h3>历史会话</h3>
-                  <button type="button" className="action-button small" onClick={onNewConversation}>
-                    新建
-                  </button>
-                </div>
-                <div className="item-list">
-                  {visibleConversations.length === 0 ? <div className="empty-state">暂无历史会话</div> : null}
-                  {visibleConversations.map((item) => (
-                    <div
-                      key={item.conversation_id}
-                      className={`history-item history-item--compact ${item.session_id === sessionId ? "is-active" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="history-item__main"
-                        onClick={() => onSessionSelect?.(item.session_id)}
-                      >
-                        <span className="history-item__title" title={item.title || "新对话"}>{item.title || "新对话"}</span>
-                      </button>
-                      <div className="history-item__actions">
-                        <button type="button" className="history-item__action-btn" title="重命名" onClick={(e) => { e.stopPropagation(); onRenameSession?.(item.session_id, item.title); }}>
-                          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg>
-                        </button>
-                        <button type="button" className="history-item__action-btn history-item__action-btn--delete" title="删除" onClick={(e) => { e.stopPropagation(); onDeleteSession?.(item.session_id); }}>
-                          <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : sidebarView === "files" ? (
-              <div className="tab-pane">
-                <div className="pane-header">
-                  <h3>会话文件</h3>
-                  <label className="action-button small">
-                    <span>上传</span>
-                    <input type="file" onChange={(e) => { void handleUpload(e.target.files?.[0]); e.currentTarget.value = ""; }} />
-                  </label>
-                </div>
-                <div className="item-list">
-                  {files.length === 0 ? <div className="empty-state">当前暂无上传文件</div> : null}
-                  {files.map((item, i) => (
-                    <article key={item.file_id} className="resource-card anim-enter" style={{ animationDelay: `${i * 0.05}s` }}>
-                      <div className="resource-icon"><Icons.File /></div>
-                      <div className="resource-info">
-                        <strong>{item.name}</strong>
-                        <p>{item.category} · {(item.size / 1024).toFixed(1)} KB</p>
-                      </div>
-                      <a className="download-btn" href={getDownloadUrl(sessionId, item.file_id)} target="_blank" rel="noreferrer" title="下载"><Icons.Download /></a>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="tab-pane">
-                <div className="pane-header">
-                  <h3>技能包</h3>
-                  <label className="action-button small">
-                    <span>上传</span>
-                    <input
-                      type="file"
-                      accept=".zip,.md"
-                      onChange={(e) => { void handleUploadSkill(e.target.files?.[0]); e.currentTarget.value = ""; }}
-                    />
-                  </label>
-                </div>
-                <div className="empty-state">
-                  支持上传真实技能包目录压缩成的 `.zip`，或单个 `SKILL.md` 文件。
-                </div>
-
-                <h3 className="sub-title">已加载技能 ({skills.length})</h3>
-                <div className="item-list">
-                  {skills.length === 0 ? <div className="empty-state">暂无已加载技能</div> : null}
-                  {skills.map((item, i) => (
-                    <article key={`${item.name}-${i}`} className="resource-card block anim-enter" style={{ animationDelay: `${i * 0.05 + 0.1}s` }}>
-                      <div className="flex-row">
-                        <strong>{item.name}</strong>
-                        <span className="badge">{item.source}</span>
-                      </div>
-                      <p className="desc">{item.description}</p>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {!isEmbedMode ? (
-            <div className="sidebar-footer">
-              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={() => void openLlmDialog()}>
-                模型配置
-              </button>
-              <button type="button" className="action-button sidebar-footer__button" onClick={onAdminToggle}>
-                管理配置
-              </button>
-              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onLogout}>
-                退出登录
-              </button>
-            </div>
-          ) : (
-            <div className="sidebar-footer">
-              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={() => void openLlmDialog()}>
-                模型配置
-              </button>
-            </div>
-          )}
-        </div>
-        {!isMobile ? (
-          <div
-            className="sidebar-resizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            onPointerDown={handleSidebarResizeStart}
-          />
-        ) : null}
-      </aside>
-
-      {isMobile && isSidebarOpen ? <div className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)}></div> : null}
-
-      {showLlmDialog ? (
-        <div className="modal-backdrop" onClick={() => setShowLlmDialog(false)}>
-          <div className="llm-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="llm-dialog__header">
-              <div>
-                <h3>个人 LLM 配置</h3>
-                <p>当前生效来源：{llmState.resolved_scope === "user" ? "个人覆盖" : llmState.resolved_scope === "platform" ? "平台默认" : "全局默认"}</p>
-              </div>
-              <button type="button" className="icon-button subtle" onClick={() => setShowLlmDialog(false)}>×</button>
-            </div>
-            {llmError ? <div className="error-toast anim-shake">{llmError}</div> : null}
-            <div className="llm-dialog__body">
-              <label className="admin-panel__checkbox">
-                <input
-                  type="checkbox"
-                  checked={llmState.enabled}
-                  onChange={(e) => setLlmState((current) => ({ ...current, enabled: e.target.checked }))}
-                />
-                <span>启用个人 LLM 覆盖</span>
-              </label>
-              <input
-                className="composer-input llm-input"
-                value={llmState.base_url}
-                onChange={(e) => setLlmState((current) => ({ ...current, base_url: e.target.value }))}
-                autoComplete="off"
-                name="llm-base-url"
-                placeholder="LiteLLM 或内网 OpenAI 兼容服务地址"
-              />
-              <input
-                className="composer-input llm-input"
-                value={llmState.model}
-                onChange={(e) => setLlmState((current) => ({ ...current, model: e.target.value }))}
-                autoComplete="off"
-                name="llm-model-id"
-                placeholder="模型 ID"
-              />
-              <input
-                className="composer-input llm-input"
-                type="password"
-                value={llmState.api_key}
-                onChange={(e) => setLlmState((current) => ({ ...current, api_key: e.target.value }))}
-                autoComplete="new-password"
-                name="llm-api-key"
-                placeholder={llmState.has_api_key ? "已存在密钥，留空则保持不变" : "API Key"}
-              />
-              <details className="llm-advanced-panel" open={showAdvancedLlmFields} onToggle={(e) => setShowAdvancedLlmFields((e.currentTarget as HTMLDetailsElement).open)}>
-                <summary>高级参数</summary>
-                <p className="llm-advanced-panel__hint">仅在对接 LiteLLM、代理网关或内网兼容服务需要额外请求头、额外请求体时填写。留空即可。</p>
-                <textarea
-                  className="composer-input llm-textarea"
-                  value={llmState.extra_headers_text}
-                  onChange={(e) => setLlmState((current) => ({ ...current, extra_headers_text: e.target.value }))}
-                  autoComplete="off"
-                  name="llm-extra-headers"
-                  placeholder='额外请求头 JSON，例如 {"x-tenant":"demo"}'
-                />
-                <textarea
-                  className="composer-input llm-textarea"
-                  value={llmState.extra_body_text}
-                  onChange={(e) => setLlmState((current) => ({ ...current, extra_body_text: e.target.value }))}
-                  autoComplete="off"
-                  name="llm-extra-body"
-                  placeholder='额外请求体 JSON，例如 {"reasoning":{"effort":"medium"}}'
-                />
-              </details>
-            </div>
-            <div className="llm-dialog__footer">
-              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={() => void resetUserLlm()} disabled={llmBusy}>
-                清除覆盖
-              </button>
-              <button type="button" className="action-button sidebar-footer__button" onClick={() => void saveUserLlm()} disabled={llmBusy || !llmState.base_url.trim() || !llmState.model.trim()}>
-                {llmBusy ? "保存中..." : "保存个人 LLM"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <LlmConfigDialog
+        open={showLlmDialog}
+        llmBusy={llmBusy}
+        llmError={llmError}
+        llmState={llmState}
+        showAdvancedLlmFields={showAdvancedLlmFields}
+        onClose={() => setShowLlmDialog(false)}
+        onReset={() => void resetUserLlm()}
+        onSave={() => void saveUserLlm()}
+        onToggleAdvanced={setShowAdvancedLlmFields}
+        onChange={(updater) => setLlmState(updater)}
+      />
 
       <section className="main-content">
         <header className="top-nav">
@@ -1695,142 +1176,14 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
             <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? "新会话" : `Session ID: ${sessionId || localSessionId || "Initializing..."}`}</span>
           </div>
           <div className="nav-right">
-{contextStatus ? (
-              <div className={`context-pill context-pill--${contextStateTone}`}>
-                <div className="context-pill__compact">
-                  <span className="context-pill__model" title={contextStatus.model || "等待首次对话"}>{contextStatus.model || "Model"}</span>
-                  <span className="context-pill__usage">{formatTokenCount(contextStatus.estimatedTokens)} / {formatTokenCount(contextStatus.effectiveWindow || contextStatus.contextWindow)}</span>
-                </div>
-                <div className="context-pill__popup">
-                  <div className="context-pill__detail">
-                    <div className="context-pill__meter">
-                      <div className="context-pill__meter-bar" style={{ width: `${contextUsagePercent}%` }} />
-                    </div>
-                    <div className="context-pill__row">
-                      <span className="context-pill__row-label">Usage</span>
-                      <span className="context-pill__row-value">{contextUsagePercent}%</span>
-                    </div>
-                    <div className="context-pill__row">
-                      <span className="context-pill__row-label">Target</span>
-                      <span className="context-pill__row-value">{formatTokenCount(contextStatus.targetInputTokens)}</span>
-                    </div>
-                    <div className="context-pill__row">
-                      <span className="context-pill__row-label">Block</span>
-                      <span className="context-pill__row-value">{formatTokenCount(contextStatus.blockingLimit)}</span>
-                    </div>
-                    {contextStatus.detail ? <div className="context-pill__detail-text">{contextStatus.detail}</div> : null}
-                  </div>
-                </div>
-              </div>
-            ) : null}
+            <ContextStatusPill contextStatus={contextStatus} />
           </div>
         </header>
 
         {error ? <div className="error-toast anim-shake">{error}</div> : null}
 
         <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll}>
-          <div className="chat-container">
-            {loading ? (
-              <div className="welcome-screen anim-enter">
-                <div className="welcome-icon"><Icons.Sparkles /></div>
-                <h2>AetherCore Workbench</h2>
-                <p>正在加载会话内容...</p>
-              </div>
-            ) : null}
-
-            {!loading && messages.length === 0 ? (
-              <div className="welcome-screen anim-enter">
-                <div className="welcome-icon"><Icons.Sparkles /></div>
-                <h2>AetherCore Workbench</h2>
-                <p>输入任务指令，或在左侧上传文件与技能定义。</p>
-              </div>
-            ) : null}
-
-            {messages.map((message) =>
-              message.role === "user" ? (
-                <div key={message.id} className="message-row user msg-anim">
-                  <div className="bubble user-bubble">
-                    <div dangerouslySetInnerHTML={renderMarkdown(message.content)} className="markdown-body clean" />
-                  </div>
-                </div>
-              ) : message.role === "elicitation_response" ? (
-        <div key={message.id} className="message-row message-row--elicitation-response msg-anim">
-                  <div className="elicitation-response-bubble">
-                    <div className="elicitation-response-bubble__eyebrow">
-                      <span className="elicitation-response-bubble__dot" />
-                      <span>问题已回复</span>
-                    </div>
-                    <div className="elicitation-response-bubble__title">{message.title}</div>
-                    <div className="elicitation-response-bubble__summary">{message.summary}</div>
-                    <div className="elicitation-response-bubble__answers">
-                      {message.answers.map((answer) => (
-                        <div key={answer.id} className="elicitation-response-bubble__answer">
-                          <span>{answer.header}</span>
-                          <strong>{answer.value}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div key={message.id} className="message-row assistant msg-anim">
-                  <div className="assistant-content">
-                    {renderAssistantSegments(message.blocks).map((segment) =>
-                      segment.kind === "tool" ? (
-                        <details key={segment.id} className={`tool-card ${segment.block.status}`}>
-                          <summary className="tool-header">
-                            <div className="tool-title">
-                              <svg className="tool-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-                              {segment.block.title}
-                            </div>
-                            <div className="tool-status">
-                              {segment.block.status === "running" ? <span className="status-run"><Icons.Loader /> 执行中...</span> : <span className="status-done"><Icons.Check /> 完成</span>}
-                            </div>
-                          </summary>
-                          <div className="tool-body-wrapper">
-                            <div className="tool-body-inner">
-                              <div className="tool-body">
-                                {segment.block.argumentsText ? (
-                                  <div className="tool-section">
-                                    <div className="section-label">输入参数</div>
-                                    <pre className="code-block input">{segment.block.argumentsText}</pre>
-                                  </div>
-                                ) : null}
-                                {segment.block.outputText ? (
-                                  <div className="tool-section">
-                                    <div className="section-label">输出结果</div>
-                                    <pre className="code-block output">{segment.block.outputText}</pre>
-                                  </div>
-                                ) : null}
-                              </div>
-                            </div>
-                          </div>
-                        </details>
-                      ) : (
-                        <div key={segment.id} className="text-bubble">
-                          {segment.blocks.map((block) =>
-                            block.kind === "reasoning" ? (
-                              <details key={block.id} className="reasoning-block" open>
-                                <summary><Icons.Sparkles /> 思考过程</summary>
-                                <div className="reasoning-content markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
-                              </details>
-                            ) : (
-                              <div key={block.id} className="markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
-                            ),
-                          )}
-                        </div>
-                      ),
-                    )}
-                  </div>
-                  {message.elapsedMs !== null && message.elapsedMs >= 0 ? (
-                    <div className="elapsed-badge">
-                      {formatElapsedMs(message.elapsedMs)}
-                    </div>
-                  ) : null}
-                </div>
-              ),
-            )}
-          </div>
+          <ChatTimeline loading={loading} messages={messages} />
         </div>
 
         <div className="runtime-panels">
