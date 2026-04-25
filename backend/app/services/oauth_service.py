@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from urllib.parse import urlencode
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_provider_env_key(provider_key: str) -> str:
@@ -33,6 +36,29 @@ def _coerce_mapping(raw_value: str | None) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise RuntimeError("OAuth JSON configuration must be an object")
     return parsed
+
+
+@lru_cache(maxsize=1)
+def _load_backend_env_file() -> dict[str, str]:
+    env_file = settings.backend_root / ".env"
+    if not env_file.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _read_config_value(name: str) -> str:
+    value = os.environ.get(name)
+    if value is not None:
+        return value.strip()
+    return _load_backend_env_file().get(name, "").strip()
 
 
 @dataclass(frozen=True)
@@ -58,6 +84,20 @@ class OAuthProviderConfig:
     @property
     def enabled(self) -> bool:
         return bool(self.client_id and self.client_secret and self.authorize_url and self.token_url and self.userinfo_url)
+
+    def missing_required_fields(self) -> list[str]:
+        missing: list[str] = []
+        if not self.client_id:
+            missing.append("CLIENT_ID")
+        if not self.client_secret:
+            missing.append("CLIENT_SECRET")
+        if not self.authorize_url:
+            missing.append("AUTHORIZE_URL")
+        if not self.token_url:
+            missing.append("TOKEN_URL")
+        if not self.userinfo_url:
+            missing.append("USERINFO_URL")
+        return missing
 
 
 class OAuthService:
@@ -173,6 +213,15 @@ class OAuthService:
             config = self._load_from_env(normalized_key)
             if config is not None:
                 providers[normalized_key] = config
+                missing_fields = config.missing_required_fields()
+                if missing_fields:
+                    env_key = _normalize_provider_env_key(normalized_key)
+                    missing_env_vars = ", ".join(f"AUTH_OAUTH_{env_key}_{field}" for field in missing_fields)
+                    logger.warning(
+                        "OAuth provider '%s' is declared but incomplete; missing %s",
+                        normalized_key,
+                        missing_env_vars,
+                    )
 
         for provider_key, raw_config in _coerce_mapping(settings.auth_oauth_config_json).items():
             if not isinstance(raw_config, dict):
@@ -183,26 +232,31 @@ class OAuthService:
 
     def reload(self) -> None:
         self._load_provider_configs.cache_clear()
+        _load_backend_env_file.cache_clear()
 
     def _load_from_env(self, provider_key: str) -> OAuthProviderConfig | None:
         env_key = _normalize_provider_env_key(provider_key)
         prefix = f"AUTH_OAUTH_{env_key}_"
-        client_id = os.environ.get(f"{prefix}CLIENT_ID", "").strip()
-        client_secret = os.environ.get(f"{prefix}CLIENT_SECRET", "").strip()
-        authorize_url = os.environ.get(f"{prefix}AUTHORIZE_URL", "").strip()
-        token_url = os.environ.get(f"{prefix}TOKEN_URL", "").strip()
-        userinfo_url = os.environ.get(f"{prefix}USERINFO_URL", "").strip()
-        display_name = os.environ.get(f"{prefix}DISPLAY_NAME", provider_key).strip() or provider_key
-        scope = os.environ.get(f"{prefix}SCOPE", "").strip()
-        token_request_format = os.environ.get(f"{prefix}TOKEN_REQUEST_FORMAT", "form").strip().lower() or "form"
-        userinfo_request_format = os.environ.get(f"{prefix}USERINFO_REQUEST_FORMAT", "bearer").strip().lower() or "bearer"
-        user_id_fields = tuple(_parse_csv(os.environ.get(f"{prefix}USER_ID_FIELDS")) or ["id", "sub"])
-        user_name_fields = tuple(_parse_csv(os.environ.get(f"{prefix}USER_NAME_FIELDS")) or ["name", "preferred_username"])
-        user_email_fields = tuple(_parse_csv(os.environ.get(f"{prefix}USER_EMAIL_FIELDS")) or ["email"])
-        whitelist_match_fields = tuple(_parse_csv(os.environ.get(f"{prefix}WHITELIST_MATCH_FIELDS")) or list(user_id_fields))
-        extra_authorize_params = tuple(sorted(_coerce_mapping(os.environ.get(f"{prefix}AUTHORIZE_PARAMS_JSON")).items()))
-        extra_token_params = tuple(sorted(_coerce_mapping(os.environ.get(f"{prefix}TOKEN_PARAMS_JSON")).items()))
-        extra_userinfo_params = tuple(sorted(_coerce_mapping(os.environ.get(f"{prefix}USERINFO_PARAMS_JSON")).items()))
+        client_id = _read_config_value(f"{prefix}CLIENT_ID")
+        client_secret = _read_config_value(f"{prefix}CLIENT_SECRET")
+        authorize_url = _read_config_value(f"{prefix}AUTHORIZE_URL")
+        token_url = _read_config_value(f"{prefix}TOKEN_URL")
+        userinfo_url = _read_config_value(f"{prefix}USERINFO_URL")
+        display_name = _read_config_value(f"{prefix}DISPLAY_NAME") or provider_key
+        scope = _read_config_value(f"{prefix}SCOPE")
+        token_request_format = _read_config_value(f"{prefix}TOKEN_REQUEST_FORMAT").lower() or "form"
+        userinfo_request_format = _read_config_value(f"{prefix}USERINFO_REQUEST_FORMAT").lower() or "bearer"
+        user_id_fields = tuple(_parse_csv(_read_config_value(f"{prefix}USER_ID_FIELDS")) or ["id", "sub"])
+        user_name_fields = tuple(
+            _parse_csv(_read_config_value(f"{prefix}USER_NAME_FIELDS")) or ["name", "preferred_username"]
+        )
+        user_email_fields = tuple(_parse_csv(_read_config_value(f"{prefix}USER_EMAIL_FIELDS")) or ["email"])
+        whitelist_match_fields = tuple(
+            _parse_csv(_read_config_value(f"{prefix}WHITELIST_MATCH_FIELDS")) or list(user_id_fields)
+        )
+        extra_authorize_params = tuple(sorted(_coerce_mapping(_read_config_value(f"{prefix}AUTHORIZE_PARAMS_JSON")).items()))
+        extra_token_params = tuple(sorted(_coerce_mapping(_read_config_value(f"{prefix}TOKEN_PARAMS_JSON")).items()))
+        extra_userinfo_params = tuple(sorted(_coerce_mapping(_read_config_value(f"{prefix}USERINFO_PARAMS_JSON")).items()))
 
         if not any([client_id, client_secret, authorize_url, token_url, userinfo_url]):
             return None

@@ -216,6 +216,54 @@ def test_oauth_whitelist_supports_configured_match_fields(tmp_path, monkeypatch)
     assert result.user.role == "platform_admin"
 
 
+def test_oauth_provider_list_logs_incomplete_provider_configuration(tmp_path, monkeypatch, caplog):
+    initialize_isolated_runtime(tmp_path)
+
+    monkeypatch.setattr(settings, "auth_oauth_providers", "corp-sso")
+    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_CLIENT_ID", "client-id")
+    from app.services.oauth_service import oauth_service
+
+    oauth_service.reload()
+
+    with caplog.at_level("WARNING"):
+        providers = oauth_service.list_enabled_providers()
+
+    assert providers == []
+    assert "OAuth provider 'corp-sso' is declared but incomplete" in caplog.text
+    assert "AUTH_OAUTH_CORP_SSO_CLIENT_SECRET" in caplog.text
+    assert "AUTH_OAUTH_CORP_SSO_AUTHORIZE_URL" in caplog.text
+    assert "AUTH_OAUTH_CORP_SSO_TOKEN_URL" in caplog.text
+    assert "AUTH_OAUTH_CORP_SSO_USERINFO_URL" in caplog.text
+
+
+def test_oauth_provider_list_reads_provider_details_from_env_file(monkeypatch):
+    monkeypatch.setattr(settings, "auth_oauth_providers", "corp-sso")
+    from app.services.oauth_service import oauth_service
+    from app.services import oauth_service as oauth_module
+
+    oauth_service.reload()
+    monkeypatch.setattr(
+        oauth_module,
+        "_load_backend_env_file",
+        lambda: {
+            "AUTH_OAUTH_CORP_SSO_DISPLAY_NAME": "Company SSO",
+            "AUTH_OAUTH_CORP_SSO_CLIENT_ID": "client-id",
+            "AUTH_OAUTH_CORP_SSO_CLIENT_SECRET": "client-secret",
+            "AUTH_OAUTH_CORP_SSO_AUTHORIZE_URL": "https://sso.example.com/oauth2/authorize",
+            "AUTH_OAUTH_CORP_SSO_TOKEN_URL": "https://sso.example.com/oauth2/token",
+            "AUTH_OAUTH_CORP_SSO_USERINFO_URL": "https://sso.example.com/oauth2/userinfo",
+            "AUTH_OAUTH_CORP_SSO_SCOPE": "base.profile",
+        },
+    )
+
+    providers = oauth_service.list_enabled_providers()
+
+    assert len(providers) == 1
+    assert providers[0]["provider_key"] == "corp-sso"
+    assert providers[0]["display_name"] == "Company SSO"
+    assert "client_id=client-id" in providers[0]["authorize_url_template"]
+
+
 def test_host_bind_requires_platform_secret_and_matching_platform_key(tmp_path):
     initialize_isolated_runtime(tmp_path)
 
