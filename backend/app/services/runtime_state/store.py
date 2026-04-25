@@ -4,7 +4,7 @@ import json
 import shutil
 import threading
 from pathlib import Path
-from typing import TypeVar
+from typing import Callable, TypeVar
 
 from pydantic import BaseModel
 
@@ -56,6 +56,24 @@ class RuntimeStateStore:
         lock = self._get_lock(session.session_id, name)
         with lock:
             self._write_unlocked(path, state)
+
+    def update(self, session: AgentSession, name: str, model_type: type[T], default_factory, updater: Callable[[T], T]) -> T:
+        path = self.path_for(session, name)
+        lock = self._get_lock(session.session_id, name)
+        with lock:
+            if not path.exists():
+                state = default_factory()
+            else:
+                try:
+                    state = model_type.model_validate_json(path.read_text(encoding="utf-8"))
+                except Exception:
+                    broken_path = path.with_suffix(f".broken-{path.stat().st_mtime_ns}.json")
+                    shutil.move(str(path), str(broken_path))
+                    state = default_factory()
+
+            next_state = updater(state)
+            self._write_unlocked(path, next_state)
+            return next_state
 
     def _write_unlocked(self, path: Path, state: BaseModel) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

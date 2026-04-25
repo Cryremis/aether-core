@@ -61,44 +61,63 @@ class RuntimeStateService:
         return sections
 
     def get_workboard(self, session: AgentSession) -> WorkboardState:
-        return runtime_state_store.load(
+        state = runtime_state_store.load(
             session,
             "workboard",
             WorkboardState,
             lambda: WorkboardState(session_id=session.session_id),
         )
+        normalized_items, changed = self._normalize_workboard_items(state.items)
+        if changed:
+            state.items = normalized_items
+            state.status = self._derive_workboard_status(normalized_items, explicit_status=state.status)
+            state.updated_at = utc_now_iso()
+            runtime_state_store.save(session, "workboard", state)
+        return state
 
     def save_workboard(self, session: AgentSession, state: WorkboardState) -> WorkboardState:
         runtime_state_store.save(session, "workboard", state)
         return state
 
     def update_workboard(self, session: AgentSession, payload: dict[str, Any]) -> WorkboardState:
-        now = utc_now_iso()
-        state = self.get_workboard(session)
-        items = list(state.items)
-        operations = payload.get("ops")
-        if isinstance(operations, list) and operations:
-            items = self._apply_workboard_ops(items, operations, now)
-        elif isinstance(payload.get("items"), list):
-            items = self._replace_workboard_items(items, payload.get("items") or [], now)
+        def apply_update(state: WorkboardState) -> WorkboardState:
+            now = utc_now_iso()
+            items, _ = self._normalize_workboard_items(state.items)
+            operations = payload.get("ops")
+            if isinstance(operations, list) and operations:
+                items = self._apply_workboard_ops(items, operations, now)
+            elif isinstance(payload.get("items"), list):
+                items = self._replace_workboard_items(items, payload.get("items") or [], now)
 
-        if payload.get("archive_completed"):
-            items = [item for item in items if item.status != "completed"]
+            if payload.get("archive_completed"):
+                items = [item for item in items if item.status != "completed"]
 
-        state.items = items
-        state.status = self._derive_workboard_status(items, explicit_status=payload.get("status"))
-        state.revision += 1
-        state.updated_at = now
-        return self.save_workboard(session, state)
+            items, _ = self._normalize_workboard_items(items)
+
+            state.items = items
+            state.status = self._derive_workboard_status(items, explicit_status=payload.get("status"))
+            state.revision += 1
+            state.updated_at = now
+            return state
+
+        return runtime_state_store.update(
+            session,
+            "workboard",
+            WorkboardState,
+            lambda: WorkboardState(session_id=session.session_id),
+            apply_update,
+        )
 
     def _replace_workboard_items(self, current_items: list[WorkItem], raw_items: list[dict[str, Any]], now: str) -> list[WorkItem]:
         existing_by_id = {item.id: item for item in current_items}
         next_items: list[WorkItem] = []
+        used_ids: set[str] = set()
         for raw_item in raw_items:
             title = str(raw_item.get("title") or "").strip()
             if not title:
                 continue
-            item_id = str(raw_item.get("id") or f"work_{uuid.uuid4().hex[:10]}")
+            item_id = self._next_unique_item_id(str(raw_item.get("id") or "").strip(), used_ids)
+            used_ids.add(item_id)
             next_items.append(self._materialize_item(raw_item, existing_by_id.get(item_id), item_id, now))
         return next_items
 
@@ -110,7 +129,8 @@ class RuntimeStateService:
                 title = str(operation.get("title") or "").strip()
                 if not title:
                     continue
-                item_id = str(operation.get("id") or f"work_{uuid.uuid4().hex[:10]}")
+                existing_ids = {item.id for item in items}
+                item_id = self._next_unique_item_id(str(operation.get("id") or "").strip(), existing_ids)
                 items.append(self._materialize_item(operation, None, item_id, now))
             elif op_type == "update_item":
                 item_id = str(operation.get("id") or "").strip()
@@ -133,6 +153,31 @@ class RuntimeStateService:
                 items = self._replace_workboard_items(items, operation.get("items") or [], now)
         return items
 
+    def _normalize_workboard_items(self, items: list[WorkItem]) -> tuple[list[WorkItem], bool]:
+        normalized: list[WorkItem] = []
+        used_ids: set[str] = set()
+        changed = False
+        for item in items:
+            next_id = self._next_unique_item_id(item.id, used_ids)
+            used_ids.add(next_id)
+            if next_id != item.id:
+                normalized.append(item.model_copy(update={"id": next_id}))
+                changed = True
+            else:
+                normalized.append(item)
+        return normalized, changed
+
+    def _next_unique_item_id(self, preferred_id: str, used_ids: set[str]) -> str:
+        candidate = preferred_id or f"work_{uuid.uuid4().hex[:10]}"
+        if candidate not in used_ids:
+            return candidate
+
+        base = candidate
+        suffix = 2
+        while f"{base}_{suffix}" in used_ids:
+            suffix += 1
+        return f"{base}_{suffix}"
+
     def _materialize_item(
         self,
         raw_item: dict[str, Any],
@@ -143,6 +188,13 @@ class RuntimeStateService:
         title = str(raw_item.get("title") or (previous.title if previous else "")).strip()
         if not title:
             title = previous.title if previous else "Untitled"
+        active_form_value = raw_item.get("active_form")
+        if active_form_value is None:
+            active_form_value = raw_item.get("activeForm")
+        if active_form_value is None and "title" in raw_item:
+            active_form_value = title
+        if active_form_value is None:
+            active_form_value = previous.active_form if previous else title
         status = str(raw_item.get("status") or (previous.status if previous else "pending"))
         if status not in {"pending", "in_progress", "completed", "blocked", "cancelled"}:
             status = previous.status if previous else "pending"
@@ -157,7 +209,7 @@ class RuntimeStateService:
         return WorkItem(
             id=item_id,
             title=title,
-            active_form=str(raw_item.get("active_form") or raw_item.get("activeForm") or previous.active_form if previous else title),
+            active_form=str(active_form_value),
             status=status,  # type: ignore[arg-type]
             priority=priority,  # type: ignore[arg-type]
             owner=str(raw_item.get("owner") or (previous.owner if previous else "assistant")),

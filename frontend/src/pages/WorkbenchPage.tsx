@@ -132,6 +132,7 @@ export function WorkbenchPage({
   const bottomAnchorUntilRef = useRef(0);
   const detailsToggleShouldStickRef = useRef(false);
   const pendingSessionBottomScrollRef = useRef(false);
+  const workboardOpChainRef = useRef<Promise<void>>(Promise.resolve());
 
   const historyRef = useRef<HTMLDivElement | null>(null);
 
@@ -472,14 +473,21 @@ window.addEventListener("resize", handleResize);
     if (!effectiveSessionId) {
       throw new Error("当前没有可编辑的会话");
     }
-    const result = await updateSessionWorkboard(effectiveSessionId, { ops });
-    const nextWorkboard = (result.data ?? null) as WorkboardState | null;
-    if (nextWorkboard) {
-      setWorkboard(nextWorkboard);
-      if (nextWorkboard.items.length > 0) {
-        setWorkboardVisible(true);
+
+    const run = async () => {
+      const result = await updateSessionWorkboard(effectiveSessionId, { ops });
+      const nextWorkboard = (result.data ?? null) as WorkboardState | null;
+      if (nextWorkboard) {
+        setWorkboard(nextWorkboard);
+        if (nextWorkboard.items.length > 0) {
+          setWorkboardVisible(true);
+        }
       }
-    }
+    };
+
+    const queued = workboardOpChainRef.current.then(run);
+    workboardOpChainRef.current = queued.catch(() => undefined);
+    await queued;
   };
 
   useEffect(() => {
