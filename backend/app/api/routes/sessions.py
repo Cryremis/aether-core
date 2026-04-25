@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import AuthContext, get_auth_context
 from app.schemas.common import ApiResponse
-from app.schemas.session import SessionSummary
+from app.schemas.session import SessionSummary, WorkboardUpdateRequest
 from app.services.runtime_state import runtime_state_service
 from app.services.artifact_service import artifact_service
 from app.services.conversation_service import conversation_service
@@ -15,6 +15,26 @@ from app.services.skill_service import skill_service
 from app.services.store import store_service
 
 router = APIRouter(prefix="/api/v1/agent/sessions", tags=["sessions"])
+
+
+def _ensure_session_access(session_id: str, auth: AuthContext):
+    conversation = store_service.get_conversation_by_session(session_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if auth.kind == "admin":
+        if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
+            raise HTTPException(status_code=403, detail="无权访问该会话")
+    elif auth.kind == "embed":
+        if (
+            conversation.get("platform_id") != auth.platform_id
+            or conversation.get("external_user_id") != auth.external_user_id
+        ):
+            raise HTTPException(status_code=403, detail="无权访问该会话")
+    else:
+        raise HTTPException(status_code=401, detail="未授权")
+    session = session_service.get_or_create(session_id)
+    session.conversation_id = conversation.get("conversation_id")
+    return conversation, session
 
 
 @router.post("/bootstrap")
@@ -98,22 +118,7 @@ def list_sessions(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
 
 @router.get("/{session_id}")
 def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
-    conversation = store_service.get_conversation_by_session(session_id)
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    if auth.kind == "admin":
-        if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
-            raise HTTPException(status_code=403, detail="无权访问该会话")
-    elif auth.kind == "embed":
-        if (
-            conversation.get("platform_id") != auth.platform_id
-            or conversation.get("external_user_id") != auth.external_user_id
-        ):
-            raise HTTPException(status_code=403, detail="无权访问该会话")
-    else:
-        raise HTTPException(status_code=401, detail="未授权")
-
-    session = session_service.get_or_create(session_id)
+    conversation, session = _ensure_session_access(session_id, auth)
     summary = SessionSummary(
         session_id=session.session_id,
         conversation_id=session.conversation_id,
@@ -130,6 +135,24 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         elicitation=runtime_state_service.get_elicitation(session),
     )
     return ApiResponse(message="会话摘要", data=summary.model_dump(mode="json"))
+
+
+@router.get("/{session_id}/workboard")
+def get_session_workboard(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    _, session = _ensure_session_access(session_id, auth)
+    workboard = runtime_state_service.get_workboard(session)
+    return ApiResponse(message="任务清单", data=workboard.model_dump(mode="json"))
+
+
+@router.patch("/{session_id}/workboard")
+def update_session_workboard(
+    session_id: str,
+    payload: WorkboardUpdateRequest,
+    auth: AuthContext = Depends(get_auth_context),
+) -> ApiResponse:
+    _, session = _ensure_session_access(session_id, auth)
+    updated = runtime_state_service.update_workboard(session, payload.model_dump(exclude_none=True))
+    return ApiResponse(message="任务清单已更新", data=updated.model_dump(mode="json"))
 
 
 @router.delete("/{session_id}")

@@ -25,3 +25,10 @@ class SessionSummary(BaseModel):
     context_state: dict[str, Any] = Field(default_factory=dict)
     workboard: WorkboardState = Field(default_factory=lambda: WorkboardState(session_id=""))
     elicitation: ElicitationState = Field(default_factory=lambda: ElicitationState(session_id=""))
+
+
+class WorkboardUpdateRequest(BaseModel):
+    items: list[dict[str, Any]] | None = None
+    ops: list[dict[str, Any]] | None = None
+    archive_completed: bool = False
+    status: str | None = None

@@ -16,6 +16,7 @@ import {
   streamElicitationResponse,
   streamChat,
   type WorkboardState,
+  updateSessionWorkboard,
   updateUserLlmConfig,
   uploadFile,
   uploadSkill,
@@ -39,6 +40,7 @@ import type {
   SessionMessage,
   SidebarView,
   SkillItem,
+  WorkboardOperation,
   WorkbenchPageProps,
 } from "./workbench/types";
 
@@ -462,6 +464,21 @@ window.addEventListener("resize", handleResize);
         state: "idle",
         detail: "已恢复上下文状态",
       });
+    }
+  };
+
+  const handleWorkboardOps = async (ops: WorkboardOperation[]) => {
+    const effectiveSessionId = sessionId || localSessionId;
+    if (!effectiveSessionId) {
+      throw new Error("当前没有可编辑的会话");
+    }
+    const result = await updateSessionWorkboard(effectiveSessionId, { ops });
+    const nextWorkboard = (result.data ?? null) as WorkboardState | null;
+    if (nextWorkboard) {
+      setWorkboard(nextWorkboard);
+      if (nextWorkboard.items.length > 0) {
+        setWorkboardVisible(true);
+      }
     }
   };
 
@@ -1171,7 +1188,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         </div>
 
         <div className="runtime-panels">
-          <WorkboardDock workboard={workboard} visible={workboardVisible} onToggle={() => setWorkboardVisible((v) => !v)} />
+          <WorkboardDock
+            workboard={workboard}
+            visible={workboardVisible}
+            busy={busy || loading}
+            onToggle={() => setWorkboardVisible((v) => !v)}
+            onApplyOps={(ops) => handleWorkboardOps(ops)}
+          />
           <ElicitationPanel request={elicitation?.pending ?? null} busy={busy || elicitationBusy} onSubmit={(responses) => void handleElicitationSubmit(responses)} />
         </div>
 

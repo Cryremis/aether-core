@@ -1,3 +1,5 @@
+import type { WorkboardOperation as ApiWorkboardOperation } from "../../api/client";
+
 export type FileItem = {
   file_id: string;
   name: string;
@@ -102,3 +104,5 @@ export type WorkbenchPageProps = {
   onSessionRefresh?: () => void;
   onSessionSelect?: (sessionId: string) => void;
 };
+
+export type WorkboardOperation = ApiWorkboardOperation;

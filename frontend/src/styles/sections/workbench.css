@@ -842,6 +842,11 @@ details[open]::details-content {
   flex-shrink: 0;
 }
 
+.workboard-dock__summary {
+  font-size: 11px;
+  color: #64748b;
+}
+
 .workboard-dock__eyebrow,
 .elicitation-panel__eyebrow {
   font-size: 11px;
@@ -908,6 +913,30 @@ details[open]::details-content {
   transition: background 0.15s ease, color 0.15s ease;
 }
 
+.workboard-dock__action-btn,
+.workboard-dock__primary-btn,
+.workboard-dock__secondary-btn,
+.workboard-item__link-btn {
+  border: none;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.workboard-dock__action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(239, 246, 255, 0.95);
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.workboard-dock__action-btn:hover {
+  background: rgba(219, 234, 254, 0.95);
+}
+
 .workboard-dock__toggle-btn:hover {
   background: rgba(226, 232, 240, 0.9);
   color: #0f172a;
@@ -926,6 +955,101 @@ details[open]::details-content {
   max-height: 160px;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.workboard-dock__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 2px 10px;
+}
+
+.workboard-dock__body--always-open {
+  padding: 0 12px 12px;
+}
+
+.workboard-dock__editor--inline {
+  width: 100%;
+  padding: 0;
+}
+
+.workboard-dock__input,
+.workboard-dock__textarea,
+.workboard-dock__select {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  background: rgba(255, 255, 255, 0.96);
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.workboard-dock__input,
+.workboard-dock__select {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.workboard-dock__textarea {
+  min-height: 68px;
+  resize: vertical;
+  padding: 8px 10px;
+  line-height: 1.5;
+}
+
+.workboard-dock__editor-row,
+.workboard-dock__editor-actions,
+.workboard-item__quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workboard-dock__editor-actions {
+  justify-content: flex-end;
+}
+
+.workboard-dock__primary-btn,
+.workboard-dock__secondary-btn {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.workboard-dock__primary-btn {
+  background: #2563eb;
+  color: #fff;
+}
+
+.workboard-dock__primary-btn:hover {
+  background: #1d4ed8;
+}
+
+.workboard-dock__secondary-btn {
+  background: rgba(241, 245, 249, 0.95);
+  color: #334155;
+}
+
+.workboard-dock__secondary-btn:hover {
+  background: rgba(226, 232, 240, 0.95);
+}
+
+.workboard-dock__primary-btn:disabled,
+.workboard-dock__secondary-btn:disabled,
+.workboard-dock__action-btn:disabled,
+.workboard-item__link-btn:disabled,
+.workboard-item__status:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.workboard-dock__error {
+  padding: 0 2px 4px;
+  color: #b91c1c;
+  font-size: 12px;
 }
 
 .workboard-item {
@@ -954,6 +1078,7 @@ details[open]::details-content {
 .workboard-item__main {
   gap: 4px;
   min-width: 0;
+  flex: 1;
 }
 
 .workboard-item__title-row {
@@ -974,6 +1099,11 @@ details[open]::details-content {
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.workboard-item__status {
+  border: none;
+  cursor: pointer;
 }
 
 .workboard-dock__status--completed,
@@ -1029,6 +1159,26 @@ details[open]::details-content {
   margin: 0;
   line-height: 1.45;
   font-size: 12px;
+}
+
+.workboard-item__quick-actions {
+  margin-top: 2px;
+}
+
+.workboard-item__link-btn {
+  padding: 0;
+  background: transparent;
+  color: #475569;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workboard-item__link-btn:hover {
+  color: #0f172a;
+}
+
+.workboard-item__link-btn.is-danger {
+  color: #b91c1c;
 }
 
 .elicitation-panel {

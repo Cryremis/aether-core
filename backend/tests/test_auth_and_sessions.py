@@ -321,3 +321,64 @@ def test_host_tool_requires_auth_when_injection_is_enabled():
 
     with pytest.raises(RuntimeError, match="未提供 host auth"):
         asyncio.run(tool_service.execute(session, "secure_tool", {}))
+
+
+def test_session_workboard_supports_manual_crud(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    session = conversation_service.bootstrap_admin_workbench(admin)
+
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {login.token}"}
+
+    update_response = client.patch(
+        f"/api/v1/agent/sessions/{session.session_id}/workboard",
+        headers=headers,
+        json={
+            "ops": [
+                {
+                    "op": "add_item",
+                    "id": "item-a",
+                    "title": "Review TODO UX",
+                    "notes": "Need direct edit controls",
+                    "priority": "high",
+                    "status": "pending",
+                    "source": "user",
+                    "owner": "user",
+                },
+                {
+                    "op": "update_item",
+                    "id": "item-a",
+                    "status": "in_progress",
+                    "notes": "Editing in progress",
+                },
+            ]
+        },
+    )
+
+    assert update_response.status_code == 200
+    payload = update_response.json()["data"]
+    assert payload["items"][0]["id"] == "item-a"
+    assert payload["items"][0]["status"] == "in_progress"
+    assert payload["items"][0]["source"] == "user"
+
+    get_response = client.get(
+        f"/api/v1/agent/sessions/{session.session_id}/workboard",
+        headers=headers,
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["data"]["items"][0]["notes"] == "Editing in progress"
+
+    delete_response = client.patch(
+        f"/api/v1/agent/sessions/{session.session_id}/workboard",
+        headers=headers,
+        json={"ops": [{"op": "remove_item", "id": "item-a"}]},
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["data"]["items"] == []

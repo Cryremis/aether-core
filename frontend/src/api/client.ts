@@ -145,6 +145,47 @@ export type WorkboardState = {
   updated_at: string;
 };
 
+export type WorkboardOperation =
+  | {
+      op: "add_item";
+      id?: string;
+      title: string;
+      notes?: string | null;
+      priority?: "low" | "medium" | "high";
+      status?: WorkItemStatus;
+      source?: string;
+      owner?: string;
+    }
+  | {
+      op: "update_item";
+      id: string;
+      title?: string;
+      notes?: string | null;
+      priority?: "low" | "medium" | "high";
+      status?: WorkItemStatus;
+      source?: string;
+      owner?: string;
+    }
+  | {
+      op: "remove_item";
+      id: string;
+    }
+  | {
+      op: "reorder_items";
+      ordered_ids: string[];
+    }
+  | {
+      op: "replace_all";
+      items: Array<Record<string, unknown>>;
+    };
+
+export type WorkboardUpdatePayload = {
+  items?: Array<Record<string, unknown>>;
+  ops?: WorkboardOperation[];
+  archive_completed?: boolean;
+  status?: WorkboardStatus;
+};
+
 export type ElicitationOption = {
   label: string;
   description?: string | null;
@@ -530,6 +571,26 @@ export async function getSessionSummary(sessionId: string) {
   const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}`);
   if (!response.ok) {
     throw new Error(`获取会话摘要失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getSessionWorkboard(sessionId: string) {
+  const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}/workboard`);
+  if (!response.ok) {
+    throw new Error(`获取任务清单失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updateSessionWorkboard(sessionId: string, payload: WorkboardUpdatePayload) {
+  const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}/workboard`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`更新任务清单失败: ${response.status}`);
   }
   return response.json();
 }
