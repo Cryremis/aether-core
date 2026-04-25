@@ -9,6 +9,7 @@ from app.services.session_service import session_service
 
 def initialize_session(tmp_path: Path, session_id: str = "sess_runtime_state"):
     settings.storage_root = tmp_path / "storage"
+    session_service._sessions.clear()
     session = session_service.get_or_create(session_id)
     return session
 

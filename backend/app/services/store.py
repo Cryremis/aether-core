@@ -143,7 +143,6 @@ class StoreService:
                     conversation_key TEXT,
                     title TEXT NOT NULL,
                     host_name TEXT NOT NULL,
-                    host_type TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     last_message_at TEXT NOT NULL,
@@ -160,6 +159,7 @@ class StoreService:
             )
             self._ensure_column(conn, "platform_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(conn, "user_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._drop_column(conn, "conversations", "host_type")
         self._seed_default_users()
         self._seed_standalone_platform()
 
@@ -171,6 +171,15 @@ class StoreService:
         if column_name in columns:
             return
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+    def _drop_column(self, conn: sqlite3.Connection, table_name: str, column_name: str) -> None:
+        columns = {
+            str(row["name"])
+            for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name not in columns:
+            return
+        conn.execute(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
 
     def _seed_default_users(self) -> None:
         self.ensure_local_user(

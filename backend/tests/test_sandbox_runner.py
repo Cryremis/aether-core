@@ -138,7 +138,7 @@ def test_runner_fails_closed_when_executor_unavailable(tmp_path, monkeypatch):
     asyncio.run(execute())
 
 
-def test_resolve_baseline_plan_requires_overlay_support(tmp_path):
+def test_resolve_baseline_plan_falls_back_to_copy_when_overlay_unsupported(tmp_path):
     workspace = build_baseline_workspace(tmp_path / "sandbox", tmp_path / "baseline")
     executor = DockerSandboxExecutor()
     executor._baseline_plan_cache = None
@@ -149,8 +149,10 @@ def test_resolve_baseline_plan_requires_overlay_support(tmp_path):
     executor._supports_overlay_mount = fake_supports_overlay  # type: ignore[method-assign]
 
     async def execute():
-        with pytest.raises(RuntimeError, match="overlay baseline"):
-            await executor._resolve_baseline_plan("docker", workspace)
+        plan = await executor._resolve_baseline_plan("docker", workspace)
+        assert plan.mode == "copy"
+        assert plan.mount_upper_workspace == False
+        assert plan.requires_root == True
 
     asyncio.run(execute())
 

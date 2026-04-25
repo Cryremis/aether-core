@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     def project_root(self) -> Path:
         return self.backend_root.parent
 
-    @cached_property
+    @property
     def resolved_storage_root(self) -> Path:
         if self.storage_root.is_absolute():
             return self.storage_root
