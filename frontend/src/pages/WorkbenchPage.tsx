@@ -112,7 +112,9 @@ export function WorkbenchPage({
   });
   const [allowNetwork, setAllowNetwork] = useState(true);
   const [workboard, setWorkboard] = useState<WorkboardState | null>(null);
+  const [workboardVisible, setWorkboardVisible] = useState(true);
   const [elicitation, setElicitation] = useState<ElicitationState | null>(null);
+  const prevWorkboardRevisionRef = useRef<number>(0);
   const [elicitationBusy, setElicitationBusy] = useState(false);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
@@ -131,6 +133,15 @@ export function WorkbenchPage({
   const pendingSessionBottomScrollRef = useRef(false);
 
   const historyRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!workboard) return;
+    const currentRevision = workboard.revision;
+    if (currentRevision > prevWorkboardRevisionRef.current && workboard.items.length > 0) {
+      setWorkboardVisible(true);
+    }
+    prevWorkboardRevisionRef.current = currentRevision;
+  }, [workboard?.revision, workboard?.items?.length]);
 
   const isNearBottom = (node: HTMLDivElement, threshold = 80) => {
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
@@ -1187,7 +1198,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         </div>
 
         <div className="runtime-panels">
-          <WorkboardDock workboard={workboard} busy={busy} />
+          <WorkboardDock workboard={workboard} visible={workboardVisible} onToggle={() => setWorkboardVisible((v) => !v)} />
           <ElicitationPanel request={elicitation?.pending ?? null} busy={busy || elicitationBusy} onSubmit={(responses) => void handleElicitationSubmit(responses)} />
         </div>
 
@@ -1196,7 +1207,11 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           disabled={composerDisabled}
           allowNetwork={allowNetwork}
           queuedMessages={queuedMessages}
+          workboardVisible={workboardVisible}
+          workboardCount={workboard?.items?.length ?? 0}
+          workboardCompleted={workboard?.items?.filter((i) => i.status === "completed").length ?? 0}
           onAllowNetworkChange={setAllowNetwork}
+          onWorkboardToggle={() => setWorkboardVisible((v) => !v)}
           onSend={(text) => void handleSend(text)}
           onStop={() => void handleStop()}
           onRemoveQueued={handleRemoveQueued}

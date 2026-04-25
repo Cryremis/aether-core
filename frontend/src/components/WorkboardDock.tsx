@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { WorkboardState } from "../api/client";
+import { WorkbenchIcons as Icons } from "./workbench/WorkbenchIcons";
 
 type WorkboardDockProps = {
   workboard: WorkboardState | null;
-  busy: boolean;
+  visible: boolean;
+  onToggle: () => void;
 };
 
 function statusLabel(status: string) {
@@ -33,21 +35,9 @@ function priorityLabel(priority: string) {
   }
 }
 
-function boardStatusLabel(status: string) {
-  switch (status) {
-    case "active":
-      return "执行中";
-    case "completed":
-      return "已完成";
-    case "blocked":
-      return "受阻中";
-    default:
-      return "空闲";
-  }
-}
-
-export function WorkboardDock({ workboard, busy }: WorkboardDockProps) {
+export function WorkboardDock({ workboard, visible, onToggle }: WorkboardDockProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [shouldRender, setShouldRender] = useState(visible);
 
   const metrics = useMemo(() => {
     const items = workboard?.items ?? [];
@@ -61,43 +51,73 @@ export function WorkboardDock({ workboard, busy }: WorkboardDockProps) {
   }, [workboard]);
 
   useEffect(() => {
+    if (visible) {
+      setShouldRender(true);
+    } else {
+      const timer = setTimeout(() => setShouldRender(false), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [visible]);
+
+  useEffect(() => {
     if (!workboard || metrics.total === 0) return;
     if (metrics.allDone) {
       setCollapsed(true);
-      return;
     }
-    setCollapsed(false);
   }, [workboard?.revision, metrics.allDone, metrics.total]);
 
-  if (!workboard || metrics.total === 0) return null;
+  if (!shouldRender) return null;
+
+  const handleToggleCollapse = () => {
+    setCollapsed((v) => !v);
+  };
+
+  if (!workboard || metrics.total === 0) {
+    return (
+      <section className={`workboard-dock ${visible ? "is-visible" : "is-hidden"} is-empty is-collapsed`}>
+        <div className="workboard-dock__header">
+          <button type="button" className="workboard-dock__header-left" onClick={handleToggleCollapse}>
+            <span className="workboard-dock__eyebrow">任务清单</span>
+            <span className="workboard-dock__empty-text">暂无追踪任务</span>
+          </button>
+          <button type="button" className="workboard-dock__toggle-btn" onClick={onToggle} title="隐藏">
+            <Icons.Close />
+          </button>
+        </div>
+      </section>
+    );
+  }
 
   return (
-    <section className={`workboard-dock ${collapsed ? "is-collapsed" : ""}`}>
-      <button type="button" className="workboard-dock__header" onClick={() => setCollapsed((value) => !value)}>
-        <div className="workboard-dock__summary">
+    <section className={`workboard-dock ${visible ? "is-visible" : "is-hidden"} ${collapsed ? "is-collapsed" : "is-expanded"}`}>
+      <div className="workboard-dock__header">
+        <button type="button" className="workboard-dock__header-left" onClick={handleToggleCollapse}>
           <span className="workboard-dock__eyebrow">任务清单</span>
-          <strong>{metrics.allDone ? "当前追踪任务已全部完成" : `已完成 ${metrics.completed}/${metrics.total}`}</strong>
-          <span className="workboard-dock__meta">
-            {busy ? "正在实时同步" : "状态已持久保存"}
-            {metrics.active > 0 ? ` · ${metrics.active} 项进行中` : ""}
-            {metrics.blocked > 0 ? ` · ${metrics.blocked} 项受阻` : ""}
-          </span>
+          <span className="workboard-dock__count">{metrics.completed} / {metrics.total}</span>
+          <div className="workboard-dock__mini-meter">
+            <div className="workboard-dock__mini-meter-bar" style={{ width: `${metrics.percent}%` }} />
+          </div>
+        </button>
+        <div className="workboard-dock__header-right">
+          {metrics.allDone ? (
+            <span className="workboard-dock__complete-badge">
+              <Icons.Check />
+            </span>
+          ) : null}
+          <button type="button" className="workboard-dock__toggle-btn" onClick={onToggle} title="隐藏面板">
+            <Icons.Close />
+          </button>
         </div>
-        <div className="workboard-dock__right">
-          <span className={`workboard-dock__status workboard-dock__status--${workboard.status}`}>{boardStatusLabel(workboard.status)}</span>
-          <span className="workboard-dock__toggle">{collapsed ? "展开" : "收起"}</span>
-        </div>
-      </button>
-      <div className="workboard-dock__meter">
-        <div className="workboard-dock__meter-bar" style={{ width: `${metrics.percent}%` }} />
       </div>
-      {!collapsed ? (
+      <div className="workboard-dock__body">
         <div className="workboard-dock__items">
           {workboard.items.map((item) => (
             <article key={item.id} className={`workboard-item workboard-item--${item.status}`}>
               <div className="workboard-item__main">
                 <div className="workboard-item__title-row">
-                  <span className={`workboard-item__status workboard-item__status--${item.status}`}>{statusLabel(item.status)}</span>
+                  <span className={`workboard-item__status workboard-item__status--${item.status}`}>
+                    {statusLabel(item.status)}
+                  </span>
                   <strong>{item.active_form || item.title}</strong>
                 </div>
                 {item.notes ? <p className="workboard-item__notes">{item.notes}</p> : null}
@@ -109,7 +129,7 @@ export function WorkboardDock({ workboard, busy }: WorkboardDockProps) {
             </article>
           ))}
         </div>
-      ) : null}
+      </div>
     </section>
   );
 }

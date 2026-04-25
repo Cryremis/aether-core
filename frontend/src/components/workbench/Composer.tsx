@@ -8,7 +8,11 @@ type ComposerProps = {
   disabled: boolean;
   allowNetwork: boolean;
   queuedMessages: QueuedMessage[];
+  workboardVisible: boolean;
+  workboardCount: number;
+  workboardCompleted: number;
   onAllowNetworkChange: (value: boolean) => void;
+  onWorkboardToggle: () => void;
   onSend: (text: string) => void;
   onStop: () => void;
   onRemoveQueued: (id: string) => void;
@@ -37,7 +41,11 @@ export function Composer({
   disabled,
   allowNetwork,
   queuedMessages,
+  workboardVisible,
+  workboardCount,
+  workboardCompleted,
   onAllowNetworkChange,
+  onWorkboardToggle,
   onSend,
   onStop,
   onRemoveQueued,
@@ -60,6 +68,9 @@ export function Composer({
     setInput("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
+
+  const workboardAllDone = workboardCount > 0 && workboardCompleted === workboardCount;
+  const workboardPercent = workboardCount > 0 ? Math.round((workboardCompleted / workboardCount) * 100) : 0;
 
   return (
     <div className="composer-area">
@@ -91,6 +102,23 @@ export function Composer({
               />
               <Icons.Attach />
             </label>
+            <button
+              type="button"
+              className={`workboard-toggle ${workboardVisible ? "active" : ""} ${workboardAllDone ? "completed" : ""} ${workboardCount === 0 ? "empty" : ""}`}
+              onClick={onWorkboardToggle}
+              aria-pressed={workboardVisible}
+              title={workboardCount > 0 ? (workboardAllDone ? "任务已全部完成" : `任务清单 ${workboardCompleted}/${workboardCount}`) : "任务清单"}
+            >
+              <Icons.Checklist />
+              {!workboardVisible && workboardCount > 0 && !workboardAllDone ? (
+                <>
+                  <span className="workboard-toggle__label">{workboardCompleted}/{workboardCount}</span>
+                  <div className="workboard-toggle__mini-bar">
+                    <div className="workboard-toggle__mini-bar-fill" style={{ width: `${workboardPercent}%` }} />
+                  </div>
+                </>
+              ) : null}
+            </button>
             <button
               type="button"
               className={`network-toggle ${allowNetwork ? "active" : ""}`}
