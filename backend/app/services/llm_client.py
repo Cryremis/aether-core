@@ -84,7 +84,9 @@ class LlmClient:
         payload = self._payload(config, messages, tools, stream=True)
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
             async with client.stream("POST", self._endpoint(config), headers=self._headers(config), json=payload) as response:
-                response.raise_for_status()
+                if response.is_error:
+                    await response.aread()
+                    response.raise_for_status()
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
