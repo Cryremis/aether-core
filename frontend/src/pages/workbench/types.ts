@@ -44,7 +44,7 @@ export type ChatMessage =
       summary: string;
       answers: Array<{ id: string; header: string; value: string }>;
     }
-  | { id: string; role: "assistant"; blocks: AssistantBlock[]; elapsedMs: number | null; streaming: boolean };
+  | { id: string; role: "assistant"; blocks: AssistantBlock[]; elapsedMs: number | null; streaming: boolean; startTime?: number };
 
 export type QueuedMessage = {
   id: string;

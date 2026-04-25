@@ -287,6 +287,47 @@
   background: linear-gradient(90deg, rgba(248, 250, 252, 0.5) 0%, transparent 100%); padding-top: 4px; padding-bottom: 4px; border-radius: 0 8px 8px 0;
 }
 
+.reasoning-content .markdown-body {
+  margin: 0;
+  padding: 0;
+}
+
+.reasoning-content .code-block-wrapper {
+  margin-left: -18px;
+  margin-bottom: 12px;
+  width: calc(100% + 18px);
+  max-width: none;
+  border-radius: 8px;
+}
+
+.reasoning-content .code-block-wrapper.collapsible {
+  border-radius: 8px;
+}
+
+.reasoning-content .code-block-wrapper .code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 8px 8px 0 0;
+}
+
+.reasoning-content .code-block-wrapper:not([open]) .code-header {
+  border-radius: 8px;
+  border-bottom: none;
+}
+
+.reasoning-content .code-block-wrapper .code-header-left,
+.reasoning-content .code-block-wrapper .code-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reasoning-content .code-block-wrapper .code-header-right {
+  margin-left: auto;
+}
+
 /* Tool 卡片玻璃态重塑 (告别黑框) */
 .tool-card {
   background: #ffffff; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden;
@@ -735,5 +776,36 @@
   background: transparent !important;
   border: none !important;
   color: #cdd9e5;
+}
+
+.code-block-wrapper.streaming {
+  border-left: 3px solid rgba(37, 99, 235, 0.6);
+}
+
+.code-block-wrapper.streaming .code-header {
+  background: linear-gradient(135deg, #2d333b, #343942);
+}
+
+.code-block-wrapper.streaming .code-lang::after {
+  content: " ⋯";
+}
+
+.code-block-wrapper.streaming .code-header {
+  background: linear-gradient(135deg, #2d333b, #343942);
+}
+
+.code-block-wrapper.streaming .code-lang::after {
+  content: " ⋯";
+  animation: codeLangBlink 0.8s ease-in-out infinite;
+}
+
+@keyframes codeStreamingPulse {
+  0%, 100% { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); }
+  50% { box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15); }
+}
+
+@keyframes codeLangBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 

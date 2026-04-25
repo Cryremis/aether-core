@@ -124,7 +124,6 @@ export function WorkbenchPage({
   const isStreamingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const newlyCreatedSessionRef = useRef<string | null>(null);
-  const streamingTimerRef = useRef<number | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
   const bottomAnchorFrameRef = useRef<number | null>(null);
@@ -601,24 +600,15 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       setMessages((current) => [
         ...current,
         ...userBubblesToAdd.map((b) => ({ id: b.id, role: "user" as const, content: b.content })),
-        { id: assistantId, role: "assistant", blocks: [], elapsedMs: 0, streaming: true },
+        { id: assistantId, role: "assistant", blocks: [], elapsedMs: null, streaming: true, startTime: roundStartTime },
       ]);
     } else {
       setMessages((current) => [
         ...current,
         { id: `user-${roundStartTime}`, role: "user", content: userText },
-        { id: assistantId, role: "assistant", blocks: [], elapsedMs: 0, streaming: true },
+        { id: assistantId, role: "assistant", blocks: [], elapsedMs: null, streaming: true, startTime: roundStartTime },
       ]);
     }
-
-    streamingTimerRef.current = window.setInterval(() => {
-      const elapsed = Date.now() - roundStartTime;
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs: elapsed } : item,
-        ),
-      );
-    }, 100);
 
     let activeReasoningId = "";
     let activeContentId = "";
@@ -880,14 +870,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         setError(chatError instanceof Error ? chatError.message : "对话执行失败");
       }
     } finally {
-      if (streamingTimerRef.current !== null) {
-        window.clearInterval(streamingTimerRef.current);
-        streamingTimerRef.current = null;
-      }
       const elapsedMs = Date.now() - roundStartTime;
       setMessages((current) =>
         current.map((item) =>
-          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false } : item,
+          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false, startTime: undefined } : item,
         ),
       );
       isStreamingRef.current = false;
@@ -943,17 +929,8 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     setMessages((current) => [
       ...current,
       buildElicitationResponseMessage(pendingRequest, responses),
-      { id: assistantId, role: "assistant", blocks: [], elapsedMs: 0, streaming: true },
+      { id: assistantId, role: "assistant", blocks: [], elapsedMs: null, streaming: true, startTime: roundStartTime },
     ]);
-
-    streamingTimerRef.current = window.setInterval(() => {
-      const elapsed = Date.now() - roundStartTime;
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs: elapsed } : item,
-        ),
-      );
-    }, 100);
 
     let activeReasoningId = "";
     let activeContentId = "";
@@ -1087,14 +1064,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         setError(err instanceof Error ? err.message : "鎻愪氦鍥炵瓟澶辫触");
       }
     } finally {
-      if (streamingTimerRef.current !== null) {
-        window.clearInterval(streamingTimerRef.current);
-        streamingTimerRef.current = null;
-      }
       const elapsedMs = Date.now() - roundStartTime;
       setMessages((current) =>
         current.map((item) =>
-          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false } : item,
+          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false, startTime: undefined } : item,
         ),
       );
       isStreamingRef.current = false;

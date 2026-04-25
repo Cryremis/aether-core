@@ -1,4 +1,5 @@
-import { formatElapsedMs, renderAssistantSegments, renderMarkdown } from "../../pages/workbench/markdown";
+import { useEffect, useState } from "react";
+import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs } from "../../pages/workbench/markdown";
 import type { ChatMessage } from "../../pages/workbench/types";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
@@ -6,6 +7,19 @@ type ChatTimelineProps = {
   loading: boolean;
   messages: ChatMessage[];
 };
+
+function LiveElapsedBadge({ startTime }: { startTime: number }) {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setElapsed(Date.now() - startTime);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [startTime]);
+
+  return <div className="elapsed-badge">{formatElapsedMs(elapsed)}</div>;
+}
 
 export function ChatTimeline({ loading, messages }: ChatTimelineProps) {
   return (
@@ -30,7 +44,7 @@ export function ChatTimeline({ loading, messages }: ChatTimelineProps) {
         message.role === "user" ? (
           <div key={message.id} className="message-row user msg-anim">
             <div className="bubble user-bubble">
-              <div dangerouslySetInnerHTML={renderMarkdown(message.content)} className="markdown-body clean" />
+              <MemoizedMarkdown content={message.content} />
             </div>
           </div>
         ) : message.role === "elicitation_response" ? (
@@ -92,20 +106,22 @@ export function ChatTimeline({ loading, messages }: ChatTimelineProps) {
                       block.kind === "reasoning" ? (
                         <details key={block.id} className="reasoning-block" open>
                           <summary><Icons.Sparkles /> 思考过程</summary>
-                          <div className="reasoning-content markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
+                          <div className="reasoning-content">
+                            <MemoizedMarkdown content={block.content} />
+                          </div>
                         </details>
                       ) : (
-                        <div key={block.id} className="markdown-body" dangerouslySetInnerHTML={renderMarkdown(block.content)} />
+                        <MemoizedMarkdown key={block.id} content={block.content} />
                       ),
                     )}
                   </div>
                 ),
               )}
             </div>
-            {message.elapsedMs !== null && message.elapsedMs >= 0 ? (
-              <div className="elapsed-badge">
-                {formatElapsedMs(message.elapsedMs)}
-              </div>
+            {message.streaming && message.startTime ? (
+              <LiveElapsedBadge startTime={message.startTime} />
+            ) : message.elapsedMs !== null && message.elapsedMs >= 0 ? (
+              <div className="elapsed-badge">{formatElapsedMs(message.elapsedMs)}</div>
             ) : null}
           </div>
         ),

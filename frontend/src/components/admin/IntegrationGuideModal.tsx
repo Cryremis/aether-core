@@ -1,3 +1,4 @@
+import React from "react";
 import type { PlatformIntegrationGuide } from "../../api/client";
 
 type IntegrationGuideModalProps = {
@@ -5,7 +6,7 @@ type IntegrationGuideModalProps = {
   integrationGuideBusy: boolean;
   integrationGuideError: string;
   integrationGuidePlatformName: string;
-  renderHighlightedSnippet: (snippet: string | undefined) => Array<string | JSX.Element> | null;
+  renderHighlightedSnippet: (snippet: string | undefined) => Array<string | React.ReactNode> | null;
   onCopy: (value: string) => void;
   onClose: () => void;
 };
