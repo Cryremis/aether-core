@@ -20,6 +20,7 @@ type BaselineManagerProps = {
   onCreateDirectory: () => void;
   onCreateFile: () => void;
   onUploadFile: (file: File | undefined) => void;
+  onOpenSkillUpload: () => void;
   onSelectFile: (item: PlatformBaselineEntryItem) => void;
   onDoubleClickItem: (item: PlatformBaselineEntryItem) => void;
   onContextMenu: (event: React.MouseEvent, item: PlatformBaselineEntryItem) => void;
@@ -66,6 +67,9 @@ export function BaselineManager(props: BaselineManagerProps) {
               <Icons.Upload /> <span>上传</span>
               <input type="file" onChange={(e) => { props.onUploadFile(e.target.files?.[0]); e.currentTarget.value = ""; }} />
             </label>
+            <button className="fm-btn outline" onClick={props.onOpenSkillUpload} title="上传技能包">
+              <Icons.Upload /> <span>上传技能</span>
+            </button>
           </div>
         </div>
 

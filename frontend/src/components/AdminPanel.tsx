@@ -17,6 +17,7 @@ import {
   savePlatformBaselineTextFile,
   updatePlatformLlmConfig,
   uploadPlatformBaselineFile,
+  uploadPlatformBaselineSkill,
 } from "../api/client";
 import { AdminForms } from "./admin/AdminForms";
 import { BaselineContextMenu } from "./admin/BaselineContextMenu";
@@ -25,6 +26,7 @@ import { AdminIcons as Icons } from "./admin/AdminIcons";
 import { IntegrationGuideModal } from "./admin/IntegrationGuideModal";
 import { PlatformList } from "./admin/PlatformList";
 import { PlatformLlmPanel } from "./admin/PlatformLlmPanel";
+import { SkillUploadModal } from "./admin/SkillUploadModal";
 import type {
   LlmConfigFormState,
   PlatformBaselineEntryItem,
@@ -50,6 +52,9 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const [selectedBaselineMediaType, setSelectedBaselineMediaType] = useState("");
   const[selectedBaselineTruncated, setSelectedBaselineTruncated] = useState(false);
   const [baselineDirty, setBaselineDirty] = useState(false);
+  const [showSkillUploadModal, setShowSkillUploadModal] = useState(false);
+  const [skillUploadBusy, setSkillUploadBusy] = useState(false);
+  const [skillUploadError, setSkillUploadError] = useState("");
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; item: PlatformBaselineEntryItem | null }>({ visible: false, x: 0, y: 0, item: null });
@@ -221,6 +226,20 @@ export function AdminPanel({ role }: AdminPanelProps) {
       await uploadPlatformBaselineFile(activePlatformId, getTargetUploadDir(), file);
       await loadPlatformBaseline(activePlatformId);
     } catch (submitError) { setBaselineError(submitError instanceof Error ? submitError.message : "上传平台基线文件失败"); }
+  };
+
+  const handleBaselineSkillUpload = async (file: File) => {
+    if (!activePlatformId) return;
+    try {
+      setSkillUploadBusy(true);
+      setSkillUploadError("");
+      await uploadPlatformBaselineSkill(activePlatformId, file);
+      await loadPlatformBaseline(activePlatformId);
+    } catch (submitError) {
+      setSkillUploadError(submitError instanceof Error ? submitError.message : "上传技能失败");
+    } finally {
+      setSkillUploadBusy(false);
+    }
   };
 
   const handleDownloadBaselineFile = async (fileRelativePath: string, fileName: string) => {
@@ -584,6 +603,10 @@ export function AdminPanel({ role }: AdminPanelProps) {
             onCreateDirectory={() => void handleCreateBaselineDirectory()}
             onCreateFile={() => void handleCreateBaselineFile()}
             onUploadFile={(file) => void handleBaselineFileUpload(file)}
+            onOpenSkillUpload={() => {
+              setSkillUploadError("");
+              setShowSkillUploadModal(true);
+            }}
             onSelectFile={(item) => void handleSelectFile(item)}
             onDoubleClickItem={handleDoubleClickItem}
             onContextMenu={handleContextMenu}
@@ -611,6 +634,14 @@ export function AdminPanel({ role }: AdminPanelProps) {
         renderHighlightedSnippet={renderHighlightedSnippet}
         onCopy={(value) => void copyText(value)}
         onClose={closeIntegrationGuide}
+      />
+      <SkillUploadModal
+        visible={showSkillUploadModal}
+        busy={skillUploadBusy}
+        error={skillUploadError}
+        platformName={activePlatform?.display_name ?? ""}
+        onClose={() => setShowSkillUploadModal(false)}
+        onUpload={(file) => handleBaselineSkillUpload(file)}
       />
     </section>
   );

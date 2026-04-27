@@ -630,6 +630,19 @@ export async function getSessionSummary(sessionId: string) {
   return response.json();
 }
 
+export async function uploadPlatformBaselineSkill(platformId: number, skillFile: File) {
+  const formData = new FormData();
+  formData.append("skill_file", skillFile);
+  const response = await apiFetch(`/platforms/${platformId}/baseline/skills`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(`涓婁紶骞冲彴鎶€鑳藉け璐? ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function listPlatformAdmins(platformId: number) {
   const response = await apiFetch(`/platforms/${platformId}/admins`);
   if (!response.ok) {
