@@ -4,12 +4,15 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   abortSession,
   bootstrapAdminSession,
+  createPlatformRegistrationRequest,
   deleteUserLlmConfig,
   type ElicitationRequest,
   type ElicitationResponseItem,
   type ElicitationState,
   getDownloadUrl,
   getUserLlmConfig,
+  listMyPlatformRegistrationRequests,
+  type PlatformRegistrationRequestSummary,
   getSessionSummary,
   listFiles,
   listSkills,
@@ -27,6 +30,7 @@ import { ChatTimeline } from "../components/workbench/ChatTimeline";
 import { Composer } from "../components/workbench/Composer";
 import { ContextStatusPill } from "../components/workbench/ContextStatusPill";
 import { LlmConfigDialog } from "../components/workbench/LlmConfigDialog";
+import { PlatformRegistrationDialog } from "../components/workbench/PlatformRegistrationDialog";
 import { WorkbenchIcons as Icons } from "../components/workbench/WorkbenchIcons";
 import { WorkbenchSidebar } from "../components/workbench/WorkbenchSidebar";
 import { formatTokenCount } from "./workbench/markdown";
@@ -102,6 +106,10 @@ export function WorkbenchPage({
   const [showLlmDialog, setShowLlmDialog] = useState(false);
   const [llmBusy, setLlmBusy] = useState(false);
   const [llmError, setLlmError] = useState("");
+  const [showPlatformRegistrationDialog, setShowPlatformRegistrationDialog] = useState(false);
+  const [platformRegistrationBusy, setPlatformRegistrationBusy] = useState(false);
+  const [platformRegistrationError, setPlatformRegistrationError] = useState("");
+  const [platformRegistrationRequests, setPlatformRegistrationRequests] = useState<PlatformRegistrationRequestSummary[]>([]);
   const [llmState, setLlmState] = useState<LlmDialogState>({
     enabled: true,
     base_url: "",
@@ -395,6 +403,11 @@ window.addEventListener("resize", handleResize);
     return parsed as Record<string, unknown>;
   };
 
+  const loadPlatformRegistrationRequests = async () => {
+    const result = await listMyPlatformRegistrationRequests();
+    setPlatformRegistrationRequests((result.data ?? []) as PlatformRegistrationRequestSummary[]);
+  };
+
   const openLlmDialog = async () => {
     try {
       setLlmError("");
@@ -402,6 +415,17 @@ window.addEventListener("resize", handleResize);
       await loadUserLlmConfig();
     } catch (err) {
       setLlmError(err instanceof Error ? err.message : "加载个人 LLM 配置失败");
+    }
+  };
+
+  const openPlatformRegistrationDialog = async () => {
+    try {
+      setPlatformRegistrationError("");
+      await loadPlatformRegistrationRequests();
+    } catch (err) {
+      setPlatformRegistrationError(err instanceof Error ? err.message : "加载平台注册申请失败");
+    } finally {
+      setShowPlatformRegistrationDialog(true);
     }
   };
 
@@ -436,6 +460,25 @@ window.addEventListener("resize", handleResize);
       setLlmError(err instanceof Error ? err.message : "删除个人 LLM 配置失败");
     } finally {
       setLlmBusy(false);
+    }
+  };
+
+  const submitPlatformRegistrationRequest = async (payload: {
+    platform_key: string;
+    display_name: string;
+    description: string;
+    justification: string;
+  }) => {
+    try {
+      setPlatformRegistrationBusy(true);
+      setPlatformRegistrationError("");
+      await createPlatformRegistrationRequest(payload);
+      await loadPlatformRegistrationRequests();
+    } catch (err) {
+      setPlatformRegistrationError(err instanceof Error ? err.message : "提交平台注册申请失败");
+      throw err;
+    } finally {
+      setPlatformRegistrationBusy(false);
     }
   };
 
@@ -1178,6 +1221,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         onUploadSkill={handleUploadSkill}
         onOpenLlmDialog={() => void openLlmDialog()}
         onAdminToggle={onAdminToggle}
+        onOpenPlatformRegistration={() => void openPlatformRegistrationDialog()}
         onLogout={onLogout}
         onSidebarResizeStart={handleSidebarResizeStart}
         getDownloadUrl={(fileId) => getDownloadUrl(sessionId, fileId)}
@@ -1194,6 +1238,15 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         onSave={() => void saveUserLlm()}
         onToggleAdvanced={setShowAdvancedLlmFields}
         onChange={(updater) => setLlmState(updater)}
+      />
+
+      <PlatformRegistrationDialog
+        open={showPlatformRegistrationDialog}
+        busy={platformRegistrationBusy}
+        error={platformRegistrationError}
+        recentRequests={platformRegistrationRequests}
+        onClose={() => setShowPlatformRegistrationDialog(false)}
+        onSubmit={submitPlatformRegistrationRequest}
       />
 
       <section className="main-content">

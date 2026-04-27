@@ -1,4 +1,4 @@
-import type { WorkboardOperation as ApiWorkboardOperation } from "../../api/client";
+import type { CurrentUserProfile, WorkboardOperation as ApiWorkboardOperation } from "../../api/client";
 
 export type FileItem = {
   file_id: string;
@@ -88,14 +88,12 @@ export type WorkbenchConversation = {
 
 export type WorkbenchPageProps = {
   conversations: WorkbenchConversation[];
-  currentUser?: {
-    full_name: string;
-    role: string;
-  } | null;
+  currentUser?: CurrentUserProfile | null;
   isEmbedMode?: boolean;
   sessionId: string;
   isNewSession?: boolean;
   onAdminToggle?: () => void;
+  onOpenPlatformRegistration?: () => void;
   onLogout?: () => void;
   onNewConversation?: () => void;
   onDeleteSession?: (sessionId: string) => void;

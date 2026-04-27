@@ -1,14 +1,12 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 
+import type { CurrentUserProfile } from "../../api/client";
 import type { FileItem, SidebarView, SkillItem, WorkbenchConversation } from "../../pages/workbench/types";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type WorkbenchSidebarProps = {
   conversations: WorkbenchConversation[];
-  currentUser?: {
-    full_name: string;
-    role: string;
-  } | null;
+  currentUser?: CurrentUserProfile | null;
   isEmbedMode: boolean;
   isMobile: boolean;
   isSidebarOpen: boolean;
@@ -28,6 +26,7 @@ type WorkbenchSidebarProps = {
   onUploadSkill: (file: File | undefined) => void;
   onOpenLlmDialog: () => void;
   onAdminToggle?: () => void;
+  onOpenPlatformRegistration?: () => void;
   onLogout?: () => void;
   onSidebarResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   getDownloadUrl: (fileId: string) => string;
@@ -55,6 +54,7 @@ export function WorkbenchSidebar({
   onUploadSkill,
   onOpenLlmDialog,
   onAdminToggle,
+  onOpenPlatformRegistration,
   onLogout,
   onSidebarResizeStart,
   getDownloadUrl,
@@ -72,7 +72,13 @@ export function WorkbenchSidebar({
               {!isEmbedMode && currentUser ? (
                 <p className="sidebar-user-meta">
                   {currentUser.full_name}
-                  <span>{currentUser.role}</span>
+                  <span>
+                    {currentUser.can_manage_system
+                      ? "系统管理员"
+                      : currentUser.can_manage_platforms
+                        ? `平台负责人 · ${currentUser.managed_platform_count}`
+                        : "普通用户"}
+                  </span>
                 </p>
               ) : (
                 <p className="sidebar-user-meta">嵌入工作台</p>
@@ -171,9 +177,14 @@ export function WorkbenchSidebar({
               <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onOpenLlmDialog}>
                 模型配置
               </button>
-              <button type="button" className="action-button sidebar-footer__button" onClick={onAdminToggle}>
-                管理配置
+              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onOpenPlatformRegistration}>
+                申请注册新平台
               </button>
+              {currentUser?.can_manage_platforms ? (
+                <button type="button" className="action-button sidebar-footer__button" onClick={onAdminToggle}>
+                  管理配置
+                </button>
+              ) : null}
               <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onLogout}>
                 退出登录
               </button>

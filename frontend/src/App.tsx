@@ -4,6 +4,7 @@ import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import {
   bootstrapAdminSession,
   clearAccessToken,
+  type CurrentUserProfile,
   deleteSession,
   getCurrentUser,
   listConversations,
@@ -22,19 +23,13 @@ type ConversationItem = {
   title: string;
 };
 
-type CurrentUser = {
-  user_id: number;
-  full_name: string;
-  role: string;
-};
-
 export default function App() {
   const [page, setPage] = useState<"workbench" | "admin">("workbench");
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUserProfile | null>(null);
   const [isEmbedMode, setIsEmbedMode] = useState(false);
   const [isNewSession, setIsNewSession] = useState(false);
 
@@ -80,8 +75,7 @@ export default function App() {
 
       try {
         const profile = await getCurrentUser();
-        const user = (profile ?? {}) as CurrentUser;
-        setCurrentUser(user);
+        setCurrentUser(profile);
         setAuthed(true);
 
         const items = await refreshConversations();
@@ -104,8 +98,7 @@ export default function App() {
 
   const handleLoggedIn = async () => {
     const profile = await getCurrentUser();
-    const user = (profile ?? {}) as CurrentUser;
-    setCurrentUser(user);
+    setCurrentUser(profile);
     setAuthed(true);
 
     const items = await refreshConversations();
@@ -188,8 +181,8 @@ export default function App() {
       <div className="workspace-shell">
         <section className="workspace-shell__main">
           <Suspense fallback={pageFallback}>
-            {page === "admin" && currentUser ? (
-              <AdminPage role={currentUser.role} onBack={() => setPage("workbench")} />
+            {page === "admin" && currentUser && currentUser.can_manage_platforms ? (
+              <AdminPage currentUser={currentUser} onBack={() => setPage("workbench")} />
             ) : sessionId || isNewSession ? (
               <WorkbenchPage
                 conversations={conversations}
@@ -197,7 +190,7 @@ export default function App() {
                 isEmbedMode={isEmbedMode}
                 sessionId={sessionId}
                 isNewSession={isNewSession}
-                onAdminToggle={() => setPage("admin")}
+                onAdminToggle={currentUser?.can_manage_platforms ? () => setPage("admin") : undefined}
                 onLogout={handleLogout}
                 onNewConversation={handleNewConversation}
                 onDeleteSession={(id) => void handleDeleteSession(id)}

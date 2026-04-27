@@ -4,12 +4,18 @@ export type PasswordLoginPayload = {
   password: string;
 };
 
-export type AdminWhitelistPayload = {
+export type CurrentUserProfile = {
+  user_id: number;
+  account_id: string;
+  username?: string | null;
+  full_name: string;
+  email?: string | null;
+  role: "system_admin" | "user";
   provider: string;
-  provider_user_id: string;
-  full_name?: string;
-  email?: string;
-  role: "system_admin" | "platform_admin" | "debug";
+  managed_platform_ids: number[];
+  managed_platform_count: number;
+  can_manage_system: boolean;
+  can_manage_platforms: boolean;
 };
 
 export type OAuthProviderConfig = {
@@ -36,6 +42,63 @@ export type PlatformIntegrationGuide = {
     backend_env: string;
     backend_fastapi: string;
   };
+};
+
+export type PlatformAdminRecord = {
+  user_id: number;
+  full_name: string;
+  email?: string | null;
+  role: string;
+  assigned_at?: string | null;
+  is_primary: boolean;
+};
+
+export type PlatformRegistrationRequestPayload = {
+  platform_key: string;
+  display_name: string;
+  description: string;
+  justification: string;
+};
+
+export type PlatformRegistrationReviewPayload = {
+  review_comment: string;
+};
+
+export type PlatformRegistrationRequestSummary = {
+  request_id: number;
+  applicant_user_id: number;
+  applicant_name: string;
+  applicant_email?: string | null;
+  platform_key: string;
+  display_name: string;
+  description: string;
+  justification: string;
+  status: "pending" | "approved" | "rejected" | "returned" | "cancelled";
+  review_comment: string;
+  reviewed_by?: number | null;
+  reviewed_by_name?: string | null;
+  reviewed_at?: string | null;
+  approved_platform_id?: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UserSummary = {
+  user_id: number;
+  account_id: string;
+  username?: string | null;
+  full_name: string;
+  email?: string | null;
+  role: "system_admin" | "user";
+  provider: string;
+  is_active: boolean;
+  last_login_at?: string | null;
+  created_at?: string | null;
+  managed_platform_ids: number[];
+};
+
+export type UserRoleUpdatePayload = {
+  role: "system_admin" | "user";
 };
 
 export type PlatformBaselineFile = {
@@ -282,6 +345,18 @@ async function apiFetch(input: string, init: RequestInit = {}) {
   return response;
 }
 
+async function readErrorMessage(response: Response, fallback: string) {
+  try {
+    const payload = await response.json();
+    if (payload && typeof payload.detail === "string" && payload.detail.trim()) {
+      return payload.detail;
+    }
+  } catch {
+    // Ignore JSON parsing failures and fall back to the generic message.
+  }
+  return fallback;
+}
+
 export async function loginWithPassword(payload: PasswordLoginPayload) {
   const response = await fetch(`${API_BASE}/auth/login/password`, {
     method: "POST",
@@ -290,7 +365,7 @@ export async function loginWithPassword(payload: PasswordLoginPayload) {
   });
 
   if (!response.ok) {
-    throw new Error(`账号登录失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `账号登录失败: ${response.status}`));
   }
 
   return response.json();
@@ -307,7 +382,7 @@ export async function loginWithOAuthCallback(providerKey: string, code: string, 
   });
 
   if (!response.ok) {
-    throw new Error(`OAuth login failed: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `OAuth 登录失败: ${response.status}`));
   }
 
   return response.json();
@@ -326,27 +401,7 @@ export async function getCurrentUser() {
   if (!response.ok) {
     throw new Error(`获取当前用户失败: ${response.status}`);
   }
-  return response.json();
-}
-
-export async function listAdminWhitelist() {
-  const response = await apiFetch("/auth/admin-whitelist");
-  if (!response.ok) {
-    throw new Error(`获取管理员白名单失败: ${response.status}`);
-  }
-  return response.json();
-}
-
-export async function createAdminWhitelist(payload: AdminWhitelistPayload) {
-  const response = await apiFetch("/auth/admin-whitelist", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error(`新增管理员白名单失败: ${response.status}`);
-  }
-  return response.json();
+  return (await response.json()) as CurrentUserProfile;
 }
 
 export async function listPlatforms() {
@@ -571,6 +626,126 @@ export async function getSessionSummary(sessionId: string) {
   const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}`);
   if (!response.ok) {
     throw new Error(`获取会话摘要失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function listPlatformAdmins(platformId: number) {
+  const response = await apiFetch(`/platforms/${platformId}/admins`);
+  if (!response.ok) {
+    throw new Error(`获取平台负责人失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function assignPlatformAdmin(platformId: number, userId: number) {
+  const response = await apiFetch(`/platforms/${platformId}/admins`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!response.ok) {
+    throw new Error(`更新平台负责人失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function removePlatformAdmin(platformId: number, userId: number) {
+  const response = await apiFetch(`/platforms/${platformId}/admins/${userId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`移除平台负责人失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updatePlatformOwner(platformId: number, userId: number) {
+  const response = await apiFetch(`/platforms/${platformId}/owner`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (!response.ok) {
+    throw new Error(`更新平台主负责人失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function createPlatformRegistrationRequest(payload: PlatformRegistrationRequestPayload) {
+  const response = await apiFetch("/platforms/registration-requests", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`提交平台注册申请失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function listMyPlatformRegistrationRequests() {
+  const response = await apiFetch("/platforms/registration-requests/mine");
+  if (!response.ok) {
+    throw new Error(`获取我的平台注册申请失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function listPlatformRegistrationRequests() {
+  const response = await apiFetch("/platforms/registration-requests");
+  if (!response.ok) {
+    throw new Error(`获取平台注册申请列表失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function approvePlatformRegistrationRequest(
+  requestId: number,
+  payload: PlatformRegistrationReviewPayload,
+) {
+  const response = await apiFetch(`/platforms/registration-requests/${requestId}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`审批平台注册申请失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function rejectPlatformRegistrationRequest(
+  requestId: number,
+  payload: PlatformRegistrationReviewPayload,
+) {
+  const response = await apiFetch(`/platforms/registration-requests/${requestId}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`驳回平台注册申请失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function listUsers() {
+  const response = await apiFetch("/auth/users");
+  if (!response.ok) {
+    throw new Error(`获取用户列表失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updateUserRole(userId: number, payload: UserRoleUpdatePayload) {
+  const response = await apiFetch(`/auth/users/${userId}/role`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`更新用户角色失败: ${response.status}`);
   }
   return response.json();
 }

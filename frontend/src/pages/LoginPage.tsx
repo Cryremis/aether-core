@@ -97,9 +97,9 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
     <main className="login-screen">
       <section className="login-card">
         <div className="login-card__header">
-          <span className="login-card__eyebrow">AetherCore Admin</span>
+          <span className="login-card__eyebrow">AetherCore</span>
           <h1>用户登录</h1>
-          <p>支持账号密码与多种 OAuth 登录方式。</p>
+          <p>登录后即可进入主聊天工作台试用，并在需要时申请注册新平台。</p>
         </div>
 
         <form className="login-form" onSubmit={handleSubmit}>
