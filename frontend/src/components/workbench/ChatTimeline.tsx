@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs } from "../../pages/workbench/markdown";
 import type { ChatMessage } from "../../pages/workbench/types";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type ChatTimelineProps = {
+  contentRef?: RefObject<HTMLDivElement | null>;
   loading: boolean;
   messages: ChatMessage[];
 };
@@ -21,9 +22,9 @@ function LiveElapsedBadge({ startTime }: { startTime: number }) {
   return <div className="elapsed-badge">{formatElapsedMs(elapsed)}</div>;
 }
 
-export function ChatTimeline({ loading, messages }: ChatTimelineProps) {
+export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProps) {
   return (
-    <div className="chat-container">
+    <div ref={contentRef} className="chat-container">
       {loading ? (
         <div className="welcome-screen anim-enter">
           <div className="welcome-icon"><Icons.Sparkles /></div>

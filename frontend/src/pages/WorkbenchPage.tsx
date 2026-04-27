@@ -130,11 +130,13 @@ export function WorkbenchPage({
   const scrollFrameRef = useRef<number | null>(null);
   const bottomAnchorFrameRef = useRef<number | null>(null);
   const bottomAnchorUntilRef = useRef(0);
+  const loadScrollSettleUntilRef = useRef(0);
   const detailsToggleShouldStickRef = useRef(false);
   const pendingSessionBottomScrollRef = useRef(false);
   const workboardOpChainRef = useRef<Promise<void>>(Promise.resolve());
 
   const historyRef = useRef<HTMLDivElement | null>(null);
+  const historyContentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!workboard) return;
@@ -190,6 +192,12 @@ export function WorkbenchPage({
     };
 
     bottomAnchorFrameRef.current = window.requestAnimationFrame(tick);
+  };
+
+  const keepHistoryPinnedToBottom = (durationMs = 320) => {
+    shouldStickToBottomRef.current = true;
+    scrollHistoryToBottom();
+    holdBottomAnchor(durationMs);
   };
 
   const handleHistoryScroll = () => {
@@ -266,14 +274,27 @@ window.addEventListener("resize", handleResize);
     if (!node) return;
     if (pendingSessionBottomScrollRef.current && !loading) {
       pendingSessionBottomScrollRef.current = false;
-      shouldStickToBottomRef.current = true;
-      scrollHistoryToBottom();
-      holdBottomAnchor();
+      keepHistoryPinnedToBottom(900);
       return;
     }
     if (!shouldStickToBottomRef.current) return;
     scrollHistoryToBottom();
   }, [messages, loading]);
+
+  useEffect(() => {
+    const contentNode = historyContentRef.current;
+    if (!contentNode || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      if (!historyRef.current) return;
+      const shouldSettle = performance.now() < loadScrollSettleUntilRef.current;
+      if (!shouldSettle && !shouldStickToBottomRef.current) return;
+      keepHistoryPinnedToBottom(240);
+    });
+
+    observer.observe(contentNode);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const node = historyRef.current;
@@ -307,9 +328,7 @@ window.addEventListener("resize", handleResize);
       details.classList.add(details.open ? "is-opening" : "is-closing");
 
       if (shouldKeepBottom) {
-        shouldStickToBottomRef.current = true;
-        scrollHistoryToBottom();
-        holdBottomAnchor();
+        keepHistoryPinnedToBottom(320);
       }
 
       window.setTimeout(() => {
@@ -522,6 +541,7 @@ window.addEventListener("resize", handleResize);
 
     shouldStickToBottomRef.current = true;
     pendingSessionBottomScrollRef.current = true;
+    loadScrollSettleUntilRef.current = performance.now() + 1200;
     setLoading(true);
     setError("");
     void loadSession(targetSessionId)
@@ -1192,7 +1212,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         {error ? <div className="error-toast anim-shake">{error}</div> : null}
 
         <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll}>
-          <ChatTimeline loading={loading} messages={messages} />
+          <ChatTimeline contentRef={historyContentRef} loading={loading} messages={messages} />
         </div>
 
         <div className="runtime-panels">

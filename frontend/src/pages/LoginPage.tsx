@@ -88,7 +88,7 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
       return;
     }
     const redirectUri = encodeURIComponent(`${window.location.origin}${window.location.pathname}`);
-    const url = provider.authorize_url_template.replace("{redirect_uri}", redirectUri);
+    const url = provider.authorize_url_template.replace(/\{redirect_uri\}|%7Bredirect_uri%7D/g, redirectUri);
     const state = `state=${encodeURIComponent(provider.provider_key)}`;
     window.location.href = url.includes("state=") ? url : `${url}&${state}`;
   };
