@@ -1,4 +1,3 @@
-# backend/app/schemas/platform.py
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -6,19 +5,14 @@ from pydantic import BaseModel, Field
 
 
 class PlatformCreateRequest(BaseModel):
-    """平台注册请求。"""
-
     platform_key: str
     display_name: str
-    # `standalone` 为系统内置保留模式，外部平台注册默认走 `embedded`
     host_type: Literal["embedded", "standalone"] = "embedded"
     description: str = ""
     owner_user_id: int | None = None
 
 
 class PlatformBaselineFile(BaseModel):
-    """平台基线文件。"""
-
     name: str
     relative_path: str
     section: Literal["input", "skills", "work", "output", "logs"]
@@ -27,8 +21,6 @@ class PlatformBaselineFile(BaseModel):
 
 
 class PlatformBaselineEntry(BaseModel):
-    """平台基线环境目录项。"""
-
     name: str
     relative_path: str
     section: Literal["input", "skills", "work", "output", "logs"]
@@ -38,8 +30,6 @@ class PlatformBaselineEntry(BaseModel):
 
 
 class PlatformBaselineFileContent(BaseModel):
-    """平台基线文本文件内容。"""
-
     relative_path: str
     media_type: str
     content: str
@@ -47,28 +37,20 @@ class PlatformBaselineFileContent(BaseModel):
 
 
 class PlatformBaselineWriteRequest(BaseModel):
-    """写入平台基线文本文件请求。"""
-
     relative_path: str
     content: str
 
 
 class PlatformBaselineDirectoryRequest(BaseModel):
-    """创建平台基线目录请求。"""
-
     relative_path: str
 
 
 class PlatformBaselineMoveRequest(BaseModel):
-    """移动或重命名平台基线路径请求。"""
-
     source_relative_path: str
     target_relative_path: str
 
 
 class PlatformBaselineSkill(BaseModel):
-    """平台基线技能。"""
-
     name: str
     description: str
     allowed_tools: list[str] = Field(default_factory=list)
@@ -77,8 +59,6 @@ class PlatformBaselineSkill(BaseModel):
 
 
 class PlatformBaselineSummary(BaseModel):
-    """平台基线环境摘要。"""
-
     platform_key: str
     files: list[PlatformBaselineFile] = Field(default_factory=list)
     entries: list[PlatformBaselineEntry] = Field(default_factory=list)
@@ -86,8 +66,6 @@ class PlatformBaselineSummary(BaseModel):
 
 
 class PlatformSummary(BaseModel):
-    """平台注册摘要。"""
-
     platform_id: int
     platform_key: str
     display_name: str
@@ -97,19 +75,17 @@ class PlatformSummary(BaseModel):
     owner_name: str
     host_secret: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    admin_user_ids: list[int] = Field(default_factory=list)
+    admin_names: list[str] = Field(default_factory=list)
 
 
 class PlatformIntegrationGuideSnippets(BaseModel):
-    """平台接入教程代码片段。"""
-
     frontend: str
     backend_env: str
     backend_fastapi: str
 
 
 class PlatformIntegrationGuide(BaseModel):
-    """平台接入教程。"""
-
     platform_key: str
     display_name: str
     bind_api_path: str
@@ -118,14 +94,49 @@ class PlatformIntegrationGuide(BaseModel):
 
 
 class PlatformAdminAssignRequest(BaseModel):
-    """平台管理员授权请求。"""
-
     user_id: int
 
 
-class EmbedBootstrapRequest(BaseModel):
-    """宿主工作台启动请求。"""
+class PlatformAdminRecord(BaseModel):
+    user_id: int
+    full_name: str
+    email: str | None = None
+    role: str
+    assigned_at: datetime | None = None
+    is_primary: bool = False
 
+
+class PlatformRegistrationRequestCreateRequest(BaseModel):
+    platform_key: str
+    display_name: str
+    description: str = ""
+    justification: str = ""
+
+
+class PlatformRegistrationReviewRequest(BaseModel):
+    review_comment: str = ""
+
+
+class PlatformRegistrationRequestSummary(BaseModel):
+    request_id: int
+    applicant_user_id: int
+    applicant_name: str
+    applicant_email: str | None = None
+    platform_key: str
+    display_name: str
+    description: str = ""
+    justification: str = ""
+    status: Literal["pending", "approved", "rejected", "returned", "cancelled"]
+    review_comment: str = ""
+    reviewed_by: int | None = None
+    reviewed_by_name: str | None = None
+    reviewed_at: datetime | None = None
+    approved_platform_id: int | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class EmbedBootstrapRequest(BaseModel):
     platform_key: str
     external_user_id: str
     external_user_name: str
@@ -136,8 +147,6 @@ class EmbedBootstrapRequest(BaseModel):
 
 
 class EmbedBootstrapResponse(BaseModel):
-    """宿主工作台启动响应。"""
-
     conversation_id: str
     session_id: str
     embed_token: str
@@ -145,8 +154,6 @@ class EmbedBootstrapResponse(BaseModel):
 
 
 class ConversationSummary(BaseModel):
-    """会话列表摘要。"""
-
     conversation_id: str
     session_id: str
     title: str

@@ -38,8 +38,6 @@ class Settings(BaseSettings):
     auth_embed_token_expire_minutes: int = 60 * 24
     auth_system_admin_username: str = "admin"
     auth_system_admin_password: str = "admin123456"
-    auth_debug_username: str = "debug"
-    auth_debug_password: str = "debug123456"
     auth_oauth_providers: str = ""
     auth_oauth_config_json: str = ""
 

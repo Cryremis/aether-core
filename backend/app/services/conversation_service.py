@@ -87,8 +87,11 @@ class ConversationService:
         )
         return session, token
 
+    def list_for_user(self, user: StoreUser) -> list[ConversationSummary]:
+        return [self._to_summary(item) for item in store_service.list_conversations_for_user(user.user_id)]
+
     def list_for_admin(self, user: StoreUser) -> list[ConversationSummary]:
-        return [self._to_summary(item) for item in store_service.list_conversations_for_admin(user.user_id)]
+        return self.list_for_user(user)
 
     def list_for_host_user(self, *, platform_id: int, external_user_id: str) -> list[ConversationSummary]:
         return [

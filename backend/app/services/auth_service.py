@@ -20,7 +20,7 @@ class AuthResult:
 
 
 class AuthService:
-    """管理员认证服务。"""
+    """Handle authentication for internal users."""
 
     def _extract_first_non_empty(self, source: dict[str, Any], field_names: tuple[str, ...]) -> str:
         for field_name in field_names:
@@ -29,27 +29,14 @@ class AuthService:
                 return value
         return ""
 
-    def _resolve_oauth_whitelist(
-        self,
-        *,
-        provider_key: str,
-        user_info: dict[str, Any],
-        identifier_fields: tuple[str, ...],
-    ) -> dict[str, Any] | None:
-        for field_name in identifier_fields:
-            identifier = str(user_info.get(field_name) or "").strip()
-            if not identifier:
-                continue
-            whitelist = store_service.get_whitelist_entry(provider_key, identifier)
-            if whitelist is not None:
-                return whitelist
-        return None
-
     def login_with_password(self, username: str, password: str) -> AuthResult:
         user = store_service.get_user_by_username(username)
         if user is None or not password_service.verify_password(password, user.password_hash):
             raise RuntimeError("用户名或密码错误")
-        token, expires_in = token_service.create_admin_token(user.user_id, user.role)
+        if not user.is_active:
+            raise RuntimeError("账号已被禁用")
+        store_service.update_user_login_metadata(user.user_id)
+        token, expires_in = token_service.create_user_token(user.user_id, user.role)
         return AuthResult(token=token, expires_in=expires_in, user=user)
 
     async def login_with_oauth(self, provider_key: str, code: str, redirect_uri: str) -> AuthResult:
@@ -64,28 +51,16 @@ class AuthService:
         if not provider_user_id:
             raise RuntimeError(f"无法从 {provider_config.display_name} 获取唯一用户标识")
 
-        user = store_service.get_user_by_provider(provider_key, provider_user_id)
-        if user is None:
-            whitelist = self._resolve_oauth_whitelist(
-                provider_key=provider_key,
-                user_info=user_info,
-                identifier_fields=provider_config.whitelist_match_fields,
-            )
-            if whitelist is None:
-                raise RuntimeError(
-                    f"当前 {provider_config.display_name} 账号未被授权为 AetherCore 管理员"
-                )
-            user = store_service.create_user_from_whitelist(
-                provider=provider_key,
-                provider_user_id=provider_user_id,
-                full_name=self._extract_first_non_empty(user_info, provider_config.user_name_fields)
-                or whitelist["full_name"],
-                email=self._extract_first_non_empty(user_info, provider_config.user_email_fields)
-                or whitelist.get("email"),
-                role=whitelist["role"],
-            )
+        user = store_service.create_or_update_oauth_user(
+            provider=provider_key,
+            provider_user_id=provider_user_id,
+            full_name=self._extract_first_non_empty(user_info, provider_config.user_name_fields) or provider_user_id,
+            email=self._extract_first_non_empty(user_info, provider_config.user_email_fields) or None,
+        )
+        if not user.is_active:
+            raise RuntimeError("账号已被禁用")
 
-        token, expires_in = token_service.create_admin_token(user.user_id, user.role)
+        token, expires_in = token_service.create_user_token(user.user_id, user.role)
         return AuthResult(token=token, expires_in=expires_in, user=user)
 
     def build_user_payload(self, user: StoreUser) -> dict[str, Any]:

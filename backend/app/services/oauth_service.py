@@ -76,7 +76,6 @@ class OAuthProviderConfig:
     user_id_fields: tuple[str, ...] = ("id", "sub")
     user_name_fields: tuple[str, ...] = ("name", "preferred_username")
     user_email_fields: tuple[str, ...] = ("email",)
-    whitelist_match_fields: tuple[str, ...] = ("id",)
     extra_authorize_params: tuple[tuple[str, str], ...] = ()
     extra_token_params: tuple[tuple[str, str], ...] = ()
     extra_userinfo_params: tuple[tuple[str, str], ...] = ()
@@ -251,9 +250,6 @@ class OAuthService:
             _parse_csv(_read_config_value(f"{prefix}USER_NAME_FIELDS")) or ["name", "preferred_username"]
         )
         user_email_fields = tuple(_parse_csv(_read_config_value(f"{prefix}USER_EMAIL_FIELDS")) or ["email"])
-        whitelist_match_fields = tuple(
-            _parse_csv(_read_config_value(f"{prefix}WHITELIST_MATCH_FIELDS")) or list(user_id_fields)
-        )
         extra_authorize_params = tuple(sorted(_coerce_mapping(_read_config_value(f"{prefix}AUTHORIZE_PARAMS_JSON")).items()))
         extra_token_params = tuple(sorted(_coerce_mapping(_read_config_value(f"{prefix}TOKEN_PARAMS_JSON")).items()))
         extra_userinfo_params = tuple(sorted(_coerce_mapping(_read_config_value(f"{prefix}USERINFO_PARAMS_JSON")).items()))
@@ -275,7 +271,6 @@ class OAuthService:
             user_id_fields=user_id_fields,
             user_name_fields=user_name_fields,
             user_email_fields=user_email_fields,
-            whitelist_match_fields=whitelist_match_fields,
             extra_authorize_params=extra_authorize_params,
             extra_token_params=extra_token_params,
             extra_userinfo_params=extra_userinfo_params,
@@ -310,7 +305,6 @@ class OAuthService:
             user_id_fields=_read_list("user_id_fields", ["id", "sub"]),
             user_name_fields=_read_list("user_name_fields", ["name", "preferred_username"]),
             user_email_fields=_read_list("user_email_fields", ["email"]),
-            whitelist_match_fields=_read_list("whitelist_match_fields", ["id", "sub"]),
             extra_authorize_params=_read_pairs("authorize_params"),
             extra_token_params=_read_pairs("token_params"),
             extra_userinfo_params=_read_pairs("userinfo_params"),

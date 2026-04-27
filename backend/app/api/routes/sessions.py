@@ -21,7 +21,7 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
     conversation = store_service.get_conversation_by_session(session_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-    if auth.kind == "admin":
+    if auth.kind == "user":
         if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
             raise HTTPException(status_code=403, detail="无权访问该会话")
     elif auth.kind == "embed":
@@ -42,7 +42,7 @@ def bootstrap_session(
     session_id: str | None = None,
     auth: AuthContext = Depends(get_auth_context),
 ) -> ApiResponse:
-    if auth.kind == "admin":
+    if auth.kind == "user":
         assert auth.user is not None
         try:
             session = conversation_service.bootstrap_admin_workbench(auth.user, session_id=session_id)
@@ -101,8 +101,8 @@ def bootstrap_session(
 
 @router.get("")
 def list_sessions(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
-    if auth.kind == "admin" and auth.user is not None:
-        items = [item.model_dump(mode="json") for item in conversation_service.list_for_admin(auth.user)]
+    if auth.kind == "user" and auth.user is not None:
+        items = [item.model_dump(mode="json") for item in conversation_service.list_for_user(auth.user)]
         return ApiResponse(message="历史会话", data=items)
     if auth.kind == "embed" and auth.platform_id is not None and auth.external_user_id is not None:
         items = [
@@ -160,7 +160,7 @@ def delete_session(session_id: str, auth: AuthContext = Depends(get_auth_context
     conversation = store_service.get_conversation_by_session(session_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-    if auth.kind == "admin":
+    if auth.kind == "user":
         if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
             raise HTTPException(status_code=403, detail="无权删除该会话")
     elif auth.kind == "embed":
@@ -182,7 +182,7 @@ def rename_session(session_id: str, title: str, auth: AuthContext = Depends(get_
     conversation = store_service.get_conversation_by_session(session_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-    if auth.kind == "admin":
+    if auth.kind == "user":
         if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
             raise HTTPException(status_code=403, detail="无权重命名该会话")
     elif auth.kind == "embed":

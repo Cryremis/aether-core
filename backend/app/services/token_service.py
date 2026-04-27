@@ -10,17 +10,20 @@ from app.core.config import settings
 
 
 class TokenService:
-    """统一管理管理员令牌与嵌入令牌。"""
+    """统一管理内部用户令牌与嵌入令牌。"""
 
-    def create_admin_token(self, user_id: int, role: str) -> tuple[str, int]:
+    def create_user_token(self, user_id: int, role: str) -> tuple[str, int]:
         return self._create_token(
             {
-                "kind": "admin",
+                "kind": "user",
                 "sub": str(user_id),
                 "role": role,
             },
             timedelta(minutes=settings.auth_access_token_expire_minutes),
         )
+
+    def create_admin_token(self, user_id: int, role: str) -> tuple[str, int]:
+        return self.create_user_token(user_id, role)
 
     def create_embed_token(
         self,

@@ -17,7 +17,7 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
     conversation = store_service.get_conversation_by_session(session_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-    if auth.kind == "admin":
+    if auth.kind == "user":
         if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
             raise HTTPException(status_code=403, detail="无权访问该会话")
     elif auth.kind == "embed":

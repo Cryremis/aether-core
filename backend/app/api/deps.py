@@ -31,14 +31,19 @@ def get_auth_context(
     raw_token = credentials.credentials if credentials is not None else access_token
     if raw_token is None:
         return AuthContext(kind="anonymous")
-    payload = token_service.decode_token(raw_token)
+    try:
+        payload = token_service.decode_token(raw_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     kind = str(payload.get("kind") or "")
-    if kind == "admin":
+    if kind in {"user", "admin"}:
         user_id = int(payload["sub"])
         user = store_service.get_user_by_id(user_id)
         if user is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="管理员账号不存在")
-        return AuthContext(kind="admin", user=user, role=user.role)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户账号不存在")
+        if not user.is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已被禁用")
+        return AuthContext(kind="user", user=user, role=user.role)
     if kind == "embed":
         return AuthContext(
             kind="embed",
@@ -49,13 +54,17 @@ def get_auth_context(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证令牌无效")
 
 
-def require_admin(auth: AuthContext = Depends(get_auth_context)) -> AuthContext:
-    if auth.kind != "admin" or auth.user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="需要管理员登录")
+def require_authenticated_user(auth: AuthContext = Depends(get_auth_context)) -> AuthContext:
+    if auth.kind != "user" or auth.user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="需要登录")
     return auth
 
 
-def require_system_admin(auth: AuthContext = Depends(require_admin)) -> AuthContext:
+def require_admin(auth: AuthContext = Depends(require_authenticated_user)) -> AuthContext:
+    return auth
+
+
+def require_system_admin(auth: AuthContext = Depends(require_authenticated_user)) -> AuthContext:
     if auth.role != "system_admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要系统管理员权限")
     return auth

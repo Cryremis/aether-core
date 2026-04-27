@@ -40,22 +40,51 @@ def test_password_login_uses_seeded_admin_account(tmp_path, monkeypatch):
     assert result.expires_in > 0
 
 
-def test_conversations_are_isolated_for_admins_and_host_users(tmp_path):
+def test_current_user_endpoint_allows_regular_internal_users(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="user-001",
+        full_name="Regular User",
+        email="regular@example.com",
+    )
+    user = store_service.get_user_by_provider("corp-sso", "user-001")
+    assert user is not None
+
+    from app.services.token_service import token_service
+
+    user_token, _ = token_service.create_user_token(user.user_id, user.role)
+    client = TestClient(app)
+    response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {user_token}"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["full_name"] == "Regular User"
+    assert payload["role"] == "user"
+    assert payload["can_manage_platforms"] is False
+
+
+def test_conversations_are_isolated_for_internal_users_and_host_users(tmp_path):
     initialize_isolated_runtime(tmp_path)
 
     admin = store_service.get_user_by_username(settings.auth_system_admin_username)
-    debug_user = store_service.get_user_by_username(settings.auth_debug_username)
+    regular_user = store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="regular-user-001",
+        full_name="Regular User",
+        email="regular@example.com",
+    )
     assert admin is not None
-    assert debug_user is not None
 
     admin_session = conversation_service.bootstrap_admin_workbench(admin)
-    debug_session = conversation_service.bootstrap_admin_workbench(debug_user)
+    regular_session = conversation_service.bootstrap_admin_workbench(regular_user)
 
     admin_items = conversation_service.list_for_admin(admin)
-    debug_items = conversation_service.list_for_admin(debug_user)
+    regular_items = conversation_service.list_for_admin(regular_user)
 
     assert [item.session_id for item in admin_items] == [admin_session.session_id]
-    assert [item.session_id for item in debug_items] == [debug_session.session_id]
+    assert [item.session_id for item in regular_items] == [regular_session.session_id]
 
     platform = store_service.create_platform(
         platform_key="dash-test",
@@ -168,7 +197,56 @@ def test_platform_integration_guide_returns_expected_snippets(tmp_path):
     assert "settings.AETHERCORE_PLATFORM_SECRET" in payload["snippets"]["backend_fastapi"]
 
 
-def test_oauth_whitelist_supports_configured_match_fields(tmp_path, monkeypatch):
+def test_platform_registration_approval_creates_platform_and_assigns_applicant(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    admin_login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+    applicant = store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="applicant-001",
+        full_name="Applicant User",
+        email="applicant@example.com",
+    )
+    from app.services.token_service import token_service
+
+    applicant_token, _ = token_service.create_user_token(applicant.user_id, applicant.role)
+
+    client = TestClient(app)
+    create_response = client.post(
+        "/api/v1/platforms/registration-requests",
+        headers={"Authorization": f"Bearer {applicant_token}"},
+        json={
+            "platform_key": "growth-hub",
+            "display_name": "Growth Hub",
+            "description": "Growth team workspace",
+            "justification": "Need dedicated LLM and baseline assets",
+        },
+    )
+
+    assert create_response.status_code == 200
+    request_id = create_response.json()["data"]["request_id"]
+
+    approve_response = client.post(
+        f"/api/v1/platforms/registration-requests/{request_id}/approve",
+        headers={"Authorization": f"Bearer {admin_login.token}"},
+        json={"review_comment": "Approved"},
+    )
+
+    assert approve_response.status_code == 200
+    payload = approve_response.json()["data"]
+    assert payload["status"] == "approved"
+    assert payload["approved_platform_id"] is not None
+
+    platform = store_service.get_platform_by_key("growth-hub")
+    assert platform is not None
+    assert platform["owner_user_id"] == applicant.user_id
+    assert store_service.is_platform_admin(platform_id=platform["platform_id"], user_id=applicant.user_id)
+
+
+def test_oauth_login_creates_regular_user_without_manual_preauthorization(tmp_path, monkeypatch):
     initialize_isolated_runtime(tmp_path)
 
     monkeypatch.setattr(settings, "auth_oauth_providers", "corp-sso")
@@ -181,18 +259,9 @@ def test_oauth_whitelist_supports_configured_match_fields(tmp_path, monkeypatch)
     monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_USER_ID_FIELDS", "uuid")
     monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_USER_NAME_FIELDS", "displayNameCn")
     monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_USER_EMAIL_FIELDS", "email")
-    monkeypatch.setenv("AUTH_OAUTH_CORP_SSO_WHITELIST_MATCH_FIELDS", "uuid,uid,employeeNumber")
     from app.services.oauth_service import oauth_service
 
     oauth_service.reload()
-
-    store_service.upsert_admin_whitelist(
-        provider="corp-sso",
-        provider_user_id="A1234567",
-        full_name="A1234567",
-        email=None,
-        role="platform_admin",
-    )
 
     async def fake_exchange_code_for_token(provider_key: str, code: str, redirect_uri: str):
         return {"access_token": "fake-token"}
@@ -213,7 +282,7 @@ def test_oauth_whitelist_supports_configured_match_fields(tmp_path, monkeypatch)
 
     assert result.user.provider == "corp-sso"
     assert result.user.full_name == "Zhang San"
-    assert result.user.role == "platform_admin"
+    assert result.user.role == "user"
 
 
 def test_oauth_provider_list_logs_incomplete_provider_configuration(tmp_path, monkeypatch, caplog):

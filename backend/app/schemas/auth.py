@@ -1,27 +1,23 @@
-# backend/app/schemas/auth.py
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
-class PasswordLoginRequest(BaseModel):
-    """账号密码登录请求。"""
+InternalUserRole = Literal["system_admin", "user"]
 
+
+class PasswordLoginRequest(BaseModel):
     username: str
     password: str
 
 
 class OAuthCallbackRequest(BaseModel):
-    """OAuth 回调请求。"""
-
     code: str
     redirect_uri: str
 
 
 class AuthTokenResponse(BaseModel):
-    """认证令牌响应。"""
-
     access_token: str
     token_type: str = "bearer"
     expires_in: int
@@ -29,34 +25,31 @@ class AuthTokenResponse(BaseModel):
 
 
 class CurrentUserResponse(BaseModel):
-    """当前登录用户。"""
-
     user_id: int
     account_id: str
     username: str | None = None
     full_name: str
     email: str | None = None
-    role: Literal["system_admin", "platform_admin", "debug"]
+    role: InternalUserRole
     provider: str
+    managed_platform_ids: list[int] = Field(default_factory=list)
+    managed_platform_count: int = 0
+    can_manage_system: bool = False
+    can_manage_platforms: bool = False
 
-
-class AdminWhitelistCreateRequest(BaseModel):
-    """管理员白名单创建请求。"""
-
-    provider: str
-    provider_user_id: str
-    full_name: str | None = None
-    email: str | None = None
-    role: Literal["system_admin", "platform_admin", "debug"] = "platform_admin"
-
-
-class AdminWhitelistRecord(BaseModel):
-    """管理员白名单记录。"""
-
-    whitelist_id: int
-    provider: str
-    provider_user_id: str
+class UserSummary(BaseModel):
+    user_id: int
+    account_id: str
+    username: str | None = None
     full_name: str
     email: str | None = None
-    role: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    role: InternalUserRole
+    provider: str
+    is_active: bool
+    last_login_at: datetime | None = None
+    created_at: datetime | None = None
+    managed_platform_ids: list[int] = Field(default_factory=list)
+
+
+class SystemRoleUpdateRequest(BaseModel):
+    role: InternalUserRole
