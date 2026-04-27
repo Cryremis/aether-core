@@ -59,11 +59,14 @@ class PlatformIntegrationService:
         return dedent(
             f"""\
             AETHERCORE_API_BASE_URL={settings.resolved_app_public_base_url}
-            AETHERCORE_WORKBENCH_URL={settings.resolved_manage_frontend_public_base_url}
             AETHERCORE_PLATFORM_KEY={platform_key}
             AETHERCORE_PLATFORM_SECRET={host_secret}
             AETHERCORE_HOST_NAME={display_name}
             AETHERCORE_HOST_CALLBACK_BASE_URL={{{{YOUR_PLATFORM_BASE_URL}}}}
+
+            # Optional: only set this when the browser-facing workbench URL differs
+            # from AETHERCORE_API_BASE_URL.
+            # AETHERCORE_WORKBENCH_URL={settings.resolved_manage_frontend_public_base_url}
             """
         ).strip()
 
@@ -122,8 +125,11 @@ class PlatformIntegrationService:
                     raise HTTPException(status_code=response.status_code, detail=response.text)
 
                 data = response.json()["data"]
+                workbench_base_url = (
+                    getattr(settings, "AETHERCORE_WORKBENCH_URL", "") or settings.AETHERCORE_API_BASE_URL
+                ).rstrip("/")
                 workbench_url = (
-                    f"{{settings.AETHERCORE_WORKBENCH_URL}}"
+                    f"{{workbench_base_url}}"
                     f"?embed_token={{data['token']}}&session_id={{data['session_id']}}"
                 )
                 return {{

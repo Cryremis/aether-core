@@ -195,14 +195,15 @@ def test_platform_integration_guide_returns_expected_snippets(tmp_path):
     assert 'platformKey: "guide-demo"' in payload["snippets"]["frontend"]
     assert 'workbenchUrl: "https://ac.example.com"' in payload["snippets"]["frontend"]
     assert "AETHERCORE_API_BASE_URL=https://ac-backend.example.com" in payload["snippets"]["backend_env"]
-    assert "AETHERCORE_WORKBENCH_URL=https://ac.example.com" in payload["snippets"]["backend_env"]
+    assert "# AETHERCORE_WORKBENCH_URL=https://ac.example.com" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_PLATFORM_KEY=guide-demo" in payload["snippets"]["backend_env"]
     assert f"AETHERCORE_PLATFORM_SECRET={platform['host_secret']}" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_HOST_NAME=Guide Demo" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_HOST_CALLBACK_BASE_URL={{YOUR_PLATFORM_BASE_URL}}" in payload["snippets"]["backend_env"]
     assert '@router.post("/api/v1/aethercore/embed/bind")' in payload["snippets"]["backend_fastapi"]
     assert "settings.AETHERCORE_PLATFORM_SECRET" in payload["snippets"]["backend_fastapi"]
-    assert "settings.AETHERCORE_WORKBENCH_URL" in payload["snippets"]["backend_fastapi"]
+    assert 'getattr(settings, "AETHERCORE_WORKBENCH_URL", "") or settings.AETHERCORE_API_BASE_URL' in payload["snippets"]["backend_fastapi"]
+    assert "workbench_base_url" in payload["snippets"]["backend_fastapi"]
     assert "settings.AETHERCORE_HOST_NAME" in payload["snippets"]["backend_fastapi"]
     assert "settings.AETHERCORE_HOST_CALLBACK_BASE_URL" in payload["snippets"]["backend_fastapi"]
     assert '"workbench_url": workbench_url' in payload["snippets"]["backend_fastapi"]
@@ -385,6 +386,8 @@ def test_host_bind_requires_platform_secret_and_matching_platform_key(tmp_path):
 
 def test_host_bind_uses_conversation_key_to_control_reuse(tmp_path):
     initialize_isolated_runtime(tmp_path)
+    settings.app_public_base_url = ""
+    settings.manage_frontend_public_base_url = ""
 
     admin = store_service.get_user_by_username(settings.auth_system_admin_username)
     assert admin is not None
@@ -427,6 +430,8 @@ def test_host_bind_uses_conversation_key_to_control_reuse(tmp_path):
     assert first["conversation_id"] == second["conversation_id"]
     assert first["session_id"] == second["session_id"]
     assert first["conversation_key"] == "thread-a"
+    assert first["workbench_url"].startswith("http://127.0.0.1:5178?embed_token=")
+    assert f"session_id={first['session_id']}" in first["workbench_url"]
     assert third["conversation_id"] != first["conversation_id"]
     assert third["session_id"] != first["session_id"]
     assert third["conversation_key"] == "thread-b"

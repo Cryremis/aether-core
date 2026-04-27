@@ -50,17 +50,20 @@ Content-Type: application/json
 
 ```dotenv
 AETHERCORE_API_BASE_URL=https://ac-backend.example.com
-AETHERCORE_WORKBENCH_URL=https://ac.example.com
 AETHERCORE_PLATFORM_KEY=your-platform-key
 AETHERCORE_PLATFORM_SECRET=your-platform-secret
 AETHERCORE_HOST_NAME=Your Platform
 AETHERCORE_HOST_CALLBACK_BASE_URL=https://your-platform.example.com
+
+# Optional: only set this when the browser-facing workbench URL differs
+# from AETHERCORE_API_BASE_URL.
+# AETHERCORE_WORKBENCH_URL=https://ac.example.com
 ```
 
 其中：
 
 - `AETHERCORE_API_BASE_URL` 用于宿主后端调用 AetherCore 后端接口。
-- `AETHERCORE_WORKBENCH_URL` 用于宿主后端返回给浏览器的工作台页面地址。
+- `AETHERCORE_WORKBENCH_URL` 是可选覆盖项，仅当浏览器访问工作台的地址和 `AETHERCORE_API_BASE_URL` 不一致时才需要配置。
 
 宿主后端调用 AetherCore：
 
@@ -148,10 +151,10 @@ async def bind_aethercore(payload: AetherCoreBindRequest, request: Request):
     if res.status_code >= 400:
         raise HTTPException(status_code=res.status_code, detail=res.text)
     data = res.json()["data"]
-    workbench_url = (
-        f"{settings.AETHERCORE_WORKBENCH_URL}"
-        f"?embed_token={data['token']}&session_id={data['session_id']}"
-    )
+    workbench_base_url = (
+        getattr(settings, "AETHERCORE_WORKBENCH_URL", "") or settings.AETHERCORE_API_BASE_URL
+    ).rstrip("/")
+    workbench_url = f"{workbench_base_url}?embed_token={data['token']}&session_id={data['session_id']}"
     return {
         "data": {
             "token": data["token"],

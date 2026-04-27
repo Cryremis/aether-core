@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import require_platform_secret
+from app.core.config import settings
 from app.host.registry import host_registry
 from app.schemas.common import ApiResponse
 from app.schemas.host import HostBindRequest
@@ -21,4 +22,8 @@ def bind_host(
         summary = host_registry.bind(request, platform=platform)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    summary["workbench_url"] = (
+        f"{settings.resolved_manage_frontend_public_base_url}"
+        f"?embed_token={summary['token']}&session_id={summary['session_id']}"
+    )
     return ApiResponse(message="宿主绑定成功", data=summary)

@@ -156,6 +156,8 @@ class Settings(BaseSettings):
         configured = self.manage_frontend_public_base_url.strip()
         if configured:
             return configured.rstrip("/")
+        if self.app_public_base_url.strip():
+            return self.resolved_app_public_base_url
         host = self.app_host.strip()
         if not host or host in {"0.0.0.0", "::"}:
             host = "127.0.0.1"
