@@ -46,6 +46,22 @@ Content-Type: application/json
 }
 ```
 
+宿主后端推荐至少配置这些环境变量：
+
+```dotenv
+AETHERCORE_API_BASE_URL=https://ac-backend.example.com
+AETHERCORE_WORKBENCH_URL=https://ac.example.com
+AETHERCORE_PLATFORM_KEY=your-platform-key
+AETHERCORE_PLATFORM_SECRET=your-platform-secret
+AETHERCORE_HOST_NAME=Your Platform
+AETHERCORE_HOST_CALLBACK_BASE_URL=https://your-platform.example.com
+```
+
+其中：
+
+- `AETHERCORE_API_BASE_URL` 用于宿主后端调用 AetherCore 后端接口。
+- `AETHERCORE_WORKBENCH_URL` 用于宿主后端返回给浏览器的工作台页面地址。
+
 宿主后端调用 AetherCore：
 
 ```http
@@ -84,7 +100,8 @@ Content-Type: application/json
 {
   "data": {
     "token": "embed-token-from-aethercore",
-    "session_id": "session-id-from-aethercore"
+    "session_id": "session-id-from-aethercore",
+    "workbench_url": "https://ac.example.com/?embed_token=...&session_id=..."
   }
 }
 ```
@@ -131,7 +148,17 @@ async def bind_aethercore(payload: AetherCoreBindRequest, request: Request):
     if res.status_code >= 400:
         raise HTTPException(status_code=res.status_code, detail=res.text)
     data = res.json()["data"]
-    return {"data": {"token": data["token"], "session_id": data["session_id"]}}
+    workbench_url = (
+        f"{settings.AETHERCORE_WORKBENCH_URL}"
+        f"?embed_token={data['token']}&session_id={data['session_id']}"
+    )
+    return {
+        "data": {
+            "token": data["token"],
+            "session_id": data["session_id"],
+            "workbench_url": workbench_url,
+        }
+    }
 ```
 
 ## 工具注入规范

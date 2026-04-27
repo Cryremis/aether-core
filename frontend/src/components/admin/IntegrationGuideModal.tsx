@@ -33,7 +33,7 @@ export function IntegrationGuideModal({
     },
     {
       title: ".env 怎么用",
-      body: ".env 示例里已经填好 AetherCore 地址、platform_key 和 platform_secret。你只需要把 AETHERCORE_HOST_CALLBACK_BASE_URL 换成你们平台自己的公网根地址。这个地址会在 bind 时动态注入到 host_callback_base_url，给 AetherCore 回调你们的工具接口使用。如果你们框架不自动加载 .env，也可以把同样的值直接配成环境变量。",
+      body: ".env 示例里已经填好 AETHERCORE_API_BASE_URL、AETHERCORE_WORKBENCH_URL、platform_key 和 platform_secret。前者给宿主后端调用 AetherCore 后端接口，后者给浏览器打开 AetherCore 工作台。你只需要再把 AETHERCORE_HOST_CALLBACK_BASE_URL 换成你们平台自己的公网根地址。这个地址会在 bind 时动态注入到 host_callback_base_url，给 AetherCore 回调你们的工具接口使用。如果你们框架不自动加载 .env，也可以把同样的值直接配成环境变量。",
     },
     {
       title: "后端 Bind 示例怎么用",

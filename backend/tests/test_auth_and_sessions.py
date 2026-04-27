@@ -195,14 +195,17 @@ def test_platform_integration_guide_returns_expected_snippets(tmp_path):
     assert 'platformKey: "guide-demo"' in payload["snippets"]["frontend"]
     assert 'workbenchUrl: "https://ac.example.com"' in payload["snippets"]["frontend"]
     assert "AETHERCORE_API_BASE_URL=https://ac-backend.example.com" in payload["snippets"]["backend_env"]
+    assert "AETHERCORE_WORKBENCH_URL=https://ac.example.com" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_PLATFORM_KEY=guide-demo" in payload["snippets"]["backend_env"]
     assert f"AETHERCORE_PLATFORM_SECRET={platform['host_secret']}" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_HOST_NAME=Guide Demo" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_HOST_CALLBACK_BASE_URL={{YOUR_PLATFORM_BASE_URL}}" in payload["snippets"]["backend_env"]
     assert '@router.post("/api/v1/aethercore/embed/bind")' in payload["snippets"]["backend_fastapi"]
     assert "settings.AETHERCORE_PLATFORM_SECRET" in payload["snippets"]["backend_fastapi"]
+    assert "settings.AETHERCORE_WORKBENCH_URL" in payload["snippets"]["backend_fastapi"]
     assert "settings.AETHERCORE_HOST_NAME" in payload["snippets"]["backend_fastapi"]
     assert "settings.AETHERCORE_HOST_CALLBACK_BASE_URL" in payload["snippets"]["backend_fastapi"]
+    assert '"workbench_url": workbench_url' in payload["snippets"]["backend_fastapi"]
 
 
 def test_platform_registration_approval_creates_platform_and_assigns_applicant(tmp_path):

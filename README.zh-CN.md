@@ -132,6 +132,11 @@ python run_dev.py build frontend
 4. 将 `token` 和 `session_id` 返回给浏览器。
 5. 通过通用 adapter 挂载内嵌工作台。
 
+宿主后端环境变量里要区分两个地址：
+
+- `AETHERCORE_API_BASE_URL`：后端调 AetherCore 后端 `/api/v1/host/bind` 时使用的服务端地址
+- `AETHERCORE_WORKBENCH_URL`：返回给浏览器打开内嵌工作台时使用的前端地址
+
 最小示例：
 
 ```html
@@ -218,4 +223,3 @@ python run.py health
 - [docs/context_management_mechanism.md](/C:/Work/AetherCore/docs/context_management_mechanism.md)
 - [docs/host-integration.md](/C:/Work/AetherCore/docs/host-integration.md)
 - [docs/host-integration-standard.md](/C:/Work/AetherCore/docs/host-integration-standard.md)
-

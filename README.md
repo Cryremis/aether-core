@@ -132,6 +132,11 @@ The typical integration flow is:
 4. Return `token` and `session_id` to the browser.
 5. Mount the embedded workbench with the universal adapter.
 
+Host backend env should distinguish two addresses:
+
+- `AETHERCORE_API_BASE_URL`: server-to-server AetherCore backend address used by your bind API to call `/api/v1/host/bind`
+- `AETHERCORE_WORKBENCH_URL`: browser-facing AetherCore frontend address used to open the embedded workbench
+
 Minimal example:
 
 ```html
@@ -218,4 +223,3 @@ See also:
 - [docs/context_management_mechanism.md](/C:/Work/AetherCore/docs/context_management_mechanism.md)
 - [docs/host-integration.md](/C:/Work/AetherCore/docs/host-integration.md)
 - [docs/host-integration-standard.md](/C:/Work/AetherCore/docs/host-integration-standard.md)
-
