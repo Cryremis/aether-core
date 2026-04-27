@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from textwrap import dedent
 
+from app.core.config import settings
 from app.schemas.platform import PlatformIntegrationGuide, PlatformIntegrationGuideSnippets
 
 
@@ -43,7 +44,7 @@ class PlatformIntegrationService:
               window.mountAetherCore({{
                 platformKey: "{platform_key}",
                 bindUrl: "{self.bind_api_path}",
-                workbenchUrl: "{{{{YOUR_AETHERCORE_BASE_URL}}}}",
+                workbenchUrl: "{settings.resolved_manage_frontend_public_base_url}",
                 title: "AetherCore",
                 subtitle: "嵌入式工作台",
                 getUserId: function () {{
@@ -57,11 +58,11 @@ class PlatformIntegrationService:
     def _build_backend_env_snippet(self, *, platform_key: str, host_secret: str, display_name: str) -> str:
         return dedent(
             f"""\
-            AETHERCORE_API_BASE_URL={{{{YOUR_AETHERCORE_BASE_URL}}}}
+            AETHERCORE_API_BASE_URL={settings.resolved_app_public_base_url}
             AETHERCORE_PLATFORM_KEY={platform_key}
             AETHERCORE_PLATFORM_SECRET={host_secret}
-            PLATFORM_NAME={display_name}
-            PLATFORM_PUBLIC_BASE_URL={{{{YOUR_PLATFORM_BASE_URL}}}}
+            AETHERCORE_HOST_NAME={display_name}
+            AETHERCORE_HOST_CALLBACK_BASE_URL={{{{YOUR_PLATFORM_BASE_URL}}}}
             """
         ).strip()
 
@@ -90,7 +91,7 @@ class PlatformIntegrationService:
 
                 body = {{
                     "platform_key": settings.AETHERCORE_PLATFORM_KEY,
-                    "host_name": settings.PLATFORM_NAME or "{display_name}",
+                    "host_name": settings.AETHERCORE_HOST_NAME or "{display_name}",
                     "host_type": "custom",
                     "conversation_key": payload.conversation_key,
                     "conversation_id": payload.conversation_id,
@@ -101,7 +102,7 @@ class PlatformIntegrationService:
                         }},
                         "page": {{}},
                         "extras": {{
-                            "host_callback_base_url": settings.PLATFORM_PUBLIC_BASE_URL,
+                            "host_callback_base_url": settings.AETHERCORE_HOST_CALLBACK_BASE_URL,
                         }},
                     }},
                     "tools": [],

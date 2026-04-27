@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8100
+    app_public_base_url: str = ""
     app_debug: bool = True
 
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
@@ -104,6 +105,7 @@ class Settings(BaseSettings):
 
     manage_backend_port: int = 8100
     manage_frontend_port: int = 5178
+    manage_frontend_public_base_url: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -138,6 +140,26 @@ class Settings(BaseSettings):
     @property
     def platform_baselines_root(self) -> Path:
         return self.resolved_storage_root / "platform_baselines"
+
+    @property
+    def resolved_app_public_base_url(self) -> str:
+        configured = self.app_public_base_url.strip()
+        if configured:
+            return configured.rstrip("/")
+        host = self.app_host.strip()
+        if not host or host in {"0.0.0.0", "::"}:
+            host = "127.0.0.1"
+        return f"http://{host}:{self.app_port}"
+
+    @property
+    def resolved_manage_frontend_public_base_url(self) -> str:
+        configured = self.manage_frontend_public_base_url.strip()
+        if configured:
+            return configured.rstrip("/")
+        host = self.app_host.strip()
+        if not host or host in {"0.0.0.0", "::"}:
+            host = "127.0.0.1"
+        return f"http://{host}:{self.manage_frontend_port}"
 
 
 settings = Settings()
