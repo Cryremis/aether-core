@@ -11,8 +11,10 @@ from app.core.config import settings
 from app.main import app
 from app.services.auth_service import auth_service
 from app.services.conversation_service import conversation_service
+from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
+from app.services.skill_service import skill_service
 from app.services.store import store_service
 from app.services.tool_service import tool_service
 
@@ -435,6 +437,59 @@ def test_host_bind_uses_conversation_key_to_control_reuse(tmp_path):
     assert third["conversation_id"] != first["conversation_id"]
     assert third["session_id"] != first["session_id"]
     assert third["conversation_key"] == "thread-b"
+
+
+def test_host_bind_materializes_platform_baseline_skills_for_new_and_existing_sessions(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+
+    platform = store_service.create_platform(
+        platform_key="ascend-adcp",
+        display_name="Ascend ADCP",
+        host_type="embedded",
+        description="host baseline skill test platform",
+        owner_user_id=admin.user_id,
+    )
+    platform_root = platform_baseline_service.ensure_platform_root(platform["platform_key"])
+    skill_dir = platform_root / "skills" / "new-folder"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: new-folder\ndescription: embedded baseline skill\n---\n\nhello from embedded baseline\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    headers = {"X-Aether-Platform-Secret": platform["host_secret"]}
+    payload = {
+        "platform_key": platform["platform_key"],
+        "host_name": "POC",
+        "conversation_key": "thread-a",
+        "context": {
+            "user": {"id": "user-1", "name": "User 1"},
+            "extras": {"host_callback_base_url": "http://localhost:8000"},
+        },
+        "tools": [],
+        "skills": [],
+        "apis": [],
+    }
+
+    first = client.post("/api/v1/host/bind", headers=headers, json=payload)
+    assert first.status_code == 200
+    session_id = first.json()["data"]["session_id"]
+    session = session_service.get_or_create(session_id)
+    assert any(item.name == "new-folder" for item in skill_service.list_for_session(session))
+
+    session.baseline_root = ""
+    session.platform_skills = []
+    session.platform_files = []
+    session_service.persist(session)
+
+    rebound = client.post("/api/v1/host/bind", headers=headers, json=payload)
+    assert rebound.status_code == 200
+    repaired_session = session_service.get_or_create(session_id)
+    assert any(item.name == "new-folder" for item in skill_service.list_for_session(repaired_session))
 
 
 def test_host_tool_requires_auth_when_injection_is_enabled():

@@ -1,5 +1,6 @@
 # backend/app/host/registry.py
 from app.schemas.host import HostBindRequest
+from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.store import store_service
 from app.services.token_service import token_service
@@ -39,10 +40,16 @@ class HostRegistry:
                 conversation_key=request.conversation_key,
                 metadata={"external_user_name": external_user_name},
             )
+            platform_baseline_service.materialize_to_session(str(platform["platform_key"]), session)
         else:
             if request.session_id and request.session_id != conversation["session_id"]:
                 raise ValueError("session_id 与现有会话绑定不一致")
             session = session_service.get_or_create(conversation["session_id"])
+            expected_baseline_root = str(
+                platform_baseline_service.ensure_platform_root(str(platform["platform_key"])).resolve()
+            )
+            if session.baseline_root != expected_baseline_root:
+                platform_baseline_service.materialize_to_session(str(platform["platform_key"]), session)
 
         session_service.attach_host(
             session=session,

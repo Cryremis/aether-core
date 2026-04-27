@@ -76,6 +76,11 @@ function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
     );
 }
 
+function getOpenWorkItemCount(workboard: WorkboardState | null): number {
+  if (!workboard) return 0;
+  return workboard.items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
+}
+
 
 export function WorkbenchPage({
   conversations,
@@ -122,9 +127,8 @@ export function WorkbenchPage({
   });
   const [allowNetwork, setAllowNetwork] = useState(true);
   const [workboard, setWorkboard] = useState<WorkboardState | null>(null);
-  const [workboardVisible, setWorkboardVisible] = useState(true);
+  const [workboardVisibilityBySession, setWorkboardVisibilityBySession] = useState<Record<string, boolean>>({});
   const [elicitation, setElicitation] = useState<ElicitationState | null>(null);
-  const prevWorkboardRevisionRef = useRef<number>(0);
   const [elicitationBusy, setElicitationBusy] = useState(false);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
@@ -142,18 +146,34 @@ export function WorkbenchPage({
   const detailsToggleShouldStickRef = useRef(false);
   const pendingSessionBottomScrollRef = useRef(false);
   const workboardOpChainRef = useRef<Promise<void>>(Promise.resolve());
+  const workboardOpenCountBySessionRef = useRef<Record<string, number>>({});
 
   const historyRef = useRef<HTMLDivElement | null>(null);
   const historyContentRef = useRef<HTMLDivElement | null>(null);
+  const activeSessionId = sessionId || localSessionId || "";
+  const displayedWorkboard = workboard?.session_id === activeSessionId ? workboard : null;
+  const workboardVisible = activeSessionId ? (workboardVisibilityBySession[activeSessionId] ?? false) : false;
 
   useEffect(() => {
-    if (!workboard) return;
-    const currentRevision = workboard.revision;
-    if (currentRevision > prevWorkboardRevisionRef.current && workboard.items.length > 0) {
-      setWorkboardVisible(true);
+    if (!activeSessionId) return;
+
+    const nextOpenCount = getOpenWorkItemCount(displayedWorkboard);
+    const previousOpenCount = workboardOpenCountBySessionRef.current[activeSessionId];
+    workboardOpenCountBySessionRef.current[activeSessionId] = nextOpenCount;
+
+    if (previousOpenCount === undefined) {
+      return;
     }
-    prevWorkboardRevisionRef.current = currentRevision;
-  }, [workboard?.revision, workboard?.items?.length]);
+
+    if (previousOpenCount === 0 && nextOpenCount > 0) {
+      setWorkboardVisibilityBySession((current) => ({ ...current, [activeSessionId]: true }));
+      return;
+    }
+
+    if (previousOpenCount > 0 && nextOpenCount === 0) {
+      setWorkboardVisibilityBySession((current) => ({ ...current, [activeSessionId]: false }));
+    }
+  }, [activeSessionId, displayedWorkboard]);
 
   const isNearBottom = (node: HTMLDivElement, threshold = 80) => {
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
@@ -541,9 +561,6 @@ window.addEventListener("resize", handleResize);
       const nextWorkboard = (result.data ?? null) as WorkboardState | null;
       if (nextWorkboard) {
         setWorkboard(nextWorkboard);
-        if (nextWorkboard.items.length > 0) {
-          setWorkboardVisible(true);
-        }
       }
     };
 
@@ -1270,10 +1287,17 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
 
         <div className="runtime-panels">
           <WorkboardDock
-            workboard={workboard}
+            workboard={displayedWorkboard}
             visible={workboardVisible}
             busy={busy || loading}
-            onToggle={() => setWorkboardVisible((v) => !v)}
+            onToggle={() =>
+              activeSessionId
+                ? setWorkboardVisibilityBySession((current) => ({
+                    ...current,
+                    [activeSessionId]: !(current[activeSessionId] ?? false),
+                  }))
+                : undefined
+            }
             onApplyOps={(ops) => handleWorkboardOps(ops)}
           />
           <ElicitationPanel request={elicitation?.pending ?? null} busy={busy || elicitationBusy} onSubmit={(responses) => void handleElicitationSubmit(responses)} />
@@ -1285,10 +1309,17 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           allowNetwork={allowNetwork}
           queuedMessages={queuedMessages}
           workboardVisible={workboardVisible}
-          workboardCount={workboard?.items?.length ?? 0}
-          workboardCompleted={workboard?.items?.filter((i) => i.status === "completed").length ?? 0}
+          workboardCount={displayedWorkboard?.items?.length ?? 0}
+          workboardCompleted={displayedWorkboard?.items?.filter((i) => i.status === "completed").length ?? 0}
           onAllowNetworkChange={setAllowNetwork}
-          onWorkboardToggle={() => setWorkboardVisible((v) => !v)}
+          onWorkboardToggle={() =>
+            activeSessionId
+              ? setWorkboardVisibilityBySession((current) => ({
+                  ...current,
+                  [activeSessionId]: !(current[activeSessionId] ?? false),
+                }))
+              : undefined
+          }
           onSend={(text) => void handleSend(text)}
           onStop={() => void handleStop()}
           onRemoveQueued={handleRemoveQueued}
