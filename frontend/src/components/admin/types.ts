@@ -27,16 +27,6 @@ export type PlatformBaselineEntryItem = {
   media_type: string;
 };
 
-export type WhitelistItem = {
-  whitelist_id: number;
-  provider: string;
-  provider_user_id: string;
-  full_name: string;
-  role: string;
-};
-
-export type AdminWhitelistRole = "system_admin" | "platform_admin" | "debug";
-
 export type LlmConfigFormState = {
   enabled: boolean;
   base_url: string;

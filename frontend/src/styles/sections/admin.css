@@ -764,3 +764,157 @@
   line-height: 1.7;
 }
 
+.management-console {
+  display: grid;
+  gap: 18px;
+}
+
+.management-console__section {
+  display: grid;
+  gap: 14px;
+}
+
+.management-console__section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.management-console__section-head p {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.management-console__metric {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.management-console__cards,
+.management-console__table {
+  display: grid;
+  gap: 12px;
+}
+
+.management-console__toolbar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.management-console__toolbar select {
+  min-height: 40px;
+  min-width: 220px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(203, 213, 225, 0.96);
+  background: #fff;
+}
+
+.management-console__card,
+.management-console__user-row {
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.management-console__card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.management-console__card p,
+.management-console__user-row p {
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.management-console__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.management-console__user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.management-console__user-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.management-console__user-controls select {
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(203, 213, 225, 0.96);
+  background: #fff;
+}
+
+.management-console__user-controls span {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.request-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.request-status--pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.request-status--approved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.request-status--rejected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.request-status--returned,
+.request-status--cancelled {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+@media (max-width: 900px) {
+  .management-console__user-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .management-console__user-controls {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+}
+

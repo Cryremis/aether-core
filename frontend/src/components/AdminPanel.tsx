@@ -3,7 +3,6 @@ import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 
 import {
   createPlatformBaselineDirectory,
-  createAdminWhitelist,
   createPlatform,
   deletePlatformLlmConfig,
   deletePlatformBaselineFile,
@@ -12,7 +11,6 @@ import {
   getPlatformBaselineFileContent,
   getPlatformIntegrationGuide,
   getPlatformLlmConfig,
-  listAdminWhitelist,
   listPlatforms,
   movePlatformBaselinePath,
   PlatformIntegrationGuide,
@@ -27,14 +25,11 @@ import { AdminIcons as Icons } from "./admin/AdminIcons";
 import { IntegrationGuideModal } from "./admin/IntegrationGuideModal";
 import { PlatformList } from "./admin/PlatformList";
 import { PlatformLlmPanel } from "./admin/PlatformLlmPanel";
-import { WhitelistRecords } from "./admin/WhitelistRecords";
 import type {
-  AdminWhitelistRole,
   LlmConfigFormState,
   PlatformBaselineEntryItem,
   PlatformBaselineFileItem,
   PlatformItem,
-  WhitelistItem,
 } from "./admin/types";
 
 type AdminPanelProps = {
@@ -43,7 +38,6 @@ type AdminPanelProps = {
 
 export function AdminPanel({ role }: AdminPanelProps) {
   const [platforms, setPlatforms] = useState<PlatformItem[]>([]);
-  const [whitelist, setWhitelist] = useState<WhitelistItem[]>([]);
   const[activePlatformId, setActivePlatformId] = useState<number | null>(null);
   const [baselineEntries, setBaselineEntries] = useState<PlatformBaselineEntryItem[]>([]);
   const [error, setError] = useState("");
@@ -61,9 +55,6 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; item: PlatformBaselineEntryItem | null }>({ visible: false, x: 0, y: 0, item: null });
 
   // Form States
-  const [providerKey, setProviderKey] = useState("password");
-  const [providerUserId, setProviderUserId] = useState("");
-  const [whitelistRole, setWhitelistRole] = useState<AdminWhitelistRole>("platform_admin");
   const[platformKey, setPlatformKey] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
@@ -103,12 +94,8 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const loadData = async () => {
     setError("");
     try {
-      const [platformResult, whitelistResult] = await Promise.all([
-        listPlatforms(),
-        role === "system_admin" ? listAdminWhitelist() : Promise.resolve({ data: [] }),
-      ]);
+      const platformResult = await listPlatforms();
       setPlatforms((platformResult.data ?? []) as PlatformItem[]);
-      setWhitelist((whitelistResult.data ?? []) as WhitelistItem[]);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "加载管理数据失败");
     }
@@ -214,21 +201,6 @@ export function AdminPanel({ role }: AdminPanelProps) {
       setBaselineDirty(false);
     }
   }, [baselineEntries, selectedBaselinePath]);
-
-  // Form Handlers
-  const handleCreateWhitelist = async (e: FormEvent) => { /* 略，原逻辑保持 */
-    e.preventDefault();
-    try {
-      setError("");
-      await createAdminWhitelist({
-        provider: providerKey.trim(),
-        provider_user_id: providerUserId.trim(),
-        role: whitelistRole,
-      });
-      setProviderUserId("");
-      await loadData();
-    } catch (err) { setError(err instanceof Error ? err.message : "新增白名单失败"); }
-  };
 
   const handleCreatePlatform = async (e: FormEvent) => { /* 略，原逻辑保持 */
     e.preventDefault();
@@ -561,22 +533,15 @@ export function AdminPanel({ role }: AdminPanelProps) {
 
       {error ? <div className="admin-panel__error">{error}</div> : null}
 
-      {/* 白名单与平台注册表单（仅超级管理员）保持原样 */}
+      {/* 平台注册表单（仅系统管理员） */}
       {role === "system_admin" ? (
         <AdminForms
-          providerKey={providerKey}
-          providerUserId={providerUserId}
-          whitelistRole={whitelistRole}
           platformKey={platformKey}
           displayName={displayName}
           description={description}
-          onProviderKeyChange={setProviderKey}
-          onProviderUserIdChange={setProviderUserId}
-          onWhitelistRoleChange={setWhitelistRole}
           onPlatformKeyChange={setPlatformKey}
           onDisplayNameChange={setDisplayName}
           onDescriptionChange={setDescription}
-          onCreateWhitelist={handleCreateWhitelist}
           onCreatePlatform={handleCreatePlatform}
         />
       ) : null}
@@ -638,9 +603,6 @@ export function AdminPanel({ role }: AdminPanelProps) {
         onRename={() => { void handleRenameBaselinePath(contextMenu.item!.relative_path); setContextMenu({ ...contextMenu, visible: false}); }}
         onDelete={() => { void handleDeleteBaselineFile(contextMenu.item!.relative_path); setContextMenu({ ...contextMenu, visible: false}); }}
       />
-
-      {role === "system_admin" ? <WhitelistRecords whitelist={whitelist} /> : null}
-
       <IntegrationGuideModal
         integrationGuide={integrationGuide}
         integrationGuideBusy={integrationGuideBusy}

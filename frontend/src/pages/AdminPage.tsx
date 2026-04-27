@@ -1,12 +1,13 @@
 // frontend/src/pages/AdminPage.tsx
-import { AdminPanel } from "../components/AdminPanel";
+import type { CurrentUserProfile } from "../api/client";
+import { ManagementConsole } from "../components/ManagementConsole";
 
 type AdminPageProps = {
-  role: string;
+  currentUser: CurrentUserProfile;
   onBack?: () => void;
 };
 
-export function AdminPage({ role, onBack }: AdminPageProps) {
+export function AdminPage({ currentUser, onBack }: AdminPageProps) {
   return (
     <main className="admin-page">
       <section className="admin-page__content">
@@ -20,9 +21,9 @@ export function AdminPage({ role, onBack }: AdminPageProps) {
             ) : null}
           </div>
           <h1>管理配置</h1>
-          <p>集中维护管理员白名单、平台接入与默认平台配置，不再与工作台文件、技能侧栏混排。</p>
+          <p>统一处理平台注册审批、负责人治理、系统角色授权，以及平台基线与模型配置。</p>
         </div>
-        <AdminPanel role={role} />
+        <ManagementConsole currentUser={currentUser} />
       </section>
     </main>
   );
