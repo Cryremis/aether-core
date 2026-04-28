@@ -1,3 +1,4 @@
+
 // frontend/src/components/AdminPanel.tsx
 import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 
@@ -42,27 +43,27 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const [platforms, setPlatforms] = useState<PlatformItem[]>([]);
   const[activePlatformId, setActivePlatformId] = useState<number | null>(null);
   const [baselineEntries, setBaselineEntries] = useState<PlatformBaselineEntryItem[]>([]);
-  const [error, setError] = useState("");
+  const[error, setError] = useState("");
   const[baselineError, setBaselineError] = useState("");
   
   // File Manager State
   const[currentBaselineDirectory, setCurrentBaselineDirectory] = useState(""); // "" 代表根目录 (显示 input/skills/work 等)
-  const[selectedBaselinePath, setSelectedBaselinePath] = useState("");
+  const [selectedBaselinePath, setSelectedBaselinePath] = useState("");
   const [selectedBaselineContent, setSelectedBaselineContent] = useState("");
-  const [selectedBaselineMediaType, setSelectedBaselineMediaType] = useState("");
+  const[selectedBaselineMediaType, setSelectedBaselineMediaType] = useState("");
   const[selectedBaselineTruncated, setSelectedBaselineTruncated] = useState(false);
   const [baselineDirty, setBaselineDirty] = useState(false);
-  const [showSkillUploadModal, setShowSkillUploadModal] = useState(false);
-  const [skillUploadBusy, setSkillUploadBusy] = useState(false);
+  const[showSkillUploadModal, setShowSkillUploadModal] = useState(false);
+  const[skillUploadBusy, setSkillUploadBusy] = useState(false);
   const [skillUploadError, setSkillUploadError] = useState("");
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; item: PlatformBaselineEntryItem | null }>({ visible: false, x: 0, y: 0, item: null });
 
   // Form States
-  const[platformKey, setPlatformKey] = useState("");
+  const [platformKey, setPlatformKey] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [description, setDescription] = useState("");
+  const[description, setDescription] = useState("");
   const [platformLlmForm, setPlatformLlmForm] = useState<LlmConfigFormState>({
     enabled: true,
     base_url: "",
@@ -77,13 +78,13 @@ export function AdminPanel({ role }: AdminPanelProps) {
     max_search_results: 8,
     fetch_timeout_seconds: 30,
   });
-  const [platformLlmError, setPlatformLlmError] = useState("");
+  const[platformLlmError, setPlatformLlmError] = useState("");
   const [platformLlmBusy, setPlatformLlmBusy] = useState(false);
   const [showPlatformLlmAdvanced, setShowPlatformLlmAdvanced] = useState(false);
   const [integrationGuide, setIntegrationGuide] = useState<PlatformIntegrationGuide | null>(null);
   const [integrationGuideError, setIntegrationGuideError] = useState("");
-  const [integrationGuideBusy, setIntegrationGuideBusy] = useState(false);
-  const [integrationGuidePlatformName, setIntegrationGuidePlatformName] = useState("");
+  const[integrationGuideBusy, setIntegrationGuideBusy] = useState(false);
+  const[integrationGuidePlatformName, setIntegrationGuidePlatformName] = useState("");
 
   const fileManagerRef = useRef<HTMLDivElement>(null);
 
@@ -168,8 +169,8 @@ export function AdminPanel({ role }: AdminPanelProps) {
           extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
           has_api_key: Boolean(data?.has_api_key),
           network_enabled: data?.network?.enabled ?? true,
-          allowed_domains_text: (data?.network?.allowed_domains ?? []).join("\n"),
-          blocked_domains_text: (data?.network?.blocked_domains ?? []).join("\n"),
+          allowed_domains_text: (data?.network?.allowed_domains ??[]).join("\n"),
+          blocked_domains_text: (data?.network?.blocked_domains ??[]).join("\n"),
           max_search_results: data?.network?.max_search_results ?? 8,
           fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
         });
@@ -183,7 +184,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
         setPlatformLlmError(err instanceof Error ? err.message : "加载平台 LLM 配置失败");
       }
     })();
-  }, [activePlatformId]);
+  },[activePlatformId]);
 
   useEffect(() => {
     if (!platforms.length) {
@@ -205,9 +206,9 @@ export function AdminPanel({ role }: AdminPanelProps) {
       setSelectedBaselineTruncated(false);
       setBaselineDirty(false);
     }
-  }, [baselineEntries, selectedBaselinePath]);
+  },[baselineEntries, selectedBaselinePath]);
 
-  const handleCreatePlatform = async (e: FormEvent) => { /* 略，原逻辑保持 */
+  const handleCreatePlatform = async (e: FormEvent) => { 
     e.preventDefault();
     const normalizedPlatformKey = platformKey.trim().toLowerCase();
     if (existingPlatformKeys.has(normalizedPlatformKey)) { setError(`platform_key "${normalizedPlatformKey}" 已存在，请更换`); return; }
@@ -325,7 +326,6 @@ export function AdminPanel({ role }: AdminPanelProps) {
   // ---------------- 视图驱动逻辑 ----------------
 
   const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
-  const describePlatformType = (item: PlatformItem) => item.platform_key === "standalone" || item.host_type === "standalone" ? "内置平台" : "接入平台";
 
   const parseJsonObject = (raw: string, label: string) => {
     const trimmed = raw.trim();
@@ -392,8 +392,8 @@ export function AdminPanel({ role }: AdminPanelProps) {
         extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
         has_api_key: Boolean(data?.has_api_key),
         network_enabled: data?.network?.enabled ?? true,
-        allowed_domains_text: (data?.network?.allowed_domains ?? []).join("\n"),
-        blocked_domains_text: (data?.network?.blocked_domains ?? []).join("\n"),
+        allowed_domains_text: (data?.network?.allowed_domains ??[]).join("\n"),
+        blocked_domains_text: (data?.network?.blocked_domains ??[]).join("\n"),
         max_search_results: data?.network?.max_search_results ?? 8,
         fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
       });
@@ -469,7 +469,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
     snippet ? snippet.split("{{YOUR_PLATFORM_BASE_URL}}").flatMap((part, index) =>
       index === 0
         ? [part]
-        : [
+        :[
             <span key={`placeholder-${index}`} className="guide-placeholder">
               {"{{YOUR_PLATFORM_BASE_URL}}"}
             </span>,
@@ -485,7 +485,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
       name: part,
       path: parts.slice(0, index + 1).join("/")
     }));
-  }, [currentBaselineDirectory]);
+  },[currentBaselineDirectory]);
 
   // 当前目录内容 (仅限一层)
   const currentDirectoryChildren = useMemo(() => {
@@ -546,75 +546,78 @@ export function AdminPanel({ role }: AdminPanelProps) {
 
   return (
     <section className="admin-panel">
-      <div className="admin-panel__header">
-        <h3>管理配置</h3>
-      </div>
-
-      {error ? <div className="admin-panel__error">{error}</div> : null}
+      {error ? <div className="admin-panel__error epic-error">{error}</div> : null}
 
       {/* 平台注册表单（仅系统管理员） */}
       {role === "system_admin" ? (
-        <AdminForms
-          platformKey={platformKey}
-          displayName={displayName}
-          description={description}
-          onPlatformKeyChange={setPlatformKey}
-          onDisplayNameChange={setDisplayName}
-          onDescriptionChange={setDescription}
-          onCreatePlatform={handleCreatePlatform}
-        />
+        <div className="epic-glass admin-panel__create-card stagger-3">
+          <AdminForms
+            platformKey={platformKey}
+            displayName={displayName}
+            description={description}
+            onPlatformKeyChange={setPlatformKey}
+            onDisplayNameChange={setDisplayName}
+            onDescriptionChange={setDescription}
+            onCreatePlatform={handleCreatePlatform}
+          />
+        </div>
       ) : null}
 
-      <PlatformList
-        platforms={platforms}
-        activePlatformId={activePlatformId}
-        onSelect={(platformId) => void loadPlatformBaseline(platformId)}
-        onOpenGuide={(platform) => void handleOpenIntegrationGuide(platform)}
-      />
+      <div className="epic-glass stagger-4">
+        <PlatformList
+          platforms={platforms}
+          activePlatformId={activePlatformId}
+          onSelect={(platformId) => void loadPlatformBaseline(platformId)}
+          onOpenGuide={(platform) => void handleOpenIntegrationGuide(platform)}
+        />
+      </div>
 
-      {/* ================= 现代化资源管理器 ================= */}
+      {/* ================= Bento Grid: LLM 与基线资源管理器 ================= */}
       {activePlatform ? (
-        <div className="admin-panel__list baseline-manager-wrapper">
-          <PlatformLlmPanel
-            platformLlmForm={platformLlmForm}
-            platformLlmError={platformLlmError}
-            platformLlmBusy={platformLlmBusy}
-            showPlatformLlmAdvanced={showPlatformLlmAdvanced}
-            onToggleAdvanced={setShowPlatformLlmAdvanced}
-            onChange={setPlatformLlmForm}
-            onSave={() => void handleSavePlatformLlm()}
-            onReset={() => void handleResetPlatformLlm()}
-          />
+        <div className="epic-bento-grid stagger-4">
+          <div className="epic-glass epic-bento-card">
+            <PlatformLlmPanel
+              platformLlmForm={platformLlmForm}
+              platformLlmError={platformLlmError}
+              platformLlmBusy={platformLlmBusy}
+              showPlatformLlmAdvanced={showPlatformLlmAdvanced}
+              onToggleAdvanced={setShowPlatformLlmAdvanced}
+              onChange={setPlatformLlmForm}
+              onSave={() => void handleSavePlatformLlm()}
+              onReset={() => void handleResetPlatformLlm()}
+            />
+          </div>
 
-          <BaselineManager
-            activePlatform={activePlatform}
-            baselineError={baselineError}
-            fileManagerRef={fileManagerRef}
-            breadcrumbs={breadcrumbs}
-            currentDirectoryChildren={currentDirectoryChildren}
-            currentBaselineDirectory={currentBaselineDirectory}
-            selectedBaselinePath={selectedBaselinePath}
-            selectedBaselineContent={selectedBaselineContent}
-            selectedBaselineMediaType={selectedBaselineMediaType}
-            selectedBaselineTruncated={selectedBaselineTruncated}
-            baselineDirty={baselineDirty}
-            onGoHome={() => { setCurrentBaselineDirectory(""); setSelectedBaselinePath(""); }}
-            onGoBreadcrumb={(path) => { setCurrentBaselineDirectory(path); setSelectedBaselinePath(""); }}
-            onCreateDirectory={() => void handleCreateBaselineDirectory()}
-            onCreateFile={() => void handleCreateBaselineFile()}
-            onUploadFile={(file) => void handleBaselineFileUpload(file)}
-            onOpenSkillUpload={() => {
-              setSkillUploadError("");
-              setShowSkillUploadModal(true);
-            }}
-            onSelectFile={(item) => void handleSelectFile(item)}
-            onDoubleClickItem={handleDoubleClickItem}
-            onContextMenu={handleContextMenu}
-            onContentChange={(value) => { setSelectedBaselineContent(value); setBaselineDirty(true); }}
-            onSaveText={() => void handleSaveBaselineText()}
-            onClosePreview={() => { setSelectedBaselinePath(""); setSelectedBaselineContent(""); }}
-          />
-
+          <div className="epic-glass epic-bento-card">
+            <BaselineManager
+              activePlatform={activePlatform}
+              baselineError={baselineError}
+              fileManagerRef={fileManagerRef}
+              breadcrumbs={breadcrumbs}
+              currentDirectoryChildren={currentDirectoryChildren}
+              currentBaselineDirectory={currentBaselineDirectory}
+              selectedBaselinePath={selectedBaselinePath}
+              selectedBaselineContent={selectedBaselineContent}
+              selectedBaselineMediaType={selectedBaselineMediaType}
+              selectedBaselineTruncated={selectedBaselineTruncated}
+              baselineDirty={baselineDirty}
+              onGoHome={() => { setCurrentBaselineDirectory(""); setSelectedBaselinePath(""); }}
+              onGoBreadcrumb={(path) => { setCurrentBaselineDirectory(path); setSelectedBaselinePath(""); }}
+              onCreateDirectory={() => void handleCreateBaselineDirectory()}
+              onCreateFile={() => void handleCreateBaselineFile()}
+              onUploadFile={(file) => void handleBaselineFileUpload(file)}
+              onOpenSkillUpload={() => {
+                setSkillUploadError("");
+                setShowSkillUploadModal(true);
+              }}
+              onSelectFile={(item) => void handleSelectFile(item)}
+              onDoubleClickItem={handleDoubleClickItem}
+              onContextMenu={handleContextMenu}
+              onContentChange={(value) => { setSelectedBaselineContent(value); setBaselineDirty(true); }}
+              onSaveText={() => void handleSaveBaselineText()}
+              onClosePreview={() => { setSelectedBaselinePath(""); setSelectedBaselineContent(""); }}
+            />
+          </div>
         </div>
       ) : null}
 

@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useState } from "react";
 
 import type {
@@ -55,14 +56,15 @@ function formatTime(value?: string | null) {
 }
 
 export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
+  const [activeTab, setActiveTab] = useState<"config" | "approvals" | "users" | "admins">("config");
   const [requests, setRequests] = useState<PlatformRegistrationRequestSummary[]>([]);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [platforms, setPlatforms] = useState<PlatformOption[]>([]);
-  const [selectedPlatformId, setSelectedPlatformId] = useState<number | null>(null);
-  const [selectedPlatformAdmins, setSelectedPlatformAdmins] = useState<PlatformAdminRecord[]>([]);
+  const[selectedPlatformId, setSelectedPlatformId] = useState<number | null>(null);
+  const[selectedPlatformAdmins, setSelectedPlatformAdmins] = useState<PlatformAdminRecord[]>([]);
   const [assignUserId, setAssignUserId] = useState<number | null>(null);
   const [error, setError] = useState("");
-  const [busyRequestId, setBusyRequestId] = useState<number | null>(null);
+  const[busyRequestId, setBusyRequestId] = useState<number | null>(null);
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
   const [platformAdminBusy, setPlatformAdminBusy] = useState(false);
 
@@ -72,13 +74,13 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
   );
 
   const loadSystemGovernance = async () => {
-    const [requestResult, userResult, platformResult] = await Promise.all([
+    const[requestResult, userResult, platformResult] = await Promise.all([
       listPlatformRegistrationRequests(),
       listUsers(),
       listPlatforms(),
     ]);
     setRequests((requestResult.data ?? []) as PlatformRegistrationRequestSummary[]);
-    setUsers((userResult.data ?? []) as UserSummary[]);
+    setUsers((userResult.data ??[]) as UserSummary[]);
     const nextPlatforms = (platformResult.data ?? []) as PlatformOption[];
     setPlatforms(nextPlatforms);
     if (nextPlatforms.length > 0) {
@@ -109,7 +111,7 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
       .catch((err) => {
         setError(err instanceof Error ? err.message : "加载平台负责人失败");
       });
-  }, [currentUser.can_manage_system, selectedPlatformId]);
+  },[currentUser.can_manage_system, selectedPlatformId]);
 
   const handleApprove = async (requestId: number) => {
     const reviewComment = window.prompt("审批备注（可选）", "") ?? "";
@@ -164,7 +166,7 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
       setError("");
       await assignPlatformAdmin(selectedPlatformId, assignUserId);
       const result = await listPlatformAdmins(selectedPlatformId);
-      setSelectedPlatformAdmins((result.data ?? []) as PlatformAdminRecord[]);
+      setSelectedPlatformAdmins((result.data ??[]) as PlatformAdminRecord[]);
       setAssignUserId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "新增平台负责人失败");
@@ -216,11 +218,31 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
 
   return (
     <div className="management-console">
-      {error ? <div className="admin-panel__error">{error}</div> : null}
+      {error ? <div className="admin-panel__error epic-error stagger-1">{error}</div> : null}
 
-      {currentUser.can_manage_system ? (
-        <>
-          <section className="admin-panel__list management-console__section">
+      {currentUser.can_manage_system && (
+        <div className="admin-tabs-wrapper stagger-2">
+          <nav className="admin-tabs">
+            <button type="button" className={`admin-tab-btn ${activeTab === 'config' ? 'is-active' : ''}`} onClick={() => setActiveTab('config')}>
+              平台配置
+            </button>
+            <button type="button" className={`admin-tab-btn ${activeTab === 'approvals' ? 'is-active' : ''}`} onClick={() => setActiveTab('approvals')}>
+              注册审批 {pendingRequests.length > 0 && <span className="tab-badge">{pendingRequests.length}</span>}
+            </button>
+            <button type="button" className={`admin-tab-btn ${activeTab === 'users' ? 'is-active' : ''}`} onClick={() => setActiveTab('users')}>
+              用户授权
+            </button>
+            <button type="button" className={`admin-tab-btn ${activeTab === 'admins' ? 'is-active' : ''}`} onClick={() => setActiveTab('admins')}>
+              负责人治理
+            </button>
+          </nav>
+        </div>
+      )}
+
+      {/* 利用 key 强制触发重新挂载和 CSS 动画 */}
+      <div key={activeTab} className="admin-tab-content">
+        {currentUser.can_manage_system && activeTab === 'approvals' && (
+          <section className="management-console__section epic-glass stagger-3">
             <div className="management-console__section-head">
               <div>
                 <h4>平台注册审批</h4>
@@ -271,8 +293,10 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
               )}
             </div>
           </section>
+        )}
 
-          <section className="admin-panel__list management-console__section">
+        {currentUser.can_manage_system && activeTab === 'users' && (
+          <section className="management-console__section epic-glass stagger-3">
             <div className="management-console__section-head">
               <div>
                 <h4>系统用户授权</h4>
@@ -303,8 +327,10 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
               ))}
             </div>
           </section>
+        )}
 
-          <section className="admin-panel__list management-console__section">
+        {currentUser.can_manage_system && activeTab === 'admins' && (
+          <section className="management-console__section epic-glass stagger-3">
             <div className="management-console__section-head">
               <div>
                 <h4>平台负责人治理</h4>
@@ -360,7 +386,7 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
                         </button>
                         <button
                           type="button"
-                          className="action-button action-button--ghost"
+                          className="action-button action-button--ghost danger-button"
                           disabled={platformAdminBusy}
                           onClick={() => void handleRemovePlatformAdmin(item.user_id)}
                         >
@@ -375,12 +401,14 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
               ))}
             </div>
           </section>
-        </>
-      ) : null}
+        )}
 
-      <section className="management-console__section">
-        <AdminPanel role={currentUser.can_manage_system ? "user" : currentUser.role} />
-      </section>
+        {(!currentUser.can_manage_system || activeTab === 'config') && (
+          <section className="management-console__section">
+            <AdminPanel role={currentUser.can_manage_system ? "system_admin" : currentUser.role} />
+          </section>
+        )}
+      </div>
     </div>
   );
 }
