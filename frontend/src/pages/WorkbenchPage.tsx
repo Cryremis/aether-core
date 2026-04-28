@@ -88,7 +88,7 @@ export function WorkbenchPage({
   isEmbedMode = false,
   sessionId,
   isNewSession = false,
-  onAdminToggle,
+  adminEntryHref,
   onLogout,
   onNewConversation,
   onDeleteSession,
@@ -1237,7 +1237,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         onUploadFile={handleUpload}
         onUploadSkill={handleUploadSkill}
         onOpenLlmDialog={() => void openLlmDialog()}
-        onAdminToggle={onAdminToggle}
+        adminEntryHref={adminEntryHref}
         onOpenPlatformRegistration={() => void openPlatformRegistrationDialog()}
         onLogout={onLogout}
         onSidebarResizeStart={handleSidebarResizeStart}

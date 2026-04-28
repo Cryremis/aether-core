@@ -1,4 +1,5 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import { Link } from "react-router-dom";
 
 import type { CurrentUserProfile } from "../../api/client";
 import type { FileItem, SidebarView, SkillItem, WorkbenchConversation } from "../../pages/workbench/types";
@@ -25,7 +26,7 @@ type WorkbenchSidebarProps = {
   onUploadFile: (file: File | undefined) => void;
   onUploadSkill: (file: File | undefined) => void;
   onOpenLlmDialog: () => void;
-  onAdminToggle?: () => void;
+  adminEntryHref?: string;
   onOpenPlatformRegistration?: () => void;
   onLogout?: () => void;
   onSidebarResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -53,7 +54,7 @@ export function WorkbenchSidebar({
   onUploadFile,
   onUploadSkill,
   onOpenLlmDialog,
-  onAdminToggle,
+  adminEntryHref,
   onOpenPlatformRegistration,
   onLogout,
   onSidebarResizeStart,
@@ -180,10 +181,10 @@ export function WorkbenchSidebar({
               <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onOpenPlatformRegistration}>
                 申请注册新平台
               </button>
-              {currentUser?.can_manage_platforms ? (
-                <button type="button" className="action-button sidebar-footer__button" onClick={onAdminToggle}>
+              {currentUser?.can_manage_platforms && adminEntryHref ? (
+                <Link className="action-button sidebar-footer__button" to={adminEntryHref}>
                   管理配置
-                </button>
+                </Link>
               ) : null}
               <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onLogout}>
                 退出登录

@@ -1,5 +1,6 @@
 // frontend/src/App.tsx
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import {
   bootstrapAdminSession,
@@ -24,7 +25,8 @@ type ConversationItem = {
 };
 
 export default function App() {
-  const [page, setPage] = useState<"workbench" | "admin">("workbench");
+  const location = useLocation();
+  const navigate = useNavigate();
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [sessionId, setSessionId] = useState("");
@@ -151,60 +153,88 @@ export default function App() {
     setConversations([]);
     setCurrentUser(null);
     setIsEmbedMode(false);
-    setPage("workbench");
+    setIsNewSession(false);
+    navigate("/workbench", { replace: true });
   };
 
-  const shell = useMemo(() => {
-    const pageFallback = (
+  const handleAdminBack = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+    navigate("/workbench");
+  };
+
+  const pageFallback = (
+    <main className="login-screen">
+      <section className="login-card">
+        <p>正在加载界面...</p>
+      </section>
+    </main>
+  );
+
+  if (!ready) {
+    return (
       <main className="login-screen">
         <section className="login-card">
-          <p>正在加载界面...</p>
+          <p>正在初始化工作台...</p>
         </section>
       </main>
     );
+  }
 
-    if (!ready) {
-      return (
-        <main className="login-screen">
-          <section className="login-card">
-            <p>正在初始化工作台...</p>
-          </section>
-        </main>
-      );
-    }
+  if (!authed) {
+    return <LoginPage onLoggedIn={() => void handleLoggedIn()} />;
+  }
 
-    if (!authed) {
-      return <LoginPage onLoggedIn={() => void handleLoggedIn()} />;
-    }
-
-    return (
-      <div className="workspace-shell">
-        <section className="workspace-shell__main">
-          <Suspense fallback={pageFallback}>
-            {page === "admin" && currentUser && currentUser.can_manage_platforms ? (
-              <AdminPage currentUser={currentUser} onBack={() => setPage("workbench")} />
-            ) : sessionId || isNewSession ? (
-              <WorkbenchPage
-                conversations={conversations}
-                currentUser={currentUser}
-                isEmbedMode={isEmbedMode}
-                sessionId={sessionId}
-                isNewSession={isNewSession}
-                onAdminToggle={currentUser?.can_manage_platforms ? () => setPage("admin") : undefined}
-                onLogout={handleLogout}
-                onNewConversation={handleNewConversation}
-                onDeleteSession={(id) => void handleDeleteSession(id)}
-                onRenameSession={(id, title) => void handleRenameSession(id, title)}
-                onSessionCreated={handleCreateSessionAndSelect}
-                onSessionRefresh={() => void refreshConversations(sessionId)}
-                onSessionSelect={(id) => { setSessionId(id); setIsNewSession(false); }}
-              />
-            ) : null}
-          </Suspense>
-        </section>
-      </div>
-    );
-  }, [authed, conversations, currentUser, isEmbedMode, isNewSession, page, ready, sessionId]);
-
-  return shell;
+  return (
+    <div className="workspace-shell">
+      <section className="workspace-shell__main">
+        <Suspense fallback={pageFallback}>
+          <Routes>
+            <Route
+              path="/workbench"
+              element={
+                sessionId || isNewSession ? (
+                  <WorkbenchPage
+                    conversations={conversations}
+                    currentUser={currentUser}
+                    isEmbedMode={isEmbedMode}
+                    sessionId={sessionId}
+                    isNewSession={isNewSession}
+                    adminEntryHref={currentUser?.can_manage_platforms ? "/admin" : undefined}
+                    onLogout={handleLogout}
+                    onNewConversation={handleNewConversation}
+                    onDeleteSession={(id) => void handleDeleteSession(id)}
+                    onRenameSession={(id, title) => void handleRenameSession(id, title)}
+                    onSessionCreated={handleCreateSessionAndSelect}
+                    onSessionRefresh={() => void refreshConversations(sessionId)}
+                    onSessionSelect={(id) => {
+                      setSessionId(id);
+                      setIsNewSession(false);
+                    }}
+                  />
+                ) : null
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                currentUser?.can_manage_platforms ? (
+                  <AdminPage currentUser={currentUser} onBack={handleAdminBack} />
+                ) : (
+                  <Navigate to="/workbench" replace />
+                )
+              }
+            />
+            <Route
+              path="/"
+              element={<Navigate to={`/workbench${location.search}`} replace />}
+            />
+            <Route path="*" element={<Navigate to="/workbench" replace />} />
+          </Routes>
+        </Suspense>
+      </section>
+    </div>
+  );
 }

@@ -1,5 +1,5 @@
 # docker/sandbox/Dockerfile
-FROM mcr.microsoft.com/powershell:7.4-ubuntu-22.04
+FROM mcr.microsoft.com/dotnet/sdk:8.0-jammy
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -92,7 +92,7 @@ export type WorkbenchPageProps = {
   isEmbedMode?: boolean;
   sessionId: string;
   isNewSession?: boolean;
-  onAdminToggle?: () => void;
+  adminEntryHref?: string;
   onOpenPlatformRegistration?: () => void;
   onLogout?: () => void;
   onNewConversation?: () => void;
