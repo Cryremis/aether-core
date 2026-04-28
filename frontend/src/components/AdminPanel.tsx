@@ -6,16 +6,19 @@ import {
   createPlatformBaselineDirectory,
   createPlatform,
   deletePlatformLlmConfig,
+  deletePlatformPromptConfig,
   deletePlatformBaselineFile,
   downloadPlatformBaselineFile,
   getPlatformBaseline,
   getPlatformBaselineFileContent,
   getPlatformIntegrationGuide,
   getPlatformLlmConfig,
+  getPlatformPromptConfig,
   listPlatforms,
   movePlatformBaselinePath,
   PlatformIntegrationGuide,
   savePlatformBaselineTextFile,
+  updatePlatformPromptConfig,
   updatePlatformLlmConfig,
   uploadPlatformBaselineFile,
   uploadPlatformBaselineSkill,
@@ -27,12 +30,14 @@ import { AdminIcons as Icons } from "./admin/AdminIcons";
 import { IntegrationGuideModal } from "./admin/IntegrationGuideModal";
 import { PlatformList } from "./admin/PlatformList";
 import { PlatformLlmPanel } from "./admin/PlatformLlmPanel";
+import { PlatformPromptPanel } from "./admin/PlatformPromptPanel";
 import { SkillUploadModal } from "./admin/SkillUploadModal";
 import type {
   LlmConfigFormState,
   PlatformBaselineEntryItem,
   PlatformBaselineFileItem,
   PlatformItem,
+  PromptConfigFormState,
 } from "./admin/types";
 
 type AdminPanelProps = {
@@ -81,6 +86,12 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const[platformLlmError, setPlatformLlmError] = useState("");
   const [platformLlmBusy, setPlatformLlmBusy] = useState(false);
   const [showPlatformLlmAdvanced, setShowPlatformLlmAdvanced] = useState(false);
+  const [promptForm, setPromptForm] = useState<PromptConfigFormState>({
+    enabled: true,
+    system_prompt: "",
+  });
+  const [promptError, setPromptError] = useState("");
+  const [promptBusy, setPromptBusy] = useState(false);
   const [integrationGuide, setIntegrationGuide] = useState<PlatformIntegrationGuide | null>(null);
   const [integrationGuideError, setIntegrationGuideError] = useState("");
   const[integrationGuideBusy, setIntegrationGuideBusy] = useState(false);
@@ -139,6 +150,11 @@ export function AdminPanel({ role }: AdminPanelProps) {
         fetch_timeout_seconds: 30,
       });
       setShowPlatformLlmAdvanced(false);
+      setPromptError("");
+      setPromptForm({
+        enabled: true,
+        system_prompt: "",
+      });
       return;
     }
     void (async () => {
@@ -182,6 +198,22 @@ export function AdminPanel({ role }: AdminPanelProps) {
         );
       } catch (err) {
         setPlatformLlmError(err instanceof Error ? err.message : "加载平台 LLM 配置失败");
+      }
+    })();
+    void (async () => {
+      try {
+        setPromptError("");
+        const result = await getPlatformPromptConfig(activePlatformId);
+        const data = (result.data ?? null) as {
+          enabled: boolean;
+          system_prompt: string;
+        } | null;
+        setPromptForm({
+          enabled: data?.enabled ?? true,
+          system_prompt: data?.system_prompt ?? "",
+        });
+      } catch (err) {
+        setPromptError(err instanceof Error ? err.message : "加载平台提示词配置失败");
       }
     })();
   },[activePlatformId]);
@@ -439,6 +471,49 @@ export function AdminPanel({ role }: AdminPanelProps) {
     }
   };
 
+  const handleSavePlatformPrompt = async () => {
+    if (!activePlatformId) return;
+    try {
+      setPromptBusy(true);
+      setPromptError("");
+      await updatePlatformPromptConfig(activePlatformId, {
+        enabled: promptForm.enabled,
+        system_prompt: promptForm.system_prompt,
+      });
+      const latest = await getPlatformPromptConfig(activePlatformId);
+      const data = (latest.data ?? null) as {
+        enabled: boolean;
+        system_prompt: string;
+      } | null;
+      setPromptForm({
+        enabled: data?.enabled ?? true,
+        system_prompt: data?.system_prompt ?? "",
+      });
+    } catch (err) {
+      setPromptError(err instanceof Error ? err.message : "保存平台提示词配置失败");
+    } finally {
+      setPromptBusy(false);
+    }
+  };
+
+  const handleResetPlatformPrompt = async () => {
+    if (!activePlatformId) return;
+    if (!window.confirm("确定删除该平台的专属系统提示词配置吗？")) return;
+    try {
+      setPromptBusy(true);
+      setPromptError("");
+      await deletePlatformPromptConfig(activePlatformId);
+      setPromptForm({
+        enabled: true,
+        system_prompt: "",
+      });
+    } catch (err) {
+      setPromptError(err instanceof Error ? err.message : "删除平台提示词配置失败");
+    } finally {
+      setPromptBusy(false);
+    }
+  };
+
   const handleOpenIntegrationGuide = async (platform: PlatformItem) => {
     try {
       setIntegrationGuideBusy(true);
@@ -575,6 +650,17 @@ export function AdminPanel({ role }: AdminPanelProps) {
       {/* ================= Bento Grid: LLM 与基线资源管理器 ================= */}
       {activePlatform ? (
         <div className="epic-bento-grid stagger-4">
+          <div className="epic-glass epic-bento-card">
+            <PlatformPromptPanel
+              promptForm={promptForm}
+              promptError={promptError}
+              promptBusy={promptBusy}
+              onChange={setPromptForm}
+              onSave={() => void handleSavePlatformPrompt()}
+              onReset={() => void handleResetPlatformPrompt()}
+            />
+          </div>
+
           <div className="epic-glass epic-bento-card">
             <PlatformLlmPanel
               platformLlmForm={platformLlmForm}

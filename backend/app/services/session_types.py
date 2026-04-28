@@ -32,6 +32,7 @@ class AgentSession:
     platform_skills: list[dict[str, Any]] = field(default_factory=list)
     host_tools: list[dict[str, Any]] = field(default_factory=list)
     host_skills: list[dict[str, Any]] = field(default_factory=list)
+    host_system_prompts: list[dict[str, Any]] = field(default_factory=list)
     uploaded_skills: list[dict[str, Any]] = field(default_factory=list)
     host_apis: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)

@@ -17,6 +17,7 @@ from app.services.context.message_adapter import context_message_adapter
 from app.services.context.runtime_types import ContextEventType, ContextOverflowError
 from app.services.llm_client import llm_client
 from app.services.llm_config_service import llm_config_service
+from app.services.prompt_service import prompt_service
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
@@ -198,7 +199,7 @@ class AgentEngine:
                 return
 
             raw_messages: list[dict[str, Any]] = [
-                {"role": "system", "content": self._build_system_message(session)},
+                *self._build_system_messages(session, conversation=conversation),
                 *self._build_runtime_state_messages(session, request_turn_index),
                 *session.messages,
             ]
@@ -604,13 +605,13 @@ class AgentEngine:
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
 
-    def _build_system_message(self, session: AgentSession) -> str:
-        return self._safe_prompt(session)
-
-    def _safe_prompt(self, session: AgentSession) -> str:
-        from app.services.skill_service import skill_service
-
-        return skill_service.build_system_prompt(session)
+    def _build_system_messages(
+        self,
+        session: AgentSession,
+        *,
+        conversation: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        return prompt_service.build_system_messages(session, conversation=conversation)
 
 
 agent_engine = AgentEngine()

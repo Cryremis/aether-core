@@ -51,12 +51,14 @@ class SessionService:
         context: dict[str, Any],
         tools: list[dict[str, Any]],
         skills: list[dict[str, Any]],
+        system_prompts: list[dict[str, Any]],
         apis: list[dict[str, Any]],
     ) -> AgentSession:
         session.host_name = host_name
         session.host_context = context
         session.host_tools = tools
         session.host_skills = skills
+        session.host_system_prompts = system_prompts
         session.host_apis = apis
         session.touch()
         self._write_metadata(session)
@@ -111,6 +113,7 @@ class SessionService:
             platform_skills=payload.get("platform_skills", []),
             host_tools=payload.get("host_tools", []),
             host_skills=payload.get("host_skills", []),
+            host_system_prompts=payload.get("host_system_prompts", []),
             uploaded_skills=payload.get("uploaded_skills", []),
             host_apis=payload.get("host_apis", []),
             artifacts=payload.get("artifacts", []),
@@ -141,6 +144,7 @@ class SessionService:
             "platform_skills": session.platform_skills,
             "host_tools": session.host_tools,
             "host_skills": session.host_skills,
+            "host_system_prompts": session.host_system_prompts,
             "uploaded_skills": session.uploaded_skills,
             "host_apis": session.host_apis,
             "artifacts": session.artifacts,

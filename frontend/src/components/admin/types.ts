@@ -42,6 +42,11 @@ export type LlmConfigFormState = {
   fetch_timeout_seconds: number;
 };
 
+export type PromptConfigFormState = {
+  enabled: boolean;
+  system_prompt: string;
+};
+
 export type IntegrationGuideState = {
   integrationGuide: PlatformIntegrationGuide | null;
   integrationGuideBusy: boolean;

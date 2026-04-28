@@ -55,6 +55,34 @@ class SkillService:
             f"{skill_listing}"
         )
 
+    def build_core_system_prompt(self) -> str:
+        return (
+            "你是 AetherCore 的生产级工作台 Agent。\n"
+            "你运行在服务端受限沙箱中，必须优先通过工具读取文件、执行脚本、生成产物，并保持过程可追踪。\n"
+            "要求：\n"
+            "1. 始终使用中文回答。\n"
+            "2. 处理文件前先调用工具确认文件列表或读取内容，不要臆测。\n"
+            "3. 如需运行命令，优先使用 sandbox_shell，并把最终可下载结果写入输出目录。\n"
+            "4. 当宿主工具可直接提供更可靠的数据时，优先调用宿主工具。\n"
+            "5. 最终回答必须简洁，说明你做了什么、产出了什么文件、还有什么风险。\n"
+            "6. 技能不是普通提示词片段。若用户任务明显匹配某个技能，必须先调用 invoke_skill 加载该技能，再继续执行任务。\n"
+            "7. 不要只提到某个技能而不调用 invoke_skill；技能加载后，严格遵循该技能中的工作流与约束。"
+        )
+
+    def build_environment_prompt(self, session: AgentSession) -> str:
+        context = session.host_context or {}
+        skill_listing = self._format_skill_listing(session)
+        return (
+            f"## 宿主信息\n宿主名称: {session.host_name or 'AetherCore'}\n"
+            f"宿主上下文: {context}\n\n"
+            f"## 沙箱路径约定\n输入目录: {session.workspace.input_dir if session.workspace else ''}\n"
+            f"技能目录: {session.workspace.skills_dir if session.workspace else ''}\n"
+            f"工作目录: {session.workspace.work_dir if session.workspace else ''}\n"
+            f"输出目录: {session.workspace.output_dir if session.workspace else ''}\n\n"
+            "## 可用技能\n"
+            f"{skill_listing}"
+        )
+
     def install_skill_upload(
         self,
         session: AgentSession,

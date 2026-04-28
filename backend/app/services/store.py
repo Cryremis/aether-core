@@ -130,6 +130,14 @@ class StoreService:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS platform_prompt_configs (
+                    platform_id INTEGER PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    system_prompt TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS user_llm_configs (
                     user_id INTEGER PRIMARY KEY,
                     enabled INTEGER NOT NULL DEFAULT 1,
@@ -641,6 +649,48 @@ class StoreService:
             row = conn.execute("SELECT * FROM platform_llm_configs WHERE platform_id = ?", (platform_id,)).fetchone()
         return self._row_to_llm_config(row)
 
+    def get_platform_prompt_config(self, platform_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM platform_prompt_configs WHERE platform_id = ?", (platform_id,)).fetchone()
+        return self._row_to_prompt_config(row)
+
+    def upsert_platform_prompt_config(
+        self,
+        *,
+        platform_id: int,
+        enabled: bool,
+        system_prompt: str,
+    ) -> dict[str, Any]:
+        now = utcnow_iso()
+        existing = self.get_platform_prompt_config(platform_id)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO platform_prompt_configs(
+                    platform_id, enabled, system_prompt, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(platform_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    system_prompt = excluded.system_prompt,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    platform_id,
+                    1 if enabled else 0,
+                    system_prompt,
+                    existing["created_at"] if existing else now,
+                    now,
+                ),
+            )
+        row = self.get_platform_prompt_config(platform_id)
+        if row is None:
+            raise RuntimeError("Failed to save platform prompt config")
+        return row
+
+    def delete_platform_prompt_config(self, platform_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM platform_prompt_configs WHERE platform_id = ?", (platform_id,))
+
     def upsert_platform_llm_config(
         self,
         *,
@@ -948,6 +998,14 @@ class StoreService:
             "extra_headers": json.loads(row["extra_headers_json"] or "{}"),
             "extra_body": json.loads(row["extra_body_json"] or "{}"),
             "network": json.loads(row["network_json"] or "{}"),
+        }
+
+    def _row_to_prompt_config(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        return {
+            **dict(row),
+            "enabled": bool(row["enabled"]),
         }
 
 

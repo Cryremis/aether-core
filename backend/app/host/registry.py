@@ -63,6 +63,7 @@ class HostRegistry:
                 }
                 for item in request.skills
             ],
+            system_prompts=[_to_dict(item) for item in request.system_prompts],
             apis=[_to_dict(item) for item in request.apis],
         )
 

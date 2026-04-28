@@ -145,6 +145,65 @@ def test_agent_engine_injects_runtime_state_context(monkeypatch, tmp_path):
     assert "elicitation_state" in merged
 
 
+def test_agent_engine_injects_platform_and_host_system_prompts(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    observed_messages: list[list[dict]] = []
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        observed_messages.append(messages)
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "done"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    platform = store_service.get_platform_by_key("standalone")
+    assert platform is not None
+    store_service.upsert_platform_prompt_config(
+        platform_id=platform["platform_id"],
+        enabled=True,
+        system_prompt="平台={{platform.display_name}} 用户={{host.user.id}}",
+    )
+
+    session = AgentSession(
+        session_id="sess_engine_prompt_layers",
+        host_name="Demo Host",
+        host_context={
+            "user": {"id": "u-100"},
+            "page": {"pathname": "/orders"},
+        },
+        host_system_prompts=[
+            {
+                "key": "page-focus",
+                "content": "页面={{host.page.pathname}}",
+                "enabled": True,
+            }
+        ],
+    )
+    store_service.create_conversation(
+        session_id=session.session_id,
+        title="Prompt test",
+        host_name=session.host_name,
+        platform_id=platform["platform_id"],
+    )
+
+    asyncio.run(collect_stream(session, "hello"))
+
+    system_messages = [message for message in observed_messages[0] if message.get("role") == "system"]
+    assert any("平台=AetherCore 用户=u-100" in str(message.get("content", "")) for message in system_messages)
+    assert any("页面=/orders" in str(message.get("content", "")) for message in system_messages)
+    assert any("## 宿主信息" in str(message.get("content", "")) for message in system_messages)
+
+
 def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 

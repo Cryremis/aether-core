@@ -40,6 +40,14 @@ class HostSkillDescriptor(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class HostSystemPromptDescriptor(BaseModel):
+    """宿主动态注入的系统提示词描述。"""
+
+    key: str
+    content: str
+    enabled: bool = True
+
+
 class HostApiDescriptor(BaseModel):
     """宿主注入的 API 描述。"""
 
@@ -69,6 +77,7 @@ class HostBindRequest(BaseModel):
     context: HostContextDescriptor = Field(default_factory=HostContextDescriptor)
     tools: list[HostToolDescriptor] = Field(default_factory=list)
     skills: list[HostSkillDescriptor] = Field(default_factory=list)
+    system_prompts: list[HostSystemPromptDescriptor] = Field(default_factory=list)
     apis: list[HostApiDescriptor] = Field(default_factory=list)
 
 

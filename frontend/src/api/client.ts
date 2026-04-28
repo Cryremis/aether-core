@@ -153,6 +153,11 @@ export type LlmConfigPayload = {
   network?: LlmNetworkConfigPayload;
 };
 
+export type PromptConfigPayload = {
+  enabled: boolean;
+  system_prompt: string;
+};
+
 export type LlmNetworkConfigPayload = {
   enabled: boolean;
   allowed_domains: string[];
@@ -178,6 +183,12 @@ export type LlmConfigSummary = {
 
 export type ResolvedLlmConfig = LlmConfigSummary & {
   scope: "user" | "platform" | "global";
+};
+
+export type PromptConfigSummary = {
+  enabled: boolean;
+  system_prompt: string;
+  updated_at?: string | null;
 };
 
 export type WorkItemStatus = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
@@ -488,6 +499,34 @@ export async function deletePlatformLlmConfig(platformId: number) {
   return response.json();
 }
 
+export async function getPlatformPromptConfig(platformId: number) {
+  const response = await apiFetch(`/prompts/platform/${platformId}`);
+  if (!response.ok) {
+    throw new Error(`获取平台提示词配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updatePlatformPromptConfig(platformId: number, payload: PromptConfigPayload) {
+  const response = await apiFetch(`/prompts/platform/${platformId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`更新平台提示词配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function deletePlatformPromptConfig(platformId: number) {
+  const response = await apiFetch(`/prompts/platform/${platformId}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error(`删除平台提示词配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function getPlatformBaseline(platformId: number) {
   const response = await apiFetch(`/platforms/${platformId}/baseline`);
   if (!response.ok) {
@@ -638,7 +677,7 @@ export async function uploadPlatformBaselineSkill(platformId: number, skillFile:
     body: formData,
   });
   if (!response.ok) {
-    throw new Error(`涓婁紶骞冲彴鎶€鑳藉け璐? ${response.status}`);
+    throw new Error(`上传平台技能失败: ${response.status}`);
   }
   return response.json();
 }
