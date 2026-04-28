@@ -446,8 +446,8 @@ def test_host_bind_materializes_platform_baseline_skills_for_new_and_existing_se
     assert admin is not None
 
     platform = store_service.create_platform(
-        platform_key="ascend-adcp",
-        display_name="Ascend ADCP",
+        platform_key="adcp",
+        display_name="ADCP",
         host_type="embedded",
         description="host baseline skill test platform",
         owner_user_id=admin.user_id,
@@ -490,6 +490,67 @@ def test_host_bind_materializes_platform_baseline_skills_for_new_and_existing_se
     assert rebound.status_code == 200
     repaired_session = session_service.get_or_create(session_id)
     assert any(item.name == "new-folder" for item in skill_service.list_for_session(repaired_session))
+
+
+def test_embed_bootstrap_new_session_inherits_platform_baseline_skills(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    settings.app_public_base_url = ""
+    settings.manage_frontend_public_base_url = ""
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="adcp",
+        display_name="ADCP",
+        host_type="embedded",
+        description="embed bootstrap baseline skill test platform",
+        owner_user_id=admin.user_id,
+    )
+    platform_root = platform_baseline_service.ensure_platform_root(platform["platform_key"])
+    skill_dir = platform_root / "skills" / "new-folder"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: new-folder\ndescription: embedded baseline skill\n---\n\nhello from embedded baseline\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    bind_response = client.post(
+        "/api/v1/host/bind",
+        headers={"X-Aether-Platform-Secret": platform["host_secret"]},
+        json={
+            "platform_key": platform["platform_key"],
+            "host_name": "POC",
+            "conversation_key": "thread-a",
+            "context": {
+                "user": {"id": "user-1", "name": "User 1"},
+                "extras": {"host_callback_base_url": "http://localhost:8000"},
+            },
+            "tools": [],
+            "skills": [],
+            "apis": [],
+        },
+    )
+    assert bind_response.status_code == 200
+    bind_data = bind_response.json()["data"]
+    embed_token = bind_data["token"]
+    source_session_id = bind_data["session_id"]
+
+    bootstrap_response = client.post(
+        f"/api/v1/agent/sessions/bootstrap?session_id={source_session_id}",
+        headers={"Authorization": f"Bearer {embed_token}"},
+    )
+    assert bootstrap_response.status_code == 200
+    new_session_id = bootstrap_response.json()["data"]["session_id"]
+    assert new_session_id != source_session_id
+
+    summary_response = client.get(
+        f"/api/v1/agent/sessions/{new_session_id}",
+        headers={"Authorization": f"Bearer {embed_token}"},
+    )
+    assert summary_response.status_code == 200
+    skills = summary_response.json()["data"]["skills"]
+    assert any(item["name"] == "new-folder" for item in skills)
 
 
 def test_host_tool_requires_auth_when_injection_is_enabled():

@@ -10,11 +10,26 @@ from app.services.runtime_state import runtime_state_service
 from app.services.artifact_service import artifact_service
 from app.services.conversation_service import conversation_service
 from app.services.file_service import file_service
+from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
 
 router = APIRouter(prefix="/api/v1/agent/sessions", tags=["sessions"])
+
+
+def _ensure_embed_baseline(auth: AuthContext, conversation: dict, session) -> None:
+    if auth.kind != "embed":
+        return
+    platform_id = conversation.get("platform_id")
+    if platform_id is None:
+        return
+    platform = store_service.get_platform_by_id(int(platform_id))
+    if platform is None:
+        return
+    expected_root = str(platform_baseline_service.ensure_platform_root(platform["platform_key"]).resolve())
+    if session.baseline_root != expected_root:
+        platform_baseline_service.materialize_to_session(platform["platform_key"], session)
 
 
 def _ensure_session_access(session_id: str, auth: AuthContext):
@@ -34,6 +49,7 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
         raise HTTPException(status_code=401, detail="未授权")
     session = session_service.get_or_create(session_id)
     session.conversation_id = conversation.get("conversation_id")
+    _ensure_embed_baseline(auth, conversation, session)
     return conversation, session
 
 
@@ -65,6 +81,9 @@ def bootstrap_session(
             raise HTTPException(status_code=403, detail="无权基于该会话创建新会话")
         source_session = session_service.get_or_create(source_conversation["session_id"])
         session = session_service.get_or_create()
+        platform = store_service.get_platform_by_id(int(auth.platform_id))
+        if platform is None:
+            raise HTTPException(status_code=404, detail="target platform does not exist")
         conversation = store_service.create_conversation(
             session_id=session.session_id,
             title="新对话",
@@ -75,6 +94,7 @@ def bootstrap_session(
             conversation_key=None,
             metadata={},
         )
+        platform_baseline_service.materialize_to_session(platform["platform_key"], session)
         session_service.attach_host(
             session=session,
             host_name=source_session.host_name,
