@@ -1,4 +1,5 @@
 # backend/app/api/routes/host.py
+import traceback
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import require_platform_secret
@@ -22,6 +23,15 @@ def bind_host(
         summary = host_registry.bind(request, platform=platform)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        print(f"[host/bind] RuntimeError: {exc}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"运行时错误: {str(exc)}") from exc
+    except FileNotFoundError as exc:
+        print(f"[host/bind] FileNotFoundError: {exc}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"文件不存在: {str(exc)}") from exc
+    except Exception as exc:
+        print(f"[host/bind] Unexpected error: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"绑定失败: {type(exc).__name__}: {str(exc)}") from exc
     summary["workbench_url"] = (
         f"{settings.resolved_manage_frontend_public_base_url}"
         f"?embed_token={summary['token']}&session_id={summary['session_id']}"
