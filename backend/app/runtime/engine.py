@@ -1,6 +1,7 @@
 # backend/app/runtime/engine.py
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -27,6 +28,8 @@ from app.services.tool_service import tool_service
 
 class AgentEngine:
     """AetherCore runtime loop with production context management."""
+
+    _TOOL_PROGRESS_INTERVAL_SECONDS = 15.0
 
     def _append_assistant_block(self, blocks: list[dict[str, Any]], block: dict[str, Any]) -> None:
         blocks.append(block)
@@ -454,8 +457,24 @@ class AgentEngine:
                         tool_name=tool_name,
                         input=tool_input,
                     )
+                    tool_started_at = time.perf_counter()
+                    execution_task = asyncio.create_task(tool_service.execute(session, tool_name, tool_input))
                     try:
-                        result = await tool_service.execute(session, tool_name, tool_input)
+                        while True:
+                            try:
+                                result = await asyncio.wait_for(
+                                    asyncio.shield(execution_task),
+                                    timeout=self._TOOL_PROGRESS_INTERVAL_SECONDS,
+                                )
+                                break
+                            except TimeoutError:
+                                yield make_event(
+                                    session,
+                                    "tool_progress",
+                                    id=tool_call["id"],
+                                    tool_name=tool_name,
+                                    elapsed_ms=int((time.perf_counter() - tool_started_at) * 1000),
+                                )
                     except Exception as exc:  # noqa: BLE001
                         result = {
                             "error": str(exc),

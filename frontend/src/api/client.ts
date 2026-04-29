@@ -951,39 +951,53 @@ async function streamSse(
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
+  let streamOpened = false;
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-    signal: abortSignal,
-  });
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: abortSignal,
+    });
 
-  if (!response.ok || !response.body) {
-    throw new Error(`对话请求失败: ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      buffer += decoder.decode();
-      break;
+    if (!response.ok || !response.body) {
+      throw new Error(`对话请求失败: ${response.status}`);
     }
 
-    buffer += decoder.decode(value, { stream: true });
-    let match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
-    while (match) {
-      const chunk = match[1];
-      buffer = buffer.slice(match[0].length);
-      const line = chunk.split(/\r?\n/).find((item) => item.startsWith("data:"));
-      if (line) {
-        onEvent(JSON.parse(line.slice(5).trim()));
+    streamOpened = true;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        buffer += decoder.decode();
+        break;
       }
-      match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
+
+      buffer += decoder.decode(value, { stream: true });
+      let match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
+      while (match) {
+        const chunk = match[1];
+        buffer = buffer.slice(match[0].length);
+        const line = chunk.split(/\r?\n/).find((item) => item.startsWith("data:"));
+        if (line) {
+          onEvent(JSON.parse(line.slice(5).trim()));
+        }
+        match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
+      }
     }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
+
+    const detail = error instanceof Error && error.message ? error.message : "unknown error";
+    if (streamOpened) {
+      throw new Error(`对话流已中断，通常是代理超时、连接被重置，或长时间没有新事件: ${detail}`);
+    }
+    throw new Error(`对话请求失败: ${detail}`);
   }
 }

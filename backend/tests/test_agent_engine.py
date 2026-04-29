@@ -367,6 +367,72 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
     assert result_events[0]["payload"]["result"] == "skill workflow finished"
 
 
+def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    rounds = {"value": 0}
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        if rounds["value"] == 0:
+            rounds["value"] += 1
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_slow_tool",
+                                    "function": {
+                                        "name": "sandbox_shell",
+                                        "arguments": '{"command":"python slow.py","shell":"bash"}',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+            return
+
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "slow tool finished"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    async def fake_execute(session, tool_name, arguments):
+        await asyncio.sleep(0.03)
+        return {
+            "command": arguments["command"],
+            "shell": arguments.get("shell", "bash"),
+            "executor": "docker",
+            "exit_code": 0,
+            "stdout": "done\n",
+            "stderr": "",
+            "duration_ms": 30,
+            "log_path": "logs/cmd_slow.json",
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
+    monkeypatch.setattr(agent_engine, "_TOOL_PROGRESS_INTERVAL_SECONDS", 0.01)
+
+    session = AgentSession(session_id="sess_engine_tool_progress")
+    events = asyncio.run(collect_stream(session, "run the slow tool"))
+
+    assert any(item["type"] == "tool_progress" for item in events)
+    assert any(item["type"] == "tool_finished" for item in events)
+    assert any(item["type"] == "result" and item["payload"]["subtype"] == "success" for item in events)
+
+
 def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     session = AgentSession(session_id="sess_engine_proactive")
