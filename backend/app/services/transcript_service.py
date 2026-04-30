@@ -11,6 +11,7 @@ class TranscriptService:
     def build_chat_transcript(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         transcript: list[dict[str, Any]] = []
         open_tool_blocks: dict[str, tuple[int, int]] = {}
+        pending_tool_results: dict[str, dict[str, Any]] = {}
 
         for index, message in enumerate(messages):
             if not self._is_visible(message):
@@ -31,6 +32,7 @@ class TranscriptService:
                 assistant_item = self._assistant_from_message(message, index=index)
                 if assistant_item is None:
                     continue
+                self._apply_pending_tool_results(assistant_item, pending_tool_results)
                 transcript.append(assistant_item)
                 assistant_index = len(transcript) - 1
                 self._index_open_tool_blocks(
@@ -56,6 +58,14 @@ class TranscriptService:
                                 open_tool_blocks.pop(tool_call_id, None)
                     continue
 
+                if tool_call_id:
+                    pending_tool_results[tool_call_id] = {
+                        "tool_name": str(message.get("tool_name") or "tool"),
+                        "outputText": self._format_tool_output(message.get("content")),
+                        "status": self._infer_tool_status(message.get("content")),
+                    }
+                    continue
+
                 # Orphan tool result: still keep it visible by converting to a standalone assistant tool card.
                 orphan_display = tool_display_service.resolve(str(message.get("tool_name") or "tool"), {})
                 transcript.append(
@@ -77,6 +87,29 @@ class TranscriptService:
                         "streaming": False,
                     }
                 )
+
+        # Any still-pending tool results did not find a matching assistant block; keep them visible.
+        for pending_id, pending in pending_tool_results.items():
+            orphan_display = tool_display_service.resolve(str(pending.get("tool_name") or "tool"), {})
+            transcript.append(
+                {
+                    "id": f"tool-pending-{pending_id}",
+                    "role": "assistant",
+                    "blocks": [
+                        {
+                            "id": pending_id,
+                            "kind": "tool",
+                            "title": orphan_display.get("title", "tool"),
+                            "meta": orphan_display.get("meta", "tool"),
+                            "argumentsText": "",
+                            "outputText": str(pending.get("outputText") or ""),
+                            "status": str(pending.get("status") or "done"),
+                        }
+                    ],
+                    "elapsedMs": None,
+                    "streaming": False,
+                }
+            )
 
         return transcript
 
@@ -205,6 +238,27 @@ class TranscriptService:
                 continue
             if str(block.get("status") or "") == "running":
                 open_tool_blocks[block_id] = (assistant_index, block_index)
+
+    def _apply_pending_tool_results(
+        self,
+        assistant_item: dict[str, Any],
+        pending_tool_results: dict[str, dict[str, Any]],
+    ) -> None:
+        blocks = assistant_item.get("blocks")
+        if not isinstance(blocks, list):
+            return
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("kind") != "tool":
+                continue
+            block_id = str(block.get("id") or "")
+            if not block_id or block_id not in pending_tool_results:
+                continue
+            pending = pending_tool_results.pop(block_id)
+            if not str(block.get("outputText") or "").strip():
+                block["outputText"] = str(pending.get("outputText") or "")
+            current_status = str(block.get("status") or "")
+            if current_status in {"", "running"}:
+                block["status"] = str(pending.get("status") or "done")
 
     def _is_visible(self, message: dict[str, Any]) -> bool:
         if bool(message.get("ephemeral")):

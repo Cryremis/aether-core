@@ -63,12 +63,12 @@ def test_transcript_service_merges_tool_result_into_assistant_tool_block():
     assert len(transcript) == 3
     assert transcript[0]["role"] == "user"
     assert transcript[1]["role"] == "assistant"
-    assert transcript[1]["blocks"][0]["kind"] == "tool"
-    assert transcript[1]["blocks"][0]["status"] == "done"
-    assert "stdout" in transcript[1]["blocks"][0]["outputText"]
+    assert transcript[1]["blocks"][0]["kind"] == "content"
+    assert transcript[1]["elapsedMs"] == 120
     assert transcript[2]["role"] == "assistant"
-    assert transcript[2]["blocks"][0]["kind"] == "content"
-    assert transcript[2]["elapsedMs"] == 120
+    assert transcript[2]["blocks"][0]["kind"] == "tool"
+    assert transcript[2]["blocks"][0]["status"] == "done"
+    assert "stdout" in transcript[2]["blocks"][0]["outputText"]
 
 
 def test_transcript_service_uses_canonical_display_for_sandbox_shell_alias():
@@ -96,6 +96,88 @@ def test_transcript_service_uses_canonical_display_for_sandbox_shell_alias():
     assert block["kind"] == "tool"
     assert block["title"] == "npm"
     assert block["meta"] == "bash"
+
+
+def test_transcript_service_does_not_duplicate_tool_card_when_tool_result_arrives_before_visible_assistant():
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_a",
+                    "type": "function",
+                    "function": {
+                        "name": "sandbox_shell",
+                        "arguments": '{"command":"echo hi","shell":"bash"}',
+                    },
+                }
+            ],
+            "visible_in_transcript": False,
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_a",
+            "tool_name": "sandbox_shell",
+            "content": '{"stdout":"hi\\n","aborted":false}',
+            "visible_in_transcript": True,
+        },
+        {
+            "role": "assistant",
+            "content": "done",
+            "blocks": [
+                {"id": "reasoning_1", "kind": "reasoning", "content": "thinking"},
+                {
+                    "id": "call_a",
+                    "kind": "tool",
+                    "title": "echo",
+                    "meta": "bash",
+                    "argumentsText": '{"command":"echo hi","shell":"bash"}',
+                    "outputText": "",
+                    "status": "running",
+                },
+                {"id": "content_1", "kind": "content", "content": "done", "status": "done"},
+            ],
+            "visible_in_transcript": True,
+        },
+    ]
+
+    transcript = transcript_service.build_chat_transcript(messages)
+    assert len(transcript) == 1
+    assistant = transcript[0]
+    tool_blocks = [block for block in assistant["blocks"] if block.get("kind") == "tool"]
+    assert len(tool_blocks) == 1
+    assert "stdout" in tool_blocks[0]["outputText"]
+    assert tool_blocks[0]["status"] == "done"
+
+
+def test_transcript_service_does_not_prepend_orphan_shell_before_reasoning_block():
+    messages = [
+        {
+            "role": "tool",
+            "tool_call_id": "call_x",
+            "tool_name": "sandbox_shell",
+            "content": '{"stdout":"only-once\\n","aborted":false}',
+            "visible_in_transcript": True,
+        },
+        {
+            "role": "assistant",
+            "content": "after tool",
+            "blocks": [
+                {"id": "reasoning_1", "kind": "reasoning", "content": "thinking first"},
+                {"id": "content_1", "kind": "content", "content": "after tool", "status": "done"},
+            ],
+            "visible_in_transcript": True,
+        },
+    ]
+
+    transcript = transcript_service.build_chat_transcript(messages)
+    assert len(transcript) == 2
+    # first visible assistant item should remain the reasoning/content message
+    assert transcript[0]["role"] == "assistant"
+    assert transcript[0]["blocks"][0]["kind"] == "reasoning"
+    # orphan tool result is still visible, but not prepended above reasoning message
+    assert transcript[1]["role"] == "assistant"
+    assert transcript[1]["blocks"][0]["kind"] == "tool"
 
 
 def test_transcript_service_preserves_runtime_notice_block():
