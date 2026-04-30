@@ -160,6 +160,19 @@ class SessionService:
     def delete_session(self, session_id: str) -> bool:
         if session_id in self._sessions:
             del self._sessions[session_id]
+        try:
+            from app.services.session_runtime_service import session_runtime_service
+
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(session_runtime_service.delete_runtime(session_id, reason="session_deleted"))
+            else:
+                loop.create_task(session_runtime_service.delete_runtime(session_id, reason="session_deleted"))
+        except Exception:
+            pass
         metadata_path = self._metadata_path(session_id)
         session_dir = settings.sessions_root / session_id
         if session_dir.exists():

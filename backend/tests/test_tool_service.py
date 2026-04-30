@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from app.schemas.llm import LlmNetworkConfig
 from app.services.llm_config_service import RuntimeLlmConfig
+from app.services.prompt_service import prompt_service
 from app.services.runtime_state import runtime_state_service
 from app.services.session_types import AgentSession
 from app.services.tool_service import tool_service
+from app.sandbox.models import SandboxCommandResult
 
 
 def make_runtime_config(*, base_url: str, model: str) -> RuntimeLlmConfig:
@@ -127,3 +129,64 @@ def test_update_workboard_tool_supports_ops(tmp_path):
 
     assert result["workboard"]["items"][0]["id"] == "task_1"
     assert result["workboard"]["items"][0]["status"] == "completed"
+
+
+def test_sandbox_shell_reports_runtime_recreated(monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_runtime_recreated")
+
+    async def fake_run_shell(*, workspace, command, shell):
+        return SandboxCommandResult(
+            command=command,
+            shell=shell,
+            executor="docker",
+            exit_code=0,
+            stdout="ok\n",
+            stderr="",
+            duration_ms=12,
+            log_path="logs/cmd.json",
+            runtime_metadata={
+                "status": "recreated",
+                "reason": "idle_ttl_expired",
+                "generation": 2,
+                "previous_generation": 1,
+                "container_name": "aethercore-sess-demo-g2",
+            },
+        )
+
+    monkeypatch.setattr("app.services.tool_service.sandbox_runner.run_shell", fake_run_shell)
+
+    result = __import__("asyncio").run(
+        tool_service.execute(
+            session,
+            "sandbox_shell",
+            {
+                "command": "echo ok",
+                "shell": "bash",
+            },
+        )
+    )
+
+    assert result["runtime"]["status"] == "recreated"
+    assert result["runtime_events"][0]["type"] == "runtime_recreated"
+    assert "会话 runtime 已被重建" in result["injected_messages"][0]["content"]
+
+
+def test_prompt_workspace_paths_use_container_paths(tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_prompt_paths")
+
+    rendered = prompt_service._render_template(
+        "{{workspace.root_dir}}|{{workspace.input_dir}}|{{workspace.work_dir}}|{{workspace.logs_dir}}",
+        session=session,
+        conversation={"conversation_id": "conv-demo"},
+        platform=None,
+    )
+
+    assert rendered == "/workspace|/workspace/input|/workspace/work|/workspace/logs"

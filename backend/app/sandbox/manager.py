@@ -18,6 +18,8 @@ class SandboxManager:
         work_dir = session_root / "work"
         output_dir = session_root / "output"
         logs_dir = session_root / "logs"
+        home_dir = session_root / "home"
+        cache_dir = session_root / "cache"
         overlay_work_dir = session_root / ".overlay-work"
         metadata_dir = session_root / "metadata"
 
@@ -27,6 +29,8 @@ class SandboxManager:
             work_dir,
             output_dir,
             logs_dir,
+            home_dir,
+            cache_dir,
             overlay_work_dir,
             metadata_dir,
         ]:
@@ -44,6 +48,8 @@ class SandboxManager:
             work_dir=work_dir,
             output_dir=output_dir,
             logs_dir=logs_dir,
+            home_dir=home_dir,
+            cache_dir=cache_dir,
             overlay_work_dir=overlay_work_dir,
             metadata_dir=metadata_dir,
         )

@@ -12,6 +12,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.sandbox.executors import SandboxExecutor
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
+from app.services.session_runtime_service import session_runtime_service
 
 
 @dataclass(frozen=True)
@@ -37,65 +38,14 @@ class DockerSandboxExecutor(SandboxExecutor):
         command: str,
         shell: str,
     ) -> SandboxCommandResult:
-        docker_binary = self._resolve_docker_binary()
-        if not docker_binary:
-            raise RuntimeError("未找到 docker 可执行文件，无法启动容器沙箱。")
-
-        container_name = f"aethercore-sbx-{workspace.session_id[:18]}-{uuid.uuid4().hex[:8]}"
-        process_command = self._build_process_command(shell, command)
-        baseline_plan = await self._resolve_baseline_plan(docker_binary, workspace)
-        cli_args = self._build_docker_run_args(workspace, container_name, process_command, baseline_plan)
-
-        started_at = time.perf_counter()
-        process = await asyncio.create_subprocess_exec(
-            docker_binary,
-            *cli_args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
-                timeout=settings.sandbox_command_timeout_seconds,
-            )
-        except asyncio.TimeoutError:
-            await self._force_remove_container(docker_binary, container_name)
-            raise RuntimeError(
-                f"容器沙箱执行超时，超过 {settings.sandbox_command_timeout_seconds} 秒。"
-            ) from None
-
-        duration_ms = int((time.perf_counter() - started_at) * 1000)
-        return SandboxCommandResult(
+        return await session_runtime_service.run_shell(
+            workspace,
             command=command,
             shell=shell,
-            executor=self.name,
-            exit_code=process.returncode or 0,
-            stdout=self._truncate(self._decode_output(stdout_bytes)),
-            stderr=self._truncate(self._decode_output(stderr_bytes)),
-            duration_ms=duration_ms,
-            log_path="",
         )
 
     async def check_availability(self) -> tuple[bool, str]:
-        docker_binary = self._resolve_docker_binary()
-        if not docker_binary:
-            return False, "未找到 docker 可执行文件。"
-
-        process = await asyncio.create_subprocess_exec(
-            docker_binary,
-            "version",
-            "--format",
-            "{{.Server.Version}}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout_bytes, stderr_bytes = await process.communicate()
-        if process.returncode != 0:
-            error_text = self._decode_output(stderr_bytes).strip() or self._decode_output(stdout_bytes).strip()
-            return False, error_text or "Docker daemon 不可用。"
-        version = self._decode_output(stdout_bytes).strip()
-        return True, version or "docker-ok"
+        return await session_runtime_service.check_availability()
 
     def _resolve_docker_binary(self) -> str | None:
         configured = settings.sandbox_docker_command.strip()

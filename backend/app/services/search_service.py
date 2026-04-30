@@ -197,7 +197,7 @@ class SearchService:
         """解析工作目录（容器内路径）。
         
         支持以下路径格式：
-        - None 或空：默认 /workspace/work
+        - None 或空：默认 /workspace
         - 绝对路径：直接返回（假设是容器内路径）
         - 相对路径：相对于 /workspace 解析
         - 特殊目录名（input/output/skills/logs）：映射到对应容器目录
@@ -208,7 +208,7 @@ class SearchService:
         container_root = settings.sandbox_docker_workspace_mount
         
         if path is None or not path.strip():
-            return settings.sandbox_docker_work_dir
+            return container_root
         
         path = self._normalize_container_path(path.strip())
         

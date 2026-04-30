@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     sandbox_command_timeout_seconds: int = 120
     sandbox_output_char_limit: int = 12000
     sandbox_file_read_limit_bytes: int = 131072
-    sandbox_allow_network: bool = False
+    sandbox_allow_network: bool = True
     sandbox_env_whitelist: list[str] = Field(
         default_factory=lambda: ["PATH", "PATHEXT", "SYSTEMROOT", "COMSPEC"]
     )
@@ -91,17 +91,40 @@ class Settings(BaseSettings):
     sandbox_docker_output_dir: str = "/workspace/output"
     sandbox_docker_skills_dir: str = "/workspace/skills"
     sandbox_docker_logs_dir: str = "/workspace/logs"
+    sandbox_docker_home_dir: str = "/workspace/home"
+    sandbox_docker_cache_dir: str = "/workspace/cache"
     sandbox_docker_user: str = "sandbox"
+    sandbox_docker_network_mode: str = "bridge"
+    sandbox_docker_auto_dns_from_host: bool = True
+    sandbox_docker_dns_servers: list[str] = Field(default_factory=list)
+    sandbox_docker_env_passthrough: list[str] = Field(
+        default_factory=lambda: [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "no_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "PIP_INDEX_URL",
+            "PIP_EXTRA_INDEX_URL",
+            "PIP_TRUSTED_HOST",
+        ]
+    )
     sandbox_docker_memory: str = "1g"
     sandbox_docker_cpus: str = "1.0"
     sandbox_docker_pids_limit: int = 128
-    sandbox_docker_read_only_rootfs: bool = True
+    sandbox_docker_read_only_rootfs: bool = False
     sandbox_docker_tmpfs: list[str] = Field(
         default_factory=lambda: [
             "/tmp:size=256m",
             "/var/tmp:size=64m",
         ]
     )
+    sandbox_runtime_idle_ttl_seconds: int = 60 * 60 * 24
+    sandbox_runtime_max_age_seconds: int = 60 * 60 * 24 * 7
+    sandbox_runtime_gc_interval_seconds: int = 300
 
     manage_backend_port: int = 8100
     manage_frontend_port: int = 5178

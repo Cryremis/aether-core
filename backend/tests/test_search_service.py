@@ -9,7 +9,7 @@ from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 
 
 def build_workspace(root: Path) -> SandboxWorkspace:
-    for name in ["input", "skills", "work", "output", "logs", "metadata", ".overlay-work"]:
+    for name in ["input", "skills", "work", "output", "logs", "home", "cache", "metadata", ".overlay-work"]:
         (root / name).mkdir(parents=True, exist_ok=True)
     for name in ["input", "skills", "work", "output", "logs"]:
         (root / ".overlay-work" / name).mkdir(parents=True, exist_ok=True)
@@ -22,6 +22,8 @@ def build_workspace(root: Path) -> SandboxWorkspace:
         work_dir=root / "work",
         output_dir=root / "output",
         logs_dir=root / "logs",
+        home_dir=root / "home",
+        cache_dir=root / "cache",
         overlay_work_dir=root / ".overlay-work",
         metadata_dir=root / "metadata",
     )
@@ -29,8 +31,8 @@ def build_workspace(root: Path) -> SandboxWorkspace:
 
 def test_search_defaults_to_container_work_dir(tmp_path):
     session = AgentSession(session_id="sess_search", workspace=build_workspace(tmp_path / "sandbox"))
-    assert search_service.resolve_cwd(session, None) == "/workspace/work"
-    assert search_service.resolve_cwd(session, "") == "/workspace/work"
+    assert search_service.resolve_cwd(session, None) == "/workspace"
+    assert search_service.resolve_cwd(session, "") == "/workspace"
 
 
 def test_grep_shell_quotes_pattern_and_glob(monkeypatch, tmp_path):
@@ -108,3 +110,36 @@ def test_glob_uses_workspace_root_for_relative_path(monkeypatch, tmp_path):
 
     asyncio.run(execute())
     assert "cd /workspace/work/repo &&" in recorded["command"]
+
+
+def test_glob_defaults_to_workspace_root(monkeypatch, tmp_path):
+    workspace = build_workspace(tmp_path / "sandbox")
+    session = AgentSession(session_id="sess_search", workspace=workspace)
+    recorded: dict[str, str] = {}
+
+    async def fake_run_shell(*, workspace, command, shell):
+        recorded["command"] = command
+        return SandboxCommandResult(
+            command=command,
+            shell=shell,
+            executor="docker",
+            exit_code=0,
+            stdout="input/file.txt\n",
+            stderr="",
+            duration_ms=5,
+            log_path="logs/cmd.json",
+        )
+
+    monkeypatch.setattr("app.services.ripgrep_service.sandbox_runner.run_shell", fake_run_shell)
+
+    async def execute():
+        result = await search_service.execute_glob(
+            session,
+            {
+                "pattern": "input/**/*",
+            },
+        )
+        assert result["filenames"] == ["input/file.txt"]
+
+    asyncio.run(execute())
+    assert "cd /workspace &&" in recorded["command"]

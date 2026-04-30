@@ -175,6 +175,35 @@ class StoreService:
 
                 CREATE INDEX IF NOT EXISTS idx_conversations_platform_user
                 ON conversations(platform_id, external_user_id, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS session_runtimes (
+                    session_id TEXT PRIMARY KEY,
+                    conversation_id TEXT,
+                    platform_id INTEGER,
+                    owner_user_id INTEGER,
+                    external_user_id TEXT,
+                    container_name TEXT,
+                    container_id TEXT,
+                    image TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    generation INTEGER NOT NULL DEFAULT 0,
+                    network_mode TEXT NOT NULL DEFAULT 'none',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_started_at TEXT,
+                    last_used_at TEXT,
+                    idle_expires_at TEXT,
+                    max_expires_at TEXT,
+                    destroyed_at TEXT,
+                    destroy_reason TEXT,
+                    restart_count INTEGER NOT NULL DEFAULT 0,
+                    workspace_root TEXT NOT NULL DEFAULT '',
+                    home_root TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_session_runtimes_status
+                ON session_runtimes(status, last_used_at DESC);
                 """
             )
             self._ensure_column(conn, "users", "last_login_at", "TEXT")
@@ -924,6 +953,27 @@ class StoreService:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_all_conversations(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM conversations ORDER BY updated_at DESC, created_at DESC").fetchall()
+        return [dict(row) for row in rows]
+
+    def list_conversations_for_platform_ids(self, platform_ids: list[int]) -> list[dict[str, Any]]:
+        normalized = sorted({int(item) for item in platform_ids})
+        if not normalized:
+            return []
+        placeholders = ",".join("?" for _ in normalized)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM conversations
+                WHERE platform_id IN ({placeholders})
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                tuple(normalized),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def touch_conversation(self, session_id: str, *, title: str | None = None, message_count: int | None = None) -> None:
         current = self.get_conversation_by_session(session_id)
         if current is None:
@@ -957,6 +1007,142 @@ class StoreService:
                 "UPDATE conversations SET title = ?, updated_at = ? WHERE session_id = ?",
                 (title, now, session_id),
             )
+            return result.rowcount > 0
+
+    def get_session_runtime(self, session_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    sr.*,
+                    c.title AS conversation_title,
+                    c.host_name AS conversation_host_name,
+                    p.display_name AS platform_display_name,
+                    u.full_name AS owner_user_name
+                FROM session_runtimes sr
+                LEFT JOIN conversations c ON c.session_id = sr.session_id
+                LEFT JOIN platforms p ON p.platform_id = sr.platform_id
+                LEFT JOIN users u ON u.user_id = sr.owner_user_id
+                WHERE sr.session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        return self._row_to_session_runtime(row)
+
+    def list_session_runtimes(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    sr.*,
+                    c.title AS conversation_title,
+                    c.host_name AS conversation_host_name,
+                    p.display_name AS platform_display_name,
+                    u.full_name AS owner_user_name
+                FROM session_runtimes sr
+                LEFT JOIN conversations c ON c.session_id = sr.session_id
+                LEFT JOIN platforms p ON p.platform_id = sr.platform_id
+                LEFT JOIN users u ON u.user_id = sr.owner_user_id
+                ORDER BY COALESCE(sr.last_used_at, sr.updated_at) DESC, sr.session_id ASC
+                """
+            ).fetchall()
+        return [self._row_to_session_runtime(row) for row in rows if row is not None]
+
+    def upsert_session_runtime(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str | None,
+        platform_id: int | None,
+        owner_user_id: int | None,
+        external_user_id: str | None,
+        container_name: str | None,
+        container_id: str | None,
+        image: str,
+        status: str,
+        generation: int,
+        network_mode: str,
+        created_at: str,
+        updated_at: str,
+        last_started_at: str | None,
+        last_used_at: str | None,
+        idle_expires_at: str | None,
+        max_expires_at: str | None,
+        destroyed_at: str | None,
+        destroy_reason: str | None,
+        restart_count: int,
+        workspace_root: str,
+        home_root: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO session_runtimes(
+                    session_id, conversation_id, platform_id, owner_user_id, external_user_id,
+                    container_name, container_id, image, status, generation, network_mode,
+                    created_at, updated_at, last_started_at, last_used_at,
+                    idle_expires_at, max_expires_at, destroyed_at, destroy_reason,
+                    restart_count, workspace_root, home_root, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    conversation_id = excluded.conversation_id,
+                    platform_id = excluded.platform_id,
+                    owner_user_id = excluded.owner_user_id,
+                    external_user_id = excluded.external_user_id,
+                    container_name = excluded.container_name,
+                    container_id = excluded.container_id,
+                    image = excluded.image,
+                    status = excluded.status,
+                    generation = excluded.generation,
+                    network_mode = excluded.network_mode,
+                    created_at = excluded.created_at,
+                    updated_at = excluded.updated_at,
+                    last_started_at = excluded.last_started_at,
+                    last_used_at = excluded.last_used_at,
+                    idle_expires_at = excluded.idle_expires_at,
+                    max_expires_at = excluded.max_expires_at,
+                    destroyed_at = excluded.destroyed_at,
+                    destroy_reason = excluded.destroy_reason,
+                    restart_count = excluded.restart_count,
+                    workspace_root = excluded.workspace_root,
+                    home_root = excluded.home_root,
+                    metadata_json = excluded.metadata_json
+                """,
+                (
+                    session_id,
+                    conversation_id,
+                    platform_id,
+                    owner_user_id,
+                    external_user_id,
+                    container_name,
+                    container_id,
+                    image,
+                    status,
+                    generation,
+                    network_mode,
+                    created_at,
+                    updated_at,
+                    last_started_at,
+                    last_used_at,
+                    idle_expires_at,
+                    max_expires_at,
+                    destroyed_at,
+                    destroy_reason,
+                    restart_count,
+                    workspace_root,
+                    home_root,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                ),
+            )
+        runtime = self.get_session_runtime(session_id)
+        if runtime is None:
+            raise RuntimeError("Failed to persist session runtime")
+        return runtime
+
+    def delete_session_runtime(self, session_id: str) -> bool:
+        with self._connect() as conn:
+            result = conn.execute("DELETE FROM session_runtimes WHERE session_id = ?", (session_id,))
             return result.rowcount > 0
 
     def _inflate_platform_request(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -1007,6 +1193,15 @@ class StoreService:
             **dict(row),
             "enabled": bool(row["enabled"]),
         }
+
+    def _row_to_session_runtime(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        payload = dict(row)
+        payload["generation"] = int(payload.get("generation") or 0)
+        payload["restart_count"] = int(payload.get("restart_count") or 0)
+        payload["metadata"] = json.loads(payload.pop("metadata_json", "{}") or "{}")
+        return payload
 
 
 store_service = StoreService()

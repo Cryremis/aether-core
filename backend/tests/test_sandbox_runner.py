@@ -1,18 +1,18 @@
-# backend/tests/test_sandbox_runner.py
 import asyncio
-import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from app.core.config import settings
-from app.sandbox.docker_executor import BaselineRuntimePlan, DockerSandboxExecutor
-from app.sandbox.models import SandboxWorkspace
 from app.sandbox.runner import SandboxRunner
+from app.sandbox.models import SandboxWorkspace
+from app.services.session_runtime_service import session_runtime_service
+from app.services.store import store_service
 
 
 def build_workspace(root: Path) -> SandboxWorkspace:
-    for name in ["input", "skills", "work", "output", "logs", "metadata", ".overlay-work"]:
+    for name in ["input", "skills", "work", "output", "logs", "home", "cache", "metadata", ".overlay-work"]:
         (root / name).mkdir(parents=True, exist_ok=True)
     for name in ["input", "skills", "work", "output", "logs"]:
         (root / ".overlay-work" / name).mkdir(parents=True, exist_ok=True)
@@ -25,94 +25,69 @@ def build_workspace(root: Path) -> SandboxWorkspace:
         work_dir=root / "work",
         output_dir=root / "output",
         logs_dir=root / "logs",
+        home_dir=root / "home",
+        cache_dir=root / "cache",
         overlay_work_dir=root / ".overlay-work",
         metadata_dir=root / "metadata",
     )
 
 
-def build_baseline_workspace(root: Path, baseline_root: Path) -> SandboxWorkspace:
-    workspace = build_workspace(root)
-    for name in ["input", "skills", "work", "output", "logs"]:
-        (baseline_root / name).mkdir(parents=True, exist_ok=True)
-    (baseline_root / "input" / "hello.txt").write_text("hello from baseline", encoding="utf-8")
-    return SandboxWorkspace(
-        session_id=workspace.session_id,
-        root=workspace.root,
-        baseline_root=baseline_root,
-        input_dir=workspace.input_dir,
-        skills_dir=workspace.skills_dir,
-        work_dir=workspace.work_dir,
-        output_dir=workspace.output_dir,
-        logs_dir=workspace.logs_dir,
-        overlay_work_dir=workspace.overlay_work_dir,
-        metadata_dir=workspace.metadata_dir,
-    )
+def initialize_store(tmp_path: Path) -> None:
+    settings.storage_root = tmp_path / "storage"
+    store_service._db_path = settings.storage_root / "aethercore-test.db"
+    store_service._db_path.parent.mkdir(parents=True, exist_ok=True)
+    store_service.initialize()
 
 
-def test_docker_executor_builds_isolated_run_args(tmp_path):
+def test_session_runtime_builds_persistent_container_args(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "sandbox_allow_network", True)
+    monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
+    monkeypatch.setattr(settings, "sandbox_docker_dns_servers", ["8.8.8.8", "1.1.1.1"])
+    monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
+    monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
     workspace = build_workspace(tmp_path / "sandbox")
-    executor = DockerSandboxExecutor()
-
-    args = executor._build_docker_run_args(
-        workspace,
-        "test-container",
-        ["/bin/bash", "-c", "echo hello"],
-        BaselineRuntimePlan(mode="direct", mount_upper_workspace=False, requires_root=False),
-    )
-
+    args = session_runtime_service._build_run_args(workspace, "test-container")
     joined = " ".join(args)
-    assert "--network none" in joined
-    assert "--read-only" in joined
+    assert "--network bridge" in joined
+    assert "--network none" not in joined
+    assert "--read-only" not in joined
     assert "--cap-drop ALL" in joined
+    assert "--user sandbox" in joined
+    assert "--dns 8.8.8.8" in joined
+    assert "PIP_CACHE_DIR=/workspace/cache/pip" in joined
+    assert "/workspace/home/.local/bin" in joined
+    assert f"dst={settings.sandbox_docker_workspace_mount}" in joined
+    assert settings.sandbox_docker_home_dir in joined
     assert settings.sandbox_docker_image in args
 
 
-def test_overlay_baseline_runtime_command_keeps_shell_variables_escaped():
-    executor = DockerSandboxExecutor()
-
-    command = executor._build_runtime_command(
-        ["/bin/bash", "-c", "cat /workspace/input/hello.txt"],
-        BaselineRuntimePlan(mode="overlay", mount_upper_workspace=True, requires_root=True),
-    )
-
-    script = command[-1]
-    assert "/aether/baseline/${name}" in script
-    assert "${{name}}" not in script
-    assert "cat /workspace/input/hello.txt" in script
+def test_session_runtime_exec_uses_workspace_root(tmp_path):
+    workspace = build_workspace(tmp_path / "sandbox")
+    args = session_runtime_service._build_exec_args("test-container", "bash", "pwd")
+    assert args[:4] == ["exec", "--workdir", "/workspace", "test-container"]
 
 
-def test_overlay_baseline_run_args_requires_root_and_tmpfs(tmp_path):
-    workspace = build_baseline_workspace(tmp_path / "sandbox", tmp_path / "baseline")
-    executor = DockerSandboxExecutor()
+def test_runtime_spec_drift_requests_recreate(monkeypatch):
+    monkeypatch.setattr(settings, "sandbox_allow_network", True)
+    monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
+    monkeypatch.setattr(settings, "sandbox_docker_dns_servers", [])
+    monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
+    monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
+    now = datetime.now(timezone.utc)
 
-    args = executor._build_docker_run_args(
-        workspace,
-        "test-container",
-        ["/bin/bash", "-c", "echo hello"],
-        BaselineRuntimePlan(mode="overlay", mount_upper_workspace=True, requires_root=True),
-    )
+    runtime = {
+        "status": "running",
+        "metadata": {},
+    }
+    assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) == "runtime_spec_missing"
 
-    joined = " ".join(args)
-    assert "--user root" in joined
-    assert "dst=/aether/baseline,readonly" in joined
-    assert "/workspace:size=64m" in joined
+    runtime["metadata"] = {
+        "runtime_spec": session_runtime_service._build_runtime_spec(),
+    }
+    assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) is None
 
-
-def test_overlay_baseline_run_args_mounts_workspace_and_baseline(tmp_path):
-    workspace = build_baseline_workspace(tmp_path / "sandbox", tmp_path / "baseline")
-    executor = DockerSandboxExecutor()
-
-    args = executor._build_docker_run_args(
-        workspace,
-        "test-container",
-        ["/bin/bash", "-c", "echo hello"],
-        BaselineRuntimePlan(mode="overlay", mount_upper_workspace=True, requires_root=True),
-    )
-
-    joined = " ".join(args)
-    assert "--user root" in joined
-    assert f"src={workspace.root.resolve()},dst=/aether/session-upper" in joined
-    assert "dst=/aether/baseline,readonly" in joined
+    runtime["metadata"]["runtime_spec"]["network_mode"] = "none"
+    assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) == "runtime_config_changed"
 
 
 def test_runner_fails_closed_when_executor_unavailable(tmp_path, monkeypatch):
@@ -138,59 +113,70 @@ def test_runner_fails_closed_when_executor_unavailable(tmp_path, monkeypatch):
     asyncio.run(execute())
 
 
-def test_resolve_baseline_plan_falls_back_to_copy_when_overlay_unsupported(tmp_path):
-    workspace = build_baseline_workspace(tmp_path / "sandbox", tmp_path / "baseline")
-    executor = DockerSandboxExecutor()
-    executor._baseline_plan_cache = None
-
-    async def fake_supports_overlay(_docker_binary: str) -> bool:
-        return False
-
-    executor._supports_overlay_mount = fake_supports_overlay  # type: ignore[method-assign]
-
-    async def execute():
-        plan = await executor._resolve_baseline_plan("docker", workspace)
-        assert plan.mode == "copy"
-        assert plan.mount_upper_workspace == False
-        assert plan.requires_root == True
-
-    asyncio.run(execute())
-
-
-def test_docker_executor_smoke_with_overlay_baseline_strategy(tmp_path):
-    executor = DockerSandboxExecutor()
-    docker_binary = executor._resolve_docker_binary()
-    if not docker_binary:
-        pytest.skip("docker 未安装，跳过真实容器 smoke test。")
-
-    version = subprocess.run(
-        [docker_binary, "version", "--format", "{{.Server.Version}}"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    if version.returncode != 0:
-        pytest.skip("docker daemon 不可用，跳过真实容器 smoke test。")
-
-    supports_overlay = asyncio.run(executor._supports_overlay_mount(docker_binary))
-    if not supports_overlay:
-        pytest.skip("当前 docker 环境不支持 overlay baseline 挂载。")
-
-    workspace = build_baseline_workspace(tmp_path / "sandbox", tmp_path / "baseline")
-    executor._baseline_plan_cache = BaselineRuntimePlan(
-        mode="overlay",
-        mount_upper_workspace=True,
-        requires_root=True,
+def test_collect_expired_runtime_marks_record(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    workspace = build_workspace(tmp_path / "sandbox")
+    now = datetime.now(timezone.utc)
+    store_service.upsert_session_runtime(
+        session_id=workspace.session_id,
+        conversation_id=None,
+        platform_id=None,
+        owner_user_id=None,
+        external_user_id=None,
+        container_name="test-container",
+        container_id="container-id",
+        image=settings.sandbox_docker_image,
+        status="running",
+        generation=1,
+        network_mode="none",
+        created_at=now.isoformat(),
+        updated_at=now.isoformat(),
+        last_started_at=now.isoformat(),
+        last_used_at=(now - timedelta(days=2)).isoformat(),
+        idle_expires_at=(now - timedelta(minutes=1)).isoformat(),
+        max_expires_at=(now + timedelta(days=1)).isoformat(),
+        destroyed_at=None,
+        destroy_reason=None,
+        restart_count=0,
+        workspace_root=str(workspace.root),
+        home_root=str(workspace.home_dir),
+        metadata={},
     )
 
-    async def execute():
-        result = await executor.run_shell(
-            workspace,
-            'Get-Content /workspace/input/hello.txt; Write-Output "pwsh-ok"',
-            "powershell",
+    async def fake_collect(session_id: str, *, reason: str):
+        record = store_service.get_session_runtime(session_id)
+        assert record is not None
+        return store_service.upsert_session_runtime(
+            session_id=session_id,
+            conversation_id=record.get("conversation_id"),
+            platform_id=record.get("platform_id"),
+            owner_user_id=record.get("owner_user_id"),
+            external_user_id=record.get("external_user_id"),
+            container_name=record.get("container_name"),
+            container_id=record.get("container_id"),
+            image=str(record.get("image")),
+            status="expired",
+            generation=int(record.get("generation") or 0),
+            network_mode=str(record.get("network_mode") or "none"),
+            created_at=str(record.get("created_at")),
+            updated_at=now.isoformat(),
+            last_started_at=record.get("last_started_at"),
+            last_used_at=record.get("last_used_at"),
+            idle_expires_at=record.get("idle_expires_at"),
+            max_expires_at=record.get("max_expires_at"),
+            destroyed_at=now.isoformat(),
+            destroy_reason=reason,
+            restart_count=int(record.get("restart_count") or 0),
+            workspace_root=str(record.get("workspace_root") or ""),
+            home_root=str(record.get("home_root") or ""),
+            metadata=record.get("metadata") or {},
         )
-        assert result.exit_code == 0
-        assert "hello from baseline" in result.stdout
-        assert "pwsh-ok" in result.stdout
 
-    asyncio.run(execute())
+    monkeypatch.setattr(session_runtime_service, "collect_runtime", fake_collect)
+
+    asyncio.run(session_runtime_service.collect_expired_runtimes())
+
+    runtime = store_service.get_session_runtime(workspace.session_id)
+    assert runtime is not None
+    assert runtime["status"] == "expired"
+    assert runtime["destroy_reason"] == "idle_ttl_expired"

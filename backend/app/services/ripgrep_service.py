@@ -47,6 +47,9 @@ class RipgrepService:
         quoted_args = " ".join(shlex.quote(arg) for arg in args)
         return f"cd {shlex.quote(cwd)} && {quoted_args}"
 
+    def workspace_root(self) -> str:
+        return "/workspace"
+
     async def glob(
         self,
         workspace: SandboxWorkspace,

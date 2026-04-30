@@ -1,14 +1,21 @@
-
 import { useEffect, useMemo, useState } from "react";
 
 import type {
+  AuditConversationDetail,
+  AuditConversationSummary,
   CurrentUserProfile,
   PlatformRegistrationRequestSummary,
+  SessionRuntimeSummary,
   UserSummary,
 } from "../api/client";
 import {
   approvePlatformRegistrationRequest,
   assignPlatformAdmin,
+  collectAdminRuntime,
+  getAdminConversationDetail,
+  listAdminConversations,
+  listAdminRuntimes,
+  listAdminRuntimesHistory,
   listPlatformRegistrationRequests,
   listPlatformAdmins,
   listPlatforms,
@@ -40,6 +47,8 @@ type PlatformAdminRecord = {
   is_primary: boolean;
 };
 
+type ManagementTab = "config" | "approvals" | "users" | "admins" | "runtimes" | "audit";
+
 function formatRequestStatus(status: PlatformRegistrationRequestSummary["status"]) {
   if (status === "pending") return "待审批";
   if (status === "approved") return "已通过";
@@ -55,16 +64,54 @@ function formatTime(value?: string | null) {
   return parsed.toLocaleString();
 }
 
+function isRuntimeActive(status: string) {
+  return ["provisioning", "running", "busy"].includes(status);
+}
+
+function getRuntimeStatusLabel(status: string) {
+  if (status === "running") return "运行中";
+  if (status === "busy") return "执行中";
+  if (status === "provisioning") return "创建中";
+  if (status === "expired") return "已过期";
+  if (status === "collected") return "已回收";
+  if (status === "failed") return "已失效";
+  if (status === "missing") return "容器丢失";
+  return status;
+}
+
+function getRuntimeStatusClass(status: string) {
+  if (status === "running" || status === "busy" || status === "provisioning") return "approved";
+  if (status === "expired" || status === "failed" || status === "missing") return "rejected";
+  return "returned";
+}
+
+function renderAuditMessageContent(detail: AuditConversationDetail | null, index: number) {
+  const message = detail?.messages?.[index];
+  if (!message) return "";
+  if (message.content?.trim()) return message.content;
+  if (Array.isArray(message.blocks) && message.blocks.length > 0) {
+    return JSON.stringify(message.blocks, null, 2);
+  }
+  return "";
+}
+
 export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
-  const [activeTab, setActiveTab] = useState<"config" | "approvals" | "users" | "admins">("config");
+  const [activeTab, setActiveTab] = useState<ManagementTab>("config");
   const [requests, setRequests] = useState<PlatformRegistrationRequestSummary[]>([]);
   const [users, setUsers] = useState<UserSummary[]>([]);
+  const [runtimes, setRuntimes] = useState<SessionRuntimeSummary[]>([]);
+  const [auditConversations, setAuditConversations] = useState<AuditConversationSummary[]>([]);
+  const [selectedAuditSessionId, setSelectedAuditSessionId] = useState<string>("");
+  const [selectedAuditDetail, setSelectedAuditDetail] = useState<AuditConversationDetail | null>(null);
   const [platforms, setPlatforms] = useState<PlatformOption[]>([]);
-  const[selectedPlatformId, setSelectedPlatformId] = useState<number | null>(null);
-  const[selectedPlatformAdmins, setSelectedPlatformAdmins] = useState<PlatformAdminRecord[]>([]);
+  const [selectedPlatformId, setSelectedPlatformId] = useState<number | null>(null);
+  const [selectedAuditPlatformId, setSelectedAuditPlatformId] = useState<number | null>(null);
+  const [selectedPlatformAdmins, setSelectedPlatformAdmins] = useState<PlatformAdminRecord[]>([]);
   const [assignUserId, setAssignUserId] = useState<number | null>(null);
+  const [showRuntimeHistory, setShowRuntimeHistory] = useState(false);
+  const [auditBusy, setAuditBusy] = useState(false);
   const [error, setError] = useState("");
-  const[busyRequestId, setBusyRequestId] = useState<number | null>(null);
+  const [busyRequestId, setBusyRequestId] = useState<number | null>(null);
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
   const [platformAdminBusy, setPlatformAdminBusy] = useState(false);
 
@@ -73,34 +120,96 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
     [requests],
   );
 
+  const canManage = currentUser.can_manage_platforms;
+  const canManageSystem = currentUser.can_manage_system;
+
+  const loadManagedPlatforms = async () => {
+    const platformResult = await listPlatforms();
+    const nextPlatforms = (platformResult.data ?? []) as PlatformOption[];
+    setPlatforms(nextPlatforms);
+    if (nextPlatforms.length === 0) {
+      setSelectedPlatformId(null);
+      setSelectedAuditPlatformId(null);
+      return;
+    }
+    setSelectedPlatformId((current) =>
+      current && nextPlatforms.some((item) => item.platform_id === current) ? current : nextPlatforms[0].platform_id,
+    );
+    setSelectedAuditPlatformId((current) =>
+      current && nextPlatforms.some((item) => item.platform_id === current) ? current : nextPlatforms[0].platform_id,
+    );
+  };
+
   const loadSystemGovernance = async () => {
-    const[requestResult, userResult, platformResult] = await Promise.all([
+    const [requestResult, userResult, platformResult] = await Promise.all([
       listPlatformRegistrationRequests(),
       listUsers(),
       listPlatforms(),
     ]);
     setRequests((requestResult.data ?? []) as PlatformRegistrationRequestSummary[]);
-    setUsers((userResult.data ??[]) as UserSummary[]);
+    setUsers((userResult.data ?? []) as UserSummary[]);
     const nextPlatforms = (platformResult.data ?? []) as PlatformOption[];
     setPlatforms(nextPlatforms);
-    if (nextPlatforms.length > 0) {
-      setSelectedPlatformId((current) =>
-        current && nextPlatforms.some((item) => item.platform_id === current) ? current : nextPlatforms[0].platform_id,
-      );
+    if (nextPlatforms.length === 0) {
+      setSelectedPlatformId(null);
+      setSelectedAuditPlatformId(null);
+      return;
+    }
+    setSelectedPlatformId((current) =>
+      current && nextPlatforms.some((item) => item.platform_id === current) ? current : nextPlatforms[0].platform_id,
+    );
+    setSelectedAuditPlatformId((current) =>
+      current && nextPlatforms.some((item) => item.platform_id === current) ? current : nextPlatforms[0].platform_id,
+    );
+  };
+
+  const loadRuntimes = async (includeHistory: boolean) => {
+    const result = includeHistory ? await listAdminRuntimesHistory() : await listAdminRuntimes();
+    setRuntimes((result.data ?? []) as SessionRuntimeSummary[]);
+  };
+
+  const loadAuditSessions = async (platformId?: number | null) => {
+    setAuditBusy(true);
+    try {
+      const result = await listAdminConversations(platformId ?? undefined);
+      const items = (result.data ?? []) as AuditConversationSummary[];
+      setAuditConversations(items);
+      const nextSelectedId =
+        selectedAuditSessionId && items.some((item) => item.session_id === selectedAuditSessionId)
+          ? selectedAuditSessionId
+          : items[0]?.session_id ?? "";
+      setSelectedAuditSessionId(nextSelectedId);
+      if (!nextSelectedId) {
+        setSelectedAuditDetail(null);
+        return;
+      }
+      const detailResult = await getAdminConversationDetail(nextSelectedId);
+      setSelectedAuditDetail((detailResult.data ?? null) as AuditConversationDetail | null);
+    } finally {
+      setAuditBusy(false);
     }
   };
 
   useEffect(() => {
-    if (!currentUser.can_manage_system) {
+    if (!canManage) {
       return;
     }
-    void loadSystemGovernance().catch((err) => {
-      setError(err instanceof Error ? err.message : "加载治理数据失败");
-    });
-  }, [currentUser.can_manage_system]);
+    void (async () => {
+      try {
+        setError("");
+        if (canManageSystem) {
+          await loadSystemGovernance();
+        } else {
+          await loadManagedPlatforms();
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "加载管理数据失败");
+      }
+    })();
+  }, [canManage, canManageSystem]);
 
   useEffect(() => {
-    if (!currentUser.can_manage_system || !selectedPlatformId) {
+    if (!canManageSystem || !selectedPlatformId) {
       setSelectedPlatformAdmins([]);
       return;
     }
@@ -111,7 +220,38 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
       .catch((err) => {
         setError(err instanceof Error ? err.message : "加载平台负责人失败");
       });
-  },[currentUser.can_manage_system, selectedPlatformId]);
+  }, [canManageSystem, selectedPlatformId]);
+
+  useEffect(() => {
+    if (!canManage || activeTab !== "runtimes") {
+      return;
+    }
+    void loadRuntimes(showRuntimeHistory).catch((err) => {
+      setError(err instanceof Error ? err.message : "加载 runtime 列表失败");
+    });
+  }, [activeTab, canManage, showRuntimeHistory]);
+
+  useEffect(() => {
+    if (!canManage || activeTab !== "audit") {
+      return;
+    }
+    void loadAuditSessions(selectedAuditPlatformId).catch((err) => {
+      setError(err instanceof Error ? err.message : "加载审计会话失败");
+    });
+  }, [activeTab, canManage, selectedAuditPlatformId]);
+
+  useEffect(() => {
+    if (!canManage || activeTab !== "audit" || !selectedAuditSessionId) {
+      return;
+    }
+    void getAdminConversationDetail(selectedAuditSessionId)
+      .then((result) => {
+        setSelectedAuditDetail((result.data ?? null) as AuditConversationDetail | null);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "加载审计会话详情失败");
+      });
+  }, [activeTab, canManage, selectedAuditSessionId]);
 
   const handleApprove = async (requestId: number) => {
     const reviewComment = window.prompt("审批备注（可选）", "") ?? "";
@@ -166,7 +306,7 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
       setError("");
       await assignPlatformAdmin(selectedPlatformId, assignUserId);
       const result = await listPlatformAdmins(selectedPlatformId);
-      setSelectedPlatformAdmins((result.data ??[]) as PlatformAdminRecord[]);
+      setSelectedPlatformAdmins((result.data ?? []) as PlatformAdminRecord[]);
       setAssignUserId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "新增平台负责人失败");
@@ -216,32 +356,59 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
     }
   };
 
+  const handleCollectRuntime = async (sessionId: string) => {
+    if (!window.confirm("确定立即回收这个会话 runtime 吗？下次执行命令时会自动重建。")) {
+      return;
+    }
+    try {
+      setPlatformAdminBusy(true);
+      setError("");
+      await collectAdminRuntime(sessionId);
+      await loadRuntimes(showRuntimeHistory);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "回收 runtime 失败");
+    } finally {
+      setPlatformAdminBusy(false);
+    }
+  };
+
   return (
     <div className="management-console">
       {error ? <div className="admin-panel__error epic-error stagger-1">{error}</div> : null}
 
-      {currentUser.can_manage_system && (
+      {canManage && (
         <div className="admin-tabs-wrapper stagger-2">
           <nav className="admin-tabs">
-            <button type="button" className={`admin-tab-btn ${activeTab === 'config' ? 'is-active' : ''}`} onClick={() => setActiveTab('config')}>
+            <button type="button" className={`admin-tab-btn ${activeTab === "config" ? "is-active" : ""}`} onClick={() => setActiveTab("config")}>
               平台配置
             </button>
-            <button type="button" className={`admin-tab-btn ${activeTab === 'approvals' ? 'is-active' : ''}`} onClick={() => setActiveTab('approvals')}>
-              注册审批 {pendingRequests.length > 0 && <span className="tab-badge">{pendingRequests.length}</span>}
+            {canManageSystem ? (
+              <button type="button" className={`admin-tab-btn ${activeTab === "approvals" ? "is-active" : ""}`} onClick={() => setActiveTab("approvals")}>
+                注册审批 {pendingRequests.length > 0 && <span className="tab-badge">{pendingRequests.length}</span>}
+              </button>
+            ) : null}
+            {canManageSystem ? (
+              <button type="button" className={`admin-tab-btn ${activeTab === "users" ? "is-active" : ""}`} onClick={() => setActiveTab("users")}>
+                用户授权
+              </button>
+            ) : null}
+            {canManageSystem ? (
+              <button type="button" className={`admin-tab-btn ${activeTab === "admins" ? "is-active" : ""}`} onClick={() => setActiveTab("admins")}>
+                负责人治理
+              </button>
+            ) : null}
+            <button type="button" className={`admin-tab-btn ${activeTab === "runtimes" ? "is-active" : ""}`} onClick={() => setActiveTab("runtimes")}>
+              Runtime
             </button>
-            <button type="button" className={`admin-tab-btn ${activeTab === 'users' ? 'is-active' : ''}`} onClick={() => setActiveTab('users')}>
-              用户授权
-            </button>
-            <button type="button" className={`admin-tab-btn ${activeTab === 'admins' ? 'is-active' : ''}`} onClick={() => setActiveTab('admins')}>
-              负责人治理
+            <button type="button" className={`admin-tab-btn ${activeTab === "audit" ? "is-active" : ""}`} onClick={() => setActiveTab("audit")}>
+              审计会话
             </button>
           </nav>
         </div>
       )}
 
-      {/* 利用 key 强制触发重新挂载和 CSS 动画 */}
       <div key={activeTab} className="admin-tab-content">
-        {currentUser.can_manage_system && activeTab === 'approvals' && (
+        {canManageSystem && activeTab === "approvals" && (
           <section className="management-console__section epic-glass stagger-3">
             <div className="management-console__section-head">
               <div>
@@ -295,7 +462,7 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
           </section>
         )}
 
-        {currentUser.can_manage_system && activeTab === 'users' && (
+        {canManageSystem && activeTab === "users" && (
           <section className="management-console__section epic-glass stagger-3">
             <div className="management-console__section-head">
               <div>
@@ -329,7 +496,7 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
           </section>
         )}
 
-        {currentUser.can_manage_system && activeTab === 'admins' && (
+        {canManageSystem && activeTab === "admins" && (
           <section className="management-console__section epic-glass stagger-3">
             <div className="management-console__section-head">
               <div>
@@ -403,9 +570,154 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
           </section>
         )}
 
-        {(!currentUser.can_manage_system || activeTab === 'config') && (
+        {canManage && activeTab === "runtimes" && (
+          <section className="management-console__section epic-glass stagger-3">
+            <div className="management-console__section-head">
+              <div>
+                <h4>会话 Runtime</h4>
+                <p>默认只展示当前活跃 runtime。打开历史后可查看已回收、已过期或已失效的容器记录。</p>
+              </div>
+              <span className="management-console__metric">{runtimes.length} Runtime</span>
+            </div>
+            <div className="management-console__toolbar">
+              <label className="management-console__toggle">
+                <input type="checkbox" checked={showRuntimeHistory} onChange={(event) => setShowRuntimeHistory(event.target.checked)} />
+                <span>显示已关闭 runtime</span>
+              </label>
+              <button type="button" className="action-button action-button--ghost" disabled={platformAdminBusy} onClick={() => void loadRuntimes(showRuntimeHistory)}>
+                刷新列表
+              </button>
+            </div>
+            <div className="management-console__cards">
+              {runtimes.length === 0 ? (
+                <div className="admin-panel__empty">{showRuntimeHistory ? "当前没有 runtime 记录。" : "当前没有活跃 runtime。"}</div>
+              ) : (
+                runtimes.map((item) => (
+                  <article key={item.session_id} className={`management-console__card runtime-card ${isRuntimeActive(item.status) ? "" : "runtime-card--closed"}`}>
+                    <div className="management-console__card-head">
+                      <div>
+                        <strong>{item.conversation_title || item.session_id}</strong>
+                        <p>{item.container_name || "尚未创建容器"}</p>
+                      </div>
+                      <span className={`request-status request-status--${getRuntimeStatusClass(item.status)}`}>
+                        {getRuntimeStatusLabel(item.status)}
+                      </span>
+                    </div>
+                    <p>所属平台：{item.platform_display_name || "未绑定"} · 用户：{item.owner_user_name || item.external_user_id || "未知"}</p>
+                    <p>Session：{item.session_id} · 代次：{item.generation ?? 0}</p>
+                    <p>最近使用：{formatTime(item.last_used_at)} · 闲置到期：{formatTime(item.idle_expires_at)}</p>
+                    <p>创建时间：{formatTime(item.created_at)} · 最大寿命：{formatTime(item.max_expires_at)}</p>
+                    <p>销毁原因：{item.destroy_reason || "未销毁"}</p>
+                    <div className="management-console__actions">
+                      {isRuntimeActive(item.status) ? (
+                        <button
+                          type="button"
+                          className="action-button action-button--ghost danger-button"
+                          disabled={platformAdminBusy || item.status === "busy"}
+                          onClick={() => void handleCollectRuntime(item.session_id)}
+                        >
+                          {platformAdminBusy ? "处理中..." : "回收容器"}
+                        </button>
+                      ) : (
+                        <span className="management-console__hint">这个 runtime 已关闭；下次命令会按当前配置自动重建。</span>
+                      )}
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
+        {canManage && activeTab === "audit" && (
+          <section className="management-console__section epic-glass stagger-3">
+            <div className="management-console__section-head">
+              <div>
+                <h4>平台会话审计</h4>
+                <p>查看当前可管理平台下的所有用户会话，并按需展开完整消息、runtime 与工作区状态。</p>
+              </div>
+              <span className="management-console__metric">{auditConversations.length} 会话</span>
+            </div>
+            <div className="management-console__toolbar">
+              <select
+                value={selectedAuditPlatformId ?? ""}
+                onChange={(event) => setSelectedAuditPlatformId(Number(event.target.value) || null)}
+              >
+                {platforms.map((platform) => (
+                  <option key={platform.platform_id} value={platform.platform_id}>
+                    {platform.display_name} · {platform.platform_key}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="action-button action-button--ghost" disabled={auditBusy} onClick={() => void loadAuditSessions(selectedAuditPlatformId)}>
+                {auditBusy ? "刷新中..." : "刷新会话"}
+              </button>
+            </div>
+            <div className="management-console__audit-layout">
+              <div className="management-console__audit-list">
+                {auditConversations.length === 0 ? (
+                  <div className="admin-panel__empty">当前平台还没有可审计会话。</div>
+                ) : (
+                  auditConversations.map((item) => (
+                    <button
+                      key={item.session_id}
+                      type="button"
+                      className={`management-console__audit-card ${selectedAuditSessionId === item.session_id ? "is-active" : ""}`}
+                      onClick={() => setSelectedAuditSessionId(item.session_id)}
+                    >
+                      <div className="management-console__card-head">
+                        <div>
+                          <strong>{item.title || "新对话"}</strong>
+                          <p>{item.platform_display_name || item.host_name}</p>
+                        </div>
+                        <span className="request-status request-status--returned">{item.message_count} 条</span>
+                      </div>
+                      <p>用户：{item.owner_user_name || item.external_user_name || item.external_user_id || "未知"}</p>
+                      <p>Session：{item.session_id}</p>
+                      <p>最后更新：{formatTime(item.updated_at || item.last_message_at)}</p>
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className="management-console__audit-detail">
+                {selectedAuditDetail ? (
+                  <>
+                    <div className="management-console__card-head">
+                      <div>
+                        <strong>{selectedAuditDetail.audit.title || "新对话"}</strong>
+                        <p>{selectedAuditDetail.audit.platform_display_name || selectedAuditDetail.host_name}</p>
+                      </div>
+                      <span className="request-status request-status--approved">{selectedAuditDetail.message_count} 条消息</span>
+                    </div>
+                    <p>用户：{selectedAuditDetail.audit.owner_user_name || selectedAuditDetail.audit.external_user_name || selectedAuditDetail.audit.external_user_id || "未知"}</p>
+                    <p>Session：{selectedAuditDetail.session_id}</p>
+                    <p>创建时间：{formatTime(selectedAuditDetail.created_at)} · 最后更新时间：{formatTime(selectedAuditDetail.audit.updated_at)}</p>
+                    <p>当前 runtime：{selectedAuditDetail.runtime ? getRuntimeStatusLabel(selectedAuditDetail.runtime.status) : "尚未创建"}</p>
+                    <div className="management-console__audit-timeline">
+                      {selectedAuditDetail.messages.map((message, index) => (
+                        <article key={`${selectedAuditDetail.session_id}-${index}`} className="management-console__audit-message">
+                          <div className="management-console__audit-message-head">
+                            <span className={`request-status request-status--${message.role === "assistant" ? "approved" : message.role === "tool" ? "returned" : "pending"}`}>
+                              {message.role}
+                            </span>
+                            <span>#{index + 1}</span>
+                          </div>
+                          <pre>{renderAuditMessageContent(selectedAuditDetail, index)}</pre>
+                        </article>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="admin-panel__empty">选择左侧会话后，可在这里查看完整审计详情。</div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "config" && (
           <section className="management-console__section">
-            <AdminPanel role={currentUser.can_manage_system ? "system_admin" : currentUser.role} />
+            <AdminPanel role={canManageSystem ? "system_admin" : currentUser.role} />
           </section>
         )}
       </div>

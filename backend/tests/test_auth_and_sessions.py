@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -631,3 +632,260 @@ def test_session_workboard_supports_manual_crud(tmp_path):
     )
     assert delete_response.status_code == 200
     assert delete_response.json()["data"]["items"] == []
+
+
+def test_platform_admin_can_audit_managed_platform_conversations(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform_admin = store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="platform-admin-001",
+        full_name="Platform Admin",
+        email="platform-admin@example.com",
+    )
+    other_admin = store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="other-admin-001",
+        full_name="Other Admin",
+        email="other-admin@example.com",
+    )
+
+    from app.services.token_service import token_service
+
+    platform_admin_token, _ = token_service.create_user_token(platform_admin.user_id, platform_admin.role)
+
+    managed_platform = store_service.create_platform(
+        platform_key="audit-hub",
+        display_name="Audit Hub",
+        host_type="embedded",
+        description="audit platform",
+        owner_user_id=admin.user_id,
+    )
+    store_service.add_platform_admin(
+        platform_id=managed_platform["platform_id"],
+        user_id=platform_admin.user_id,
+        assigned_by=admin.user_id,
+    )
+    unmanaged_platform = store_service.create_platform(
+        platform_key="other-hub",
+        display_name="Other Hub",
+        host_type="embedded",
+        description="other platform",
+        owner_user_id=other_admin.user_id,
+    )
+
+    managed_session, _ = conversation_service.bootstrap_host_workbench(
+        platform_key=managed_platform["platform_key"],
+        external_user_id="user-a",
+        external_user_name="User A",
+        external_org_id="org-a",
+        conversation_id=None,
+        conversation_key="audit-1",
+        host_name="Audit Host",
+    )
+    managed_session.messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "world"},
+    ]
+    session_service.persist(managed_session)
+    store_service.touch_conversation(managed_session.session_id, message_count=len(managed_session.messages))
+
+    unmanaged_session, _ = conversation_service.bootstrap_host_workbench(
+        platform_key=unmanaged_platform["platform_key"],
+        external_user_id="user-b",
+        external_user_name="User B",
+        external_org_id="org-b",
+        conversation_id=None,
+        conversation_key="audit-2",
+        host_name="Other Host",
+    )
+
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {platform_admin_token}"}
+
+    listing = client.get("/api/v1/admin/conversations", headers=headers)
+    assert listing.status_code == 200
+    items = listing.json()["data"]
+    assert [item["session_id"] for item in items] == [managed_session.session_id]
+    assert items[0]["external_user_name"] == "User A"
+
+    detail = client.get(f"/api/v1/admin/conversations/{managed_session.session_id}", headers=headers)
+    assert detail.status_code == 200
+    detail_payload = detail.json()["data"]
+    assert detail_payload["message_count"] == 2
+    assert detail_payload["audit"]["platform_display_name"] == "Audit Hub"
+    assert detail_payload["messages"][0]["content"] == "hello"
+
+    forbidden = client.get(f"/api/v1/admin/conversations/{unmanaged_session.session_id}", headers=headers)
+    assert forbidden.status_code == 403
+
+
+def test_platform_admin_runtime_list_hides_inactive_by_default(tmp_path, monkeypatch):
+    initialize_isolated_runtime(tmp_path)
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform_admin = store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="runtime-admin-001",
+        full_name="Runtime Admin",
+        email="runtime-admin@example.com",
+    )
+
+    from app.services.token_service import token_service
+
+    platform_admin_token, _ = token_service.create_user_token(platform_admin.user_id, platform_admin.role)
+
+    managed_platform = store_service.create_platform(
+        platform_key="runtime-hub",
+        display_name="Runtime Hub",
+        host_type="embedded",
+        description="runtime platform",
+        owner_user_id=admin.user_id,
+    )
+    store_service.add_platform_admin(
+        platform_id=managed_platform["platform_id"],
+        user_id=platform_admin.user_id,
+        assigned_by=admin.user_id,
+    )
+    unmanaged_platform = store_service.create_platform(
+        platform_key="runtime-other",
+        display_name="Runtime Other",
+        host_type="embedded",
+        description="other runtime platform",
+        owner_user_id=admin.user_id,
+    )
+
+    managed_session = conversation_service.bootstrap_host_workbench(
+        platform_key=managed_platform["platform_key"],
+        external_user_id="runtime-user-a",
+        external_user_name="Runtime User A",
+        external_org_id="org-a",
+        conversation_id=None,
+        conversation_key="runtime-1",
+        host_name="Runtime Host",
+    )[0]
+    managed_conversation = store_service.get_conversation_by_session(managed_session.session_id)
+    assert managed_conversation is not None
+
+    closed_session = conversation_service.bootstrap_host_workbench(
+        platform_key=managed_platform["platform_key"],
+        external_user_id="runtime-user-b",
+        external_user_name="Runtime User B",
+        external_org_id="org-a",
+        conversation_id=None,
+        conversation_key="runtime-2",
+        host_name="Runtime Host",
+    )[0]
+    closed_conversation = store_service.get_conversation_by_session(closed_session.session_id)
+    assert closed_conversation is not None
+
+    other_session = conversation_service.bootstrap_host_workbench(
+        platform_key=unmanaged_platform["platform_key"],
+        external_user_id="runtime-user-c",
+        external_user_name="Runtime User C",
+        external_org_id="org-b",
+        conversation_id=None,
+        conversation_key="runtime-3",
+        host_name="Other Runtime Host",
+    )[0]
+    other_conversation = store_service.get_conversation_by_session(other_session.session_id)
+    assert other_conversation is not None
+
+    now = datetime.now(timezone.utc).isoformat()
+    store_service.upsert_session_runtime(
+        session_id=managed_session.session_id,
+        conversation_id=managed_conversation["conversation_id"],
+        platform_id=managed_platform["platform_id"],
+        owner_user_id=None,
+        external_user_id="runtime-user-a",
+        container_name="runtime-live",
+        container_id="runtime-live-id",
+        image=settings.sandbox_docker_image,
+        status="running",
+        generation=1,
+        network_mode="bridge",
+        created_at=now,
+        updated_at=now,
+        last_started_at=now,
+        last_used_at=now,
+        idle_expires_at=now,
+        max_expires_at=now,
+        destroyed_at=None,
+        destroy_reason=None,
+        restart_count=0,
+        workspace_root="workspace-a",
+        home_root="home-a",
+        metadata={},
+    )
+    store_service.upsert_session_runtime(
+        session_id=closed_session.session_id,
+        conversation_id=closed_conversation["conversation_id"],
+        platform_id=managed_platform["platform_id"],
+        owner_user_id=None,
+        external_user_id="runtime-user-b",
+        container_name="runtime-closed",
+        container_id="runtime-closed-id",
+        image=settings.sandbox_docker_image,
+        status="collected",
+        generation=1,
+        network_mode="bridge",
+        created_at=now,
+        updated_at=now,
+        last_started_at=now,
+        last_used_at=now,
+        idle_expires_at=now,
+        max_expires_at=now,
+        destroyed_at=now,
+        destroy_reason="admin_collected",
+        restart_count=0,
+        workspace_root="workspace-b",
+        home_root="home-b",
+        metadata={},
+    )
+    store_service.upsert_session_runtime(
+        session_id=other_session.session_id,
+        conversation_id=other_conversation["conversation_id"],
+        platform_id=unmanaged_platform["platform_id"],
+        owner_user_id=None,
+        external_user_id="runtime-user-c",
+        container_name="runtime-other",
+        container_id="runtime-other-id",
+        image=settings.sandbox_docker_image,
+        status="running",
+        generation=1,
+        network_mode="bridge",
+        created_at=now,
+        updated_at=now,
+        last_started_at=now,
+        last_used_at=now,
+        idle_expires_at=now,
+        max_expires_at=now,
+        destroyed_at=None,
+        destroy_reason=None,
+        restart_count=0,
+        workspace_root="workspace-c",
+        home_root="home-c",
+        metadata={},
+    )
+
+    async def fake_list_runtimes(*, refresh: bool = True):
+        return store_service.list_session_runtimes()
+
+    monkeypatch.setattr("app.api.routes.runtimes.session_runtime_service.list_runtimes", fake_list_runtimes)
+
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {platform_admin_token}"}
+
+    listing = client.get("/api/v1/admin/runtimes", headers=headers)
+    assert listing.status_code == 200
+    assert [item["session_id"] for item in listing.json()["data"]] == [managed_session.session_id]
+
+    all_items = client.get("/api/v1/admin/runtimes?include_inactive=true", headers=headers)
+    assert all_items.status_code == 200
+    assert {item["session_id"] for item in all_items.json()["data"]} == {
+        managed_session.session_id,
+        closed_session.session_id,
+    }

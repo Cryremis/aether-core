@@ -387,7 +387,7 @@ class ToolService:
             shell=arguments.get("shell"),
         )
         artifact_service.sync_output_directory(session)
-        return {
+        response: dict[str, Any] = {
             "command": result.command,
             "shell": result.shell,
             "executor": result.executor,
@@ -397,6 +397,28 @@ class ToolService:
             "duration_ms": result.duration_ms,
             "log_path": result.log_path,
         }
+        runtime_metadata = result.runtime_metadata or {}
+        if runtime_metadata:
+            response["runtime"] = runtime_metadata
+        if runtime_metadata.get("status") == "recreated":
+            response["runtime_events"] = [
+                {
+                    "type": "runtime_recreated",
+                    "payload": runtime_metadata,
+                }
+            ]
+            response["injected_messages"] = [
+                {
+                    "role": "system",
+                    "visible_in_transcript": False,
+                    "content": (
+                        "会话 runtime 已被重建。原因: "
+                        f"{runtime_metadata.get('reason', 'unknown')}。"
+                        " 之前容器内的进程态已经丢失；工作区与 home 持久目录仍然保留，可继续读取其中的文件与缓存。"
+                    ),
+                }
+            ]
+        return response
 
     def list_tool_schemas(self, session: AgentSession) -> list[dict[str, Any]]:
         """返回会话可用的工具 schema 列表。"""

@@ -191,6 +191,74 @@ export type PromptConfigSummary = {
   updated_at?: string | null;
 };
 
+export type SessionRuntimeSummary = {
+  session_id: string;
+  conversation_id?: string | null;
+  conversation_title?: string | null;
+  conversation_host_name?: string | null;
+  platform_id?: number | null;
+  platform_display_name?: string | null;
+  owner_user_id?: number | null;
+  owner_user_name?: string | null;
+  external_user_id?: string | null;
+  container_name?: string | null;
+  container_id?: string | null;
+  image?: string | null;
+  status: string;
+  generation?: number;
+  network_mode?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_started_at?: string | null;
+  last_used_at?: string | null;
+  idle_expires_at?: string | null;
+  max_expires_at?: string | null;
+  destroyed_at?: string | null;
+  destroy_reason?: string | null;
+  restart_count?: number;
+  workspace_root?: string | null;
+  home_root?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type AuditConversationSummary = {
+  conversation_id: string;
+  session_id: string;
+  title: string;
+  host_name: string;
+  platform_id?: number | null;
+  platform_display_name?: string | null;
+  owner_user_id?: number | null;
+  owner_user_name?: string | null;
+  external_user_id?: string | null;
+  external_user_name?: string | null;
+  external_org_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  last_message_at?: string | null;
+  message_count: number;
+  conversation_key?: string | null;
+};
+
+export type AuditSessionMessage = {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  blocks?: Array<Record<string, unknown>>;
+};
+
+export type AuditConversationDetail = {
+  session_id: string;
+  conversation_id?: string | null;
+  title: string;
+  host_name: string;
+  message_count: number;
+  allow_network: boolean;
+  created_at: string;
+  messages: AuditSessionMessage[];
+  runtime?: SessionRuntimeSummary | null;
+  audit: AuditConversationSummary;
+};
+
 export type WorkItemStatus = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
 export type WorkboardStatus = "idle" | "active" | "completed" | "blocked";
 
@@ -798,6 +866,49 @@ export async function updateUserRole(userId: number, payload: UserRoleUpdatePayl
   });
   if (!response.ok) {
     throw new Error(`更新用户角色失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function listAdminRuntimes() {
+  const response = await apiFetch("/admin/runtimes");
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `获取 runtime 列表失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function listAdminRuntimesHistory() {
+  const response = await apiFetch("/admin/runtimes?include_inactive=true");
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `获取 runtime 历史失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function collectAdminRuntime(sessionId: string) {
+  const response = await apiFetch(`/admin/runtimes/${encodeURIComponent(sessionId)}/collect`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `回收 runtime 失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function listAdminConversations(platformId?: number) {
+  const query = platformId ? `?platform_id=${platformId}` : "";
+  const response = await apiFetch(`/admin/conversations${query}`);
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `获取审计会话失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function getAdminConversationDetail(sessionId: string) {
+  const response = await apiFetch(`/admin/conversations/${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `获取审计会话详情失败: ${response.status}`));
   }
   return response.json();
 }

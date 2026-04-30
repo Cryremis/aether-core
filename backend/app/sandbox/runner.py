@@ -94,6 +94,7 @@ class SandboxRunner:
             "duration_ms": result.duration_ms,
             "stdout": result.stdout,
             "stderr": result.stderr,
+            "runtime_metadata": result.runtime_metadata,
         }
         if extra:
             log_payload["extra"] = extra
@@ -107,6 +108,7 @@ class SandboxRunner:
             stderr=result.stderr,
             duration_ms=result.duration_ms,
             log_path=str(log_path.relative_to(workspace.root)),
+            runtime_metadata=result.runtime_metadata,
         )
 
 

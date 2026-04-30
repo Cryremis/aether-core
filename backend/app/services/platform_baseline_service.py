@@ -281,6 +281,7 @@ class PlatformBaselineService:
 
         root = self.ensure_platform_root(platform_key)
         session_service.bind_baseline_root(session, root)
+        self._sync_baseline_to_workspace(root, session)
 
         platform_files: list[dict[str, object]] = []
         for item in self.list_files(platform_key):
@@ -309,6 +310,29 @@ class PlatformBaselineService:
         for item in loaded_skills:
             item["base_dir"] = str(Path(str(item["path"])).parent)
         session_service.replace_platform_assets(session, files=platform_files, skills=loaded_skills)
+
+    def _sync_baseline_to_workspace(self, baseline_root: Path, session: AgentSession) -> None:
+        if session.workspace is None:
+            return
+        section_roots = {
+            "input": session.workspace.input_dir,
+            "skills": session.workspace.skills_dir,
+            "work": session.workspace.work_dir,
+            "output": session.workspace.output_dir,
+            "logs": session.workspace.logs_dir,
+        }
+        for section, target_root in section_roots.items():
+            source_root = baseline_root / section
+            if not source_root.exists():
+                continue
+            for source_path in sorted(source_root.rglob("*")):
+                relative = source_path.relative_to(source_root)
+                target_path = target_root / relative
+                if source_path.is_dir():
+                    target_path.mkdir(parents=True, exist_ok=True)
+                    continue
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target_path)
 
     def _ensure_within_root(self, root: Path, target: Path) -> Path:
         resolved_root = root.resolve(strict=False)

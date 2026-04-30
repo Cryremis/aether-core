@@ -152,6 +152,7 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         files=[*file_service.list_uploads(session), *artifact_service.list_artifacts(session)],
         messages=session.messages,
         context_state=session.context_state,
+        runtime=store_service.get_session_runtime(session.session_id),
         workboard=runtime_state_service.get_workboard(session),
         elicitation=runtime_state_service.get_elicitation(session),
     )

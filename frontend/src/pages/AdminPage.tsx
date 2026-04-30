@@ -28,7 +28,7 @@ export function AdminPage({ currentUser, onBack }: AdminPageProps) {
             </div>
             <div>
               <h1>管理控制台</h1>
-              <p>统一处理平台注册审批、负责人治理、系统角色授权，以及平台基线与模型配置。</p>
+              <p>统一处理平台注册审批、负责人治理、平台审计、runtime 管理，以及平台基线与模型配置。</p>
             </div>
           </div>
         </div>

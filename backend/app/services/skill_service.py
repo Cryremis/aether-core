@@ -34,6 +34,7 @@ class SkillService:
     def build_system_prompt(self, session: AgentSession) -> str:
         context = session.host_context or {}
         skill_listing = self._format_skill_listing(session)
+        sandbox_paths = self._sandbox_path_map()
         return (
             "你是 AetherCore 的生产级工作台 Agent。\n"
             "你运行在服务端受限沙箱中，必须优先通过工具读取文件、执行脚本、生成产物，并保持过程可追踪。\n"
@@ -47,10 +48,14 @@ class SkillService:
             "7. 不要只提到某个技能而不调用 invoke_skill；技能加载后，严格遵循该技能中的工作流与约束。\n\n"
             f"## 宿主信息\n宿主名称: {session.host_name or 'AetherCore'}\n"
             f"宿主上下文: {context}\n\n"
-            f"## 沙箱路径约定\n输入目录: {session.workspace.input_dir if session.workspace else ''}\n"
-            f"技能目录: {session.workspace.skills_dir if session.workspace else ''}\n"
-            f"工作目录: {session.workspace.work_dir if session.workspace else ''}\n"
-            f"输出目录: {session.workspace.output_dir if session.workspace else ''}\n\n"
+            "## 沙箱路径约定\n"
+            f"沙箱根目录: {sandbox_paths['root']}\n"
+            f"输入目录: {sandbox_paths['input']}\n"
+            f"技能目录: {sandbox_paths['skills']}\n"
+            f"工作目录: {sandbox_paths['work']}\n"
+            f"输出目录: {sandbox_paths['output']}\n"
+            f"日志目录: {sandbox_paths['logs']}\n"
+            "所有工具中的相对路径，都应当优先按沙箱根目录解析；例如用户上传文件通常位于 `input/` 下。\n\n"
             "## 可用技能\n"
             f"{skill_listing}"
         )
@@ -72,16 +77,31 @@ class SkillService:
     def build_environment_prompt(self, session: AgentSession) -> str:
         context = session.host_context or {}
         skill_listing = self._format_skill_listing(session)
+        sandbox_paths = self._sandbox_path_map()
         return (
             f"## 宿主信息\n宿主名称: {session.host_name or 'AetherCore'}\n"
             f"宿主上下文: {context}\n\n"
-            f"## 沙箱路径约定\n输入目录: {session.workspace.input_dir if session.workspace else ''}\n"
-            f"技能目录: {session.workspace.skills_dir if session.workspace else ''}\n"
-            f"工作目录: {session.workspace.work_dir if session.workspace else ''}\n"
-            f"输出目录: {session.workspace.output_dir if session.workspace else ''}\n\n"
+            "## 沙箱路径约定\n"
+            f"沙箱根目录: {sandbox_paths['root']}\n"
+            f"输入目录: {sandbox_paths['input']}\n"
+            f"技能目录: {sandbox_paths['skills']}\n"
+            f"工作目录: {sandbox_paths['work']}\n"
+            f"输出目录: {sandbox_paths['output']}\n"
+            f"日志目录: {sandbox_paths['logs']}\n"
+            "所有工具中的相对路径，都应当优先按沙箱根目录解析；例如用户上传文件通常位于 `input/` 下。\n\n"
             "## 可用技能\n"
             f"{skill_listing}"
         )
+
+    def _sandbox_path_map(self) -> dict[str, str]:
+        return {
+            "root": settings.sandbox_docker_workspace_mount,
+            "input": settings.sandbox_docker_input_dir,
+            "skills": settings.sandbox_docker_skills_dir,
+            "work": settings.sandbox_docker_work_dir,
+            "output": settings.sandbox_docker_output_dir,
+            "logs": settings.sandbox_docker_logs_dir,
+        }
 
     def install_skill_upload(
         self,

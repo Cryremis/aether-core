@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.core.config import settings
 from app.schemas.prompt import PlatformPromptConfigSummary, PlatformPromptConfigUpdateRequest
 from app.services.session_types import AgentSession
 from app.services.skill_service import skill_service
@@ -115,10 +116,12 @@ class PromptService:
                 "context": host_context,
             },
             "workspace": {
-                "input_dir": str(session.workspace.input_dir) if session and session.workspace else "",
-                "skills_dir": str(session.workspace.skills_dir) if session and session.workspace else "",
-                "work_dir": str(session.workspace.work_dir) if session and session.workspace else "",
-                "output_dir": str(session.workspace.output_dir) if session and session.workspace else "",
+                "root_dir": settings.sandbox_docker_workspace_mount if session and session.workspace else "",
+                "input_dir": settings.sandbox_docker_input_dir if session and session.workspace else "",
+                "skills_dir": settings.sandbox_docker_skills_dir if session and session.workspace else "",
+                "work_dir": settings.sandbox_docker_work_dir if session and session.workspace else "",
+                "output_dir": settings.sandbox_docker_output_dir if session and session.workspace else "",
+                "logs_dir": settings.sandbox_docker_logs_dir if session and session.workspace else "",
             },
         }
 

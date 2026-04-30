@@ -38,6 +38,7 @@ class AgentEvent(BaseModel):
         "tool_progress",
         "tool_finished",
         "artifact_created",
+        "runtime_recreated",
         "workboard_snapshot",
         "workboard_updated",
         "elicitation_snapshot",
