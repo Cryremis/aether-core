@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     auth_oauth_config_json: str = ""
 
     agent_max_turns: int = 0
-    agent_max_runtime_seconds: int = 1800
+    agent_max_runtime_seconds: int = 0
     agent_max_stall_rounds: int = 0
 
     storage_root: Path = Path("storage")
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     sandbox_local_enabled: bool = False
     sandbox_shell: str = "bash"
     sandbox_command_timeout_seconds: int = 120
-    sandbox_command_max_timeout_seconds: int = 1800
+    sandbox_command_max_timeout_seconds: int = 0
     sandbox_cancel_grace_seconds: int = 2
     sandbox_force_kill_grace_seconds: int = 3
     sandbox_runtime_busy_wait_seconds: int = 8

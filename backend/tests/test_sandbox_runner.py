@@ -238,6 +238,15 @@ def test_runtime_timeout_is_clamped_by_max(monkeypatch):
     assert session_runtime_service._effective_timeout_seconds(9999) == 300
 
 
+def test_runtime_timeout_no_max_limit_when_zero(monkeypatch):
+    monkeypatch.setattr(settings, "sandbox_command_timeout_seconds", 120)
+    monkeypatch.setattr(settings, "sandbox_command_max_timeout_seconds", 0)
+
+    assert session_runtime_service._effective_timeout_seconds(None) == 120
+    assert session_runtime_service._effective_timeout_seconds(30) == 30
+    assert session_runtime_service._effective_timeout_seconds(9999) == 9999
+
+
 def test_runtime_busy_error_when_runtime_remains_draining(tmp_path, monkeypatch):
     initialize_store(tmp_path)
     workspace = build_workspace(tmp_path / "sandbox")

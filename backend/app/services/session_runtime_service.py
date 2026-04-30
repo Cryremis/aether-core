@@ -869,12 +869,17 @@ class SessionRuntimeService:
                 "container_name": runtime["container_name"],
                 "idle_expires_at": runtime["idle_expires_at"],
                 "timeout_seconds": effective_timeout,
-            },
+},
         )
 
     def _effective_timeout_seconds(self, requested_timeout: int | None) -> int:
         default_timeout = max(1, int(settings.sandbox_command_timeout_seconds))
-        max_timeout = max(default_timeout, int(settings.sandbox_command_max_timeout_seconds))
+        max_timeout = int(settings.sandbox_command_max_timeout_seconds)
+        if max_timeout <= 0:
+            if requested_timeout is None:
+                return default_timeout
+            return max(1, int(requested_timeout))
+        max_timeout = max(default_timeout, max_timeout)
         if requested_timeout is None:
             return min(default_timeout, max_timeout)
         return max(1, min(int(requested_timeout), max_timeout))

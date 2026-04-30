@@ -98,7 +98,10 @@ class SandboxRunner:
     def _normalize_timeout(self, timeout_seconds: int | None) -> int | None:
         if timeout_seconds is None:
             return None
-        return max(1, min(int(timeout_seconds), int(settings.sandbox_command_max_timeout_seconds)))
+        max_timeout = int(settings.sandbox_command_max_timeout_seconds)
+        if max_timeout <= 0:
+            return max(1, int(timeout_seconds))
+        return max(1, min(int(timeout_seconds), max_timeout))
 
     def _write_log(
         self,
