@@ -190,3 +190,53 @@ def test_prompt_workspace_paths_use_container_paths(tmp_path):
     )
 
     assert rendered == "/workspace|/workspace/input|/workspace/work|/workspace/logs"
+
+
+def test_read_tool_supports_offset_and_line_numbers(tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_read_tool")
+    target = session.workspace.work_dir / "demo.txt"
+    target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    result = __import__("asyncio").run(
+        tool_service.execute(
+            session,
+            "read",
+            {
+                "file_path": "work/demo.txt",
+                "offset": 2,
+                "limit": 2,
+            },
+        )
+    )
+
+    assert result["file"]["file_path"] == "/workspace/work/demo.txt"
+    assert result["file"]["start_line"] == 2
+    assert result["file"]["total_lines"] == 3
+    assert "2\tbeta" in result["file"]["content"]
+    assert "3\tgamma" in result["file"]["content"]
+
+
+def test_list_tool_defaults_to_workspace_root(tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_list_tool")
+    (session.workspace.input_dir / "upload.txt").write_text("demo", encoding="utf-8")
+
+    result = __import__("asyncio").run(
+        tool_service.execute(
+            session,
+            "list",
+            {},
+        )
+    )
+
+    names = [item["name"] for item in result["items"]]
+    assert result["path"] == "/workspace"
+    assert "input" in names
+    assert "work" in names

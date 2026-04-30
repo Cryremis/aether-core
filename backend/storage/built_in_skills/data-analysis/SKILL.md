@@ -3,8 +3,8 @@
 name: data-analysis
 description: 数据分析技能，面向表格、CSV、Excel 与宿主业务数据查询场景。
 allowed_tools:
-  - list_files
-  - read_workspace_file
+  - list
+  - read
   - sandbox_shell
   - create_text_artifact
 tags:

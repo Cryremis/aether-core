@@ -241,23 +241,31 @@ class ToolService:
         )
 
         self._registry.register(
-            "list_files",
-            "列出当前会话可见文件与产物。",
-            {"properties": {}, "additionalProperties": False},
-            self._handle_list_files,
-        )
-
-        self._registry.register(
-            "read_workspace_file",
-            "读取沙箱中的文本文件。优先使用 file_id，或使用相对路径。",
+            "list",
+            "列出沙箱目录内容。默认以沙箱根目录 `/workspace` 为起点，可用于查看 input/work/output/skills/logs 等目录。",
             {
                 "properties": {
-                    "file_id": {"type": "string"},
-                    "relative_path": {"type": "string"},
+                    "path": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
                 },
                 "additionalProperties": False,
             },
-            self._handle_read_workspace_file,
+            self._handle_list,
+        )
+
+        self._registry.register(
+            "read",
+            "读取沙箱中的文本文件。默认以沙箱根目录 `/workspace` 为基准解析路径，可按行偏移读取。",
+            {
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "file_path": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 1},
+                    "limit": {"type": "integer", "minimum": 1},
+                },
+                "additionalProperties": False,
+            },
+            self._handle_read,
         )
 
         self._registry.register(
@@ -353,21 +361,44 @@ class ToolService:
     async def _handle_list_skills(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
         return {"items": [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]}
 
-    async def _handle_list_files(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_list(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
         return {
+            "path": arguments.get("path") or "/workspace",
             "items": [
-                item.model_dump(mode="json")
-                for item in file_service.list_visible_files(session) + artifact_service.list_artifacts(session)
-            ]
+                {
+                    "path": item.path,
+                    "name": item.name,
+                    "type": item.entry_type,
+                    "size": item.size,
+                    "source": item.source,
+                    "file_id": item.file_id,
+                }
+                for item in file_service.list(
+                    session,
+                    path=arguments.get("path"),
+                    limit=int(arguments.get("limit") or 200),
+                )
+            ],
         }
 
-    async def _handle_read_workspace_file(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_read(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = file_service.read(
+            session,
+            file_id=arguments.get("file_id"),
+            file_path=arguments.get("file_path"),
+            offset=int(arguments.get("offset") or 1),
+            limit=int(arguments["limit"]) if arguments.get("limit") is not None else None,
+        )
         return {
-            "content": file_service.read_text(
-                session,
-                file_id=arguments.get("file_id"),
-                relative_path=arguments.get("relative_path"),
-            )
+            "file": {
+                "file_path": result.file_path,
+                "content": result.content,
+                "num_lines": result.num_lines,
+                "start_line": result.start_line,
+                "total_lines": result.total_lines,
+                "truncated": result.truncated,
+                "size": result.size,
+            }
         }
 
     async def _handle_create_text_artifact(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:

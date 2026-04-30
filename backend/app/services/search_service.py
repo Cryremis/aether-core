@@ -4,14 +4,12 @@
 """
 from __future__ import annotations
 
-import posixpath
 from dataclasses import dataclass
 from typing import Any
 
 from app.services.ripgrep_service import ripgrep_service
 from app.services.session_types import AgentSession
-from app.sandbox.models import SandboxWorkspace
-from app.core.config import settings
+from app.services.workspace_path_service import workspace_path_service
 
 
 GLOB_DESCRIPTION = """- Fast file pattern matching tool that works with any codebase size
@@ -139,10 +137,6 @@ class GrepArgs:
 class SearchService:
     """搜索工具服务，处理 glob 和 grep 工具调用。"""
 
-    def _normalize_container_path(self, path: str) -> str:
-        normalized = path.replace("\\", "/")
-        return posixpath.normpath(normalized)
-
     def get_schemas(self) -> list[dict[str, Any]]:
         """返回 glob 和 grep 工具的 schema 定义。"""
         return [
@@ -194,44 +188,8 @@ class SearchService:
             return None
 
     def resolve_cwd(self, session: AgentSession, path: str | None) -> str:
-        """解析工作目录（容器内路径）。
-        
-        支持以下路径格式：
-        - None 或空：默认 /workspace
-        - 绝对路径：直接返回（假设是容器内路径）
-        - 相对路径：相对于 /workspace 解析
-        - 特殊目录名（input/output/skills/logs）：映射到对应容器目录
-        """
-        if session.workspace is None:
-            raise RuntimeError("会话沙箱尚未初始化。")
-        
-        container_root = settings.sandbox_docker_workspace_mount
-        
-        if path is None or not path.strip():
-            return container_root
-        
-        path = self._normalize_container_path(path.strip())
-        
-        if path.startswith("/"):
-            return path
-        
-        special_dirs = {
-            "input": settings.sandbox_docker_input_dir,
-            "output": settings.sandbox_docker_output_dir,
-            "skills": settings.sandbox_docker_skills_dir,
-            "logs": settings.sandbox_docker_logs_dir,
-            "work": settings.sandbox_docker_work_dir,
-        }
-        
-        first_part = path.split("/")[0].split("\\")[0]
-        if first_part in special_dirs:
-            remainder = path[len(first_part):].strip("/\\")
-            base = special_dirs[first_part]
-            if remainder:
-                return posixpath.join(base, remainder)
-            return base
-        
-        return posixpath.join(container_root, path)
+        """解析工作目录（容器内路径）。"""
+        return workspace_path_service.normalize_logical_path(path)
 
     async def execute_glob(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
         """执行 glob 工具。"""

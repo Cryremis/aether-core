@@ -4,8 +4,8 @@ name: general-assistant
 description: 通用平台助手，负责基础问答、任务拆解与宿主上下文理解。
 allowed_tools:
   - list_skills
-  - list_files
-  - read_workspace_file
+  - list
+  - read
   - create_text_artifact
   - sandbox_shell
 tags:
