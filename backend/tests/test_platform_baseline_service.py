@@ -136,3 +136,7 @@ def test_platform_baseline_file_manager_operations(tmp_path):
 
     platform_baseline_service.delete_file("standalone", relative_path="input/docs/specs/guide.md")
     assert not (platform_root / "input" / "docs" / "specs" / "guide.md").exists()
+
+    import shutil
+
+    shutil.rmtree(platform_root / "input" / "docs")
