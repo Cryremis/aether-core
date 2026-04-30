@@ -60,15 +60,11 @@ def test_transcript_service_merges_tool_result_into_assistant_tool_block():
 
     transcript = transcript_service.build_chat_transcript(messages)
 
-    assert len(transcript) == 3
+    assert len(transcript) == 2
     assert transcript[0]["role"] == "user"
     assert transcript[1]["role"] == "assistant"
     assert transcript[1]["blocks"][0]["kind"] == "content"
     assert transcript[1]["elapsedMs"] == 120
-    assert transcript[2]["role"] == "assistant"
-    assert transcript[2]["blocks"][0]["kind"] == "tool"
-    assert transcript[2]["blocks"][0]["status"] == "done"
-    assert "stdout" in transcript[2]["blocks"][0]["outputText"]
 
 
 def test_transcript_service_uses_canonical_display_for_sandbox_shell_alias():
@@ -171,13 +167,11 @@ def test_transcript_service_does_not_prepend_orphan_shell_before_reasoning_block
     ]
 
     transcript = transcript_service.build_chat_transcript(messages)
-    assert len(transcript) == 2
+    assert len(transcript) == 1
     # first visible assistant item should remain the reasoning/content message
     assert transcript[0]["role"] == "assistant"
     assert transcript[0]["blocks"][0]["kind"] == "reasoning"
-    # orphan tool result is still visible, but not prepended above reasoning message
-    assert transcript[1]["role"] == "assistant"
-    assert transcript[1]["blocks"][0]["kind"] == "tool"
+    # orphan tool result is dropped to avoid dangling shell cards in refreshed transcript
 
 
 def test_transcript_service_preserves_runtime_notice_block():

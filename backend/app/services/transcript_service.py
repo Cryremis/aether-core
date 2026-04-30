@@ -88,28 +88,8 @@ class TranscriptService:
                     }
                 )
 
-        # Any still-pending tool results did not find a matching assistant block; keep them visible.
-        for pending_id, pending in pending_tool_results.items():
-            orphan_display = tool_display_service.resolve(str(pending.get("tool_name") or "tool"), {})
-            transcript.append(
-                {
-                    "id": f"tool-pending-{pending_id}",
-                    "role": "assistant",
-                    "blocks": [
-                        {
-                            "id": pending_id,
-                            "kind": "tool",
-                            "title": orphan_display.get("title", "tool"),
-                            "meta": orphan_display.get("meta", "tool"),
-                            "argumentsText": "",
-                            "outputText": str(pending.get("outputText") or ""),
-                            "status": str(pending.get("status") or "done"),
-                        }
-                    ],
-                    "elapsedMs": None,
-                    "streaming": False,
-                }
-            )
+        # Any still-pending tool results are dropped from UI transcript when no matching assistant tool block exists.
+        # This avoids dangling shell cards rendered far away from their reasoning/content context.
 
         return transcript
 
