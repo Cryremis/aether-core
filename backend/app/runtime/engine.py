@@ -41,6 +41,39 @@ class AgentEngine:
                 block.update(updates)
                 return
 
+    def _ensure_elapsed_block(self, blocks: list[dict[str, Any]], elapsed_ms: int) -> None:
+        if any(str(block.get("kind")) == "elapsed" for block in blocks):
+            return
+        blocks.insert(
+            0,
+            {
+                "id": f"elapsed_{uuid.uuid4().hex[:8]}",
+                "kind": "elapsed",
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+
+    def _persist_assistant_round(
+        self,
+        session: AgentSession,
+        *,
+        turn_index: int,
+        content: str | None,
+        blocks: list[dict[str, Any]],
+        tool_calls: list[dict[str, Any]] | None = None,
+        visible_in_transcript: bool = True,
+    ) -> None:
+        message = context_message_adapter.make_assistant_message(
+            content=content if content else None,
+            tool_calls=tool_calls,
+            blocks=blocks if blocks else None,
+            turn_index=turn_index,
+        )
+        if not visible_in_transcript:
+            message["visible_in_transcript"] = False
+        session.messages.append(message)
+        session_service.persist(session)
+
     def _append_runtime_notice_block(self, blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
         if str(payload.get("status") or "") != "recreated":
             return
@@ -232,6 +265,18 @@ class AgentEngine:
             turn_count += 1
 
             if self._run_is_aborted(session, run_id):
+                if persisted_assistant_blocks or session.get_partial_content(run_id):
+                    partial_text = session.get_partial_content(run_id).strip() or None
+                    self._ensure_elapsed_block(
+                        persisted_assistant_blocks,
+                        int((time.perf_counter() - started_at) * 1000),
+                    )
+                    self._persist_assistant_round(
+                        session,
+                        turn_index=request_turn_index,
+                        content=partial_text,
+                        blocks=persisted_assistant_blocks,
+                    )
                 async for event in self._emit_aborted(
                     session,
                     run_id=run_id,
@@ -336,6 +381,18 @@ class AgentEngine:
             try:
                 async for chunk in llm_client.stream_chat_completion(llm_runtime, messages, tools):
                     if self._run_is_aborted(session, run_id):
+                        if persisted_assistant_blocks or session.get_partial_content(run_id):
+                            partial_text = session.get_partial_content(run_id).strip() or None
+                            self._ensure_elapsed_block(
+                                persisted_assistant_blocks,
+                                int((time.perf_counter() - started_at) * 1000),
+                            )
+                            self._persist_assistant_round(
+                                session,
+                                turn_index=request_turn_index,
+                                content=partial_text,
+                                blocks=persisted_assistant_blocks,
+                            )
                         async for event in self._emit_aborted(
                             session,
                             run_id=run_id,
@@ -516,14 +573,14 @@ class AgentEngine:
                     }
                     for _, tool_call in sorted(tool_calls.items())
                 ]
-                session.messages.append(
-                    context_message_adapter.make_assistant_message(
-                        content=str(assistant_message.get("content")) if assistant_message.get("content") else None,
-                        tool_calls=assistant_message["tool_calls"],
-                        turn_index=request_turn_index,
-                    )
+                self._persist_assistant_round(
+                    session,
+                    turn_index=request_turn_index,
+                    content=str(assistant_message.get("content")) if assistant_message.get("content") else None,
+                    blocks=persisted_assistant_blocks,
+                    tool_calls=assistant_message["tool_calls"],
+                    visible_in_transcript=False,
                 )
-                session_service.persist(session)
 
                 for _, tool_call in sorted(tool_calls.items()):
                     tool_name = tool_call["name"]
@@ -575,6 +632,16 @@ class AgentEngine:
                                     id=tool_call["id"],
                                     tool_name=tool_name,
                                     output=result,
+                                )
+                                self._ensure_elapsed_block(
+                                    persisted_assistant_blocks,
+                                    int((time.perf_counter() - started_at) * 1000),
+                                )
+                                self._persist_assistant_round(
+                                    session,
+                                    turn_index=request_turn_index,
+                                    content=session.get_partial_content(run_id).strip() or None,
+                                    blocks=persisted_assistant_blocks,
                                 )
                                 async for event in self._emit_aborted(
                                     session,
@@ -687,6 +754,16 @@ class AgentEngine:
 
                     control = result.get("control", {}) if isinstance(result, dict) else {}
                     if control.get("type") == "await_user_input" and control.get("blocking", True):
+                        self._ensure_elapsed_block(
+                            persisted_assistant_blocks,
+                            int((time.perf_counter() - started_at) * 1000),
+                        )
+                        self._persist_assistant_round(
+                            session,
+                            turn_index=request_turn_index,
+                            content=session.get_partial_content(run_id).strip() or None,
+                            blocks=persisted_assistant_blocks,
+                        )
                         yield make_event(
                             session,
                             "completed",
@@ -698,6 +775,16 @@ class AgentEngine:
                         return
 
                     if self._run_is_aborted(session, run_id):
+                        self._ensure_elapsed_block(
+                            persisted_assistant_blocks,
+                            int((time.perf_counter() - started_at) * 1000),
+                        )
+                        self._persist_assistant_round(
+                            session,
+                            turn_index=request_turn_index,
+                            content=session.get_partial_content(run_id).strip() or None,
+                            blocks=persisted_assistant_blocks,
+                        )
                         async for event in self._emit_aborted(
                             session,
                             run_id=run_id,
@@ -719,19 +806,13 @@ class AgentEngine:
             final_answer = assistant_content.strip()
             if final_answer:
                 final_elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-                persisted_assistant_blocks.insert(0, {
-                    "id": f"elapsed_{uuid.uuid4().hex[:8]}",
-                    "kind": "elapsed",
-                    "elapsed_ms": final_elapsed_ms,
-                })
-                session.messages.append(
-                    context_message_adapter.make_assistant_message(
-                        content=final_answer,
-                        blocks=persisted_assistant_blocks,
-                        turn_index=request_turn_index,
-                    )
+                self._ensure_elapsed_block(persisted_assistant_blocks, final_elapsed_ms)
+                self._persist_assistant_round(
+                    session,
+                    turn_index=request_turn_index,
+                    content=final_answer,
+                    blocks=persisted_assistant_blocks,
                 )
-                session_service.persist(session)
                 store_service.touch_conversation(
                     session.session_id,
                     message_count=len(session.messages),

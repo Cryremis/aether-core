@@ -6,6 +6,7 @@ import type {
   CurrentUserProfile,
   PlatformRegistrationRequestSummary,
   SessionRuntimeSummary,
+  TranscriptChatMessage,
   UserSummary,
 } from "../api/client";
 import {
@@ -93,6 +94,13 @@ function renderAuditMessageContent(detail: AuditConversationDetail | null, index
     return JSON.stringify(message.blocks, null, 2);
   }
   return "";
+}
+
+function renderAuditTranscriptContent(message: TranscriptChatMessage) {
+  if (message.role === "user") return message.content;
+  const blocks = message.blocks ?? [];
+  if (blocks.length === 0) return "";
+  return JSON.stringify(blocks, null, 2);
 }
 
 export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
@@ -694,7 +702,19 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
                     <p>创建时间：{formatTime(selectedAuditDetail.created_at)} · 最后更新时间：{formatTime(selectedAuditDetail.audit.updated_at)}</p>
                     <p>当前 runtime：{selectedAuditDetail.runtime ? getRuntimeStatusLabel(selectedAuditDetail.runtime.status) : "尚未创建"}</p>
                     <div className="management-console__audit-timeline">
-                      {selectedAuditDetail.messages.map((message, index) => (
+                      {(selectedAuditDetail.transcript && selectedAuditDetail.transcript.length > 0
+                        ? selectedAuditDetail.transcript.map((message, index) => (
+                            <article key={`${selectedAuditDetail.session_id}-t-${index}`} className="management-console__audit-message">
+                              <div className="management-console__audit-message-head">
+                                <span className={`request-status request-status--${message.role === "assistant" ? "approved" : "pending"}`}>
+                                  {message.role}
+                                </span>
+                                <span>#{index + 1}</span>
+                              </div>
+                              <pre>{renderAuditTranscriptContent(message)}</pre>
+                            </article>
+                          ))
+                        : selectedAuditDetail.messages.map((message, index) => (
                         <article key={`${selectedAuditDetail.session_id}-${index}`} className="management-console__audit-message">
                           <div className="management-console__audit-message-head">
                             <span className={`request-status request-status--${message.role === "assistant" ? "approved" : message.role === "tool" ? "returned" : "pending"}`}>
@@ -704,7 +724,7 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
                           </div>
                           <pre>{renderAuditMessageContent(selectedAuditDetail, index)}</pre>
                         </article>
-                      ))}
+                      )))}
                     </div>
                   </>
                 ) : (

@@ -14,6 +14,7 @@ from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
+from app.services.transcript_service import transcript_service
 
 router = APIRouter(prefix="/api/v1/agent/sessions", tags=["sessions"])
 
@@ -151,6 +152,7 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         skills=skill_service.list_for_session(session),
         files=[*file_service.list_uploads(session), *artifact_service.list_artifacts(session)],
         messages=session.messages,
+        transcript=transcript_service.build_chat_transcript(session.messages),
         context_state=session.context_state,
         runtime=store_service.get_session_runtime(session.session_id),
         workboard=runtime_state_service.get_workboard(session),

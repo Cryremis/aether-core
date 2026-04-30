@@ -23,6 +23,7 @@ import {
   updateUserLlmConfig,
   uploadFile,
   uploadSkill,
+  type TranscriptChatMessage,
 } from "../api/client";
 import { ElicitationPanel } from "../components/ElicitationPanel";
 import { WorkboardDock } from "../components/WorkboardDock";
@@ -97,6 +98,26 @@ function buildSystemEventMessage(
     detail,
     eventType,
   };
+}
+
+function fromTranscriptMessages(items: TranscriptChatMessage[]): ChatMessage[] {
+  return items.map((item, index) =>
+    item.role === "assistant"
+      ? {
+          id: item.id || `history-assistant-${index}`,
+          role: "assistant",
+          blocks: (item.blocks ?? []).filter((b) => b.kind !== "elapsed").length
+            ? ((item.blocks ?? []).filter((b) => b.kind !== "elapsed") as AssistantBlock[])
+            : [{ id: `history-content-${index}`, kind: "content", content: "", status: "done" }],
+          elapsedMs: item.elapsedMs ?? null,
+          streaming: false,
+        }
+      : {
+          id: item.id || `history-user-${index}`,
+          role: "user",
+          content: item.content,
+        },
+  );
 }
 
 function buildRuntimeNoticeBlock(payload: Record<string, unknown>): AssistantBlock {
@@ -546,6 +567,7 @@ window.addEventListener("resize", handleResize);
     const summaryResult = await getSessionSummary(nextSessionId);
     const summary = (summaryResult.data ?? {}) as {
       messages?: SessionMessage[];
+      transcript?: TranscriptChatMessage[];
       allow_network?: boolean;
       skills?: SkillItem[];
       files?: FileItem[];
@@ -562,7 +584,11 @@ window.addEventListener("resize", handleResize);
         percent_used?: number;
       };
     };
-    setMessages(createHistoryMessages(summary.messages ?? []));
+    setMessages(
+      Array.isArray(summary.transcript) && summary.transcript.length > 0
+        ? fromTranscriptMessages(summary.transcript)
+        : createHistoryMessages(summary.messages ?? []),
+    );
     setAllowNetwork(summary.allow_network ?? true);
     setSkills(summary.skills ?? []);
     setFiles(summary.files ?? []);

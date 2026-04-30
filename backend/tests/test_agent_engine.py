@@ -671,3 +671,73 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
     assert result_event["payload"]["subtype"] == "success"
     assert result_event["payload"]["result"] == "second run ok"
     assert all(item["type"] != "aborted" for item in second_events)
+
+
+def test_agent_engine_persists_blocks_when_tool_requests_user_input(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    rounds = {"value": 0}
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        if rounds["value"] == 0:
+            rounds["value"] += 1
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_need_input",
+                                    "function": {
+                                        "name": "request_user_input",
+                                        "arguments": '{"title":"Need decision","questions":[]}',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+            return
+
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "continued"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    async def fake_execute(session, tool_name, arguments):
+        return {
+            "control": {
+                "type": "await_user_input",
+                "blocking": True,
+                "request_id": "ask_1",
+            },
+            "summary": "waiting",
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
+
+    session = AgentSession(session_id="sess_engine_await_input")
+    events = asyncio.run(collect_stream(session, "ask user"))
+
+    completed = [item for item in events if item["type"] == "completed"]
+    assert completed and completed[-1]["payload"]["subtype"] == "awaiting_user_input"
+    visible_assistant = [
+        item
+        for item in session.messages
+        if item.get("role") == "assistant" and item.get("visible_in_transcript", True) is True and item.get("blocks")
+    ]
+    assert visible_assistant
+    last_blocks = visible_assistant[-1]["blocks"]
+    assert any(block.get("kind") == "tool" for block in last_blocks)
+    assert any(block.get("kind") == "elapsed" for block in last_blocks)

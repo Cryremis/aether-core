@@ -246,6 +246,17 @@ export type AuditSessionMessage = {
   blocks?: Array<Record<string, unknown>>;
 };
 
+export type TranscriptAssistantBlock =
+  | { id: string; kind: "reasoning"; content: string }
+  | { id: string; kind: "content"; content: string; status: "streaming" | "done" | "aborted" }
+  | { id: string; kind: "runtime_notice"; eventType: "runtime_recreated"; title: string; detail?: string }
+  | { id: string; kind: "elapsed"; elapsed_ms: number }
+  | { id: string; kind: "tool"; title: string; meta: string; argumentsText: string; outputText: string; status: "running" | "done" | "aborted" };
+
+export type TranscriptChatMessage =
+  | { id: string; role: "user"; content: string }
+  | { id: string; role: "assistant"; blocks: TranscriptAssistantBlock[]; elapsedMs: number | null; streaming: boolean };
+
 export type AuditConversationDetail = {
   session_id: string;
   conversation_id?: string | null;
@@ -255,6 +266,7 @@ export type AuditConversationDetail = {
   allow_network: boolean;
   created_at: string;
   messages: AuditSessionMessage[];
+  transcript?: TranscriptChatMessage[];
   runtime?: SessionRuntimeSummary | null;
   audit: AuditConversationSummary;
 };

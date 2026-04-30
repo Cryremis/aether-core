@@ -22,6 +22,7 @@ class SessionSummary(BaseModel):
     skills: list[SkillCard] = Field(default_factory=list)
     files: list[FileRecord] = Field(default_factory=list)
     messages: list[dict[str, Any]] = Field(default_factory=list)
+    transcript: list[dict[str, Any]] = Field(default_factory=list)
     context_state: dict[str, Any] = Field(default_factory=dict)
     runtime: dict[str, Any] | None = None
     workboard: WorkboardState = Field(default_factory=lambda: WorkboardState(session_id=""))
