@@ -42,7 +42,6 @@ import type {
   FileItem,
   LlmDialogState,
   QueuedMessage,
-  SessionMessage,
   SidebarView,
   SkillItem,
   WorkboardOperation,
@@ -58,24 +57,6 @@ const RESULT_MESSAGES: Record<string, string> = {
   error_max_turns: "执行达到轮次上限",
   error_runtime_limit: "执行达到运行时限",
 };
-
-function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
-  return items
-    .filter((item) => item.role !== "tool")
-    .map((item, index) =>
-      item.role === "assistant"
-        ? {
-            id: `history-assistant-${index}`,
-            role: "assistant",
-            blocks: (item.blocks ?? []).filter((b) => b.kind !== "elapsed").length
-              ? (item.blocks ?? []).filter((b) => b.kind !== "elapsed")
-              : [{ id: `history-content-${index}`, kind: "content", content: item.content, status: "done" }],
-            elapsedMs: (item.blocks ?? []).find((b) => b.kind === "elapsed")?.elapsed_ms ?? null,
-            streaming: false,
-          }
-        : { id: `history-user-${index}`, role: "user", content: item.content },
-    );
-}
 
 function buildSystemEventMessage(
   eventType: Extract<ChatMessage, { role: "system_event" }>["eventType"],
@@ -566,7 +547,6 @@ window.addEventListener("resize", handleResize);
   const loadSession = async (nextSessionId: string) => {
     const summaryResult = await getSessionSummary(nextSessionId);
     const summary = (summaryResult.data ?? {}) as {
-      messages?: SessionMessage[];
       transcript?: TranscriptChatMessage[];
       allow_network?: boolean;
       skills?: SkillItem[];
@@ -585,9 +565,7 @@ window.addEventListener("resize", handleResize);
       };
     };
     setMessages(
-      Array.isArray(summary.transcript) && summary.transcript.length > 0
-        ? fromTranscriptMessages(summary.transcript)
-        : createHistoryMessages(summary.messages ?? []),
+      fromTranscriptMessages(summary.transcript ?? []),
     );
     setAllowNetwork(summary.allow_network ?? true);
     setSkills(summary.skills ?? []);
@@ -734,15 +712,6 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         };
       }),
     );
-  };
-
-  const getToolDisplay = (toolName: string, inputValue: Record<string, unknown>) => {
-    if (toolName === "sandbox_shell") {
-      const rawCommand = String(inputValue.command ?? "").trim();
-      const firstToken = rawCommand.split(/\s+/)[0] || "shell";
-      return { title: firstToken, meta: String(inputValue.shell ?? "powershell") };
-    }
-    return { title: toolName, meta: "tool" };
   };
 
   const buildElicitationResponseMessage = (
@@ -1013,13 +982,14 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           activeReasoningId = "";
           activeContentId = "";
           activeContentText = "";
+          const displayPayload = (payload.tool_display ?? {}) as Record<string, unknown>;
+          if (typeof displayPayload.title !== "string") return;
           const toolInput = (payload.input ?? {}) as Record<string, unknown>;
-          const display = getToolDisplay(String(payload.tool_name ?? "tool"), toolInput);
           appendAssistantBlock(assistantId, {
             id: String(payload.id ?? `tool-${Date.now()}`),
             kind: "tool",
-            title: display.title,
-            meta: display.meta,
+            title: displayPayload.title,
+            meta: typeof displayPayload.meta === "string" ? displayPayload.meta : "tool",
             argumentsText: JSON.stringify(toolInput ?? {}, null, 2),
             outputText: "",
             status: "running",
@@ -1243,13 +1213,14 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           activeReasoningId = "";
           activeContentId = "";
           activeContentText = "";
+          const displayPayload = (payload.tool_display ?? {}) as Record<string, unknown>;
+          if (typeof displayPayload.title !== "string") return;
           const toolInput = (payload.input ?? {}) as Record<string, unknown>;
-          const display = getToolDisplay(String(payload.tool_name ?? "tool"), toolInput);
           appendAssistantBlock(assistantId, {
             id: String(payload.id ?? `tool-${Date.now()}`),
             kind: "tool",
-            title: display.title,
-            meta: display.meta,
+            title: displayPayload.title,
+            meta: typeof displayPayload.meta === "string" ? displayPayload.meta : "tool",
             argumentsText: JSON.stringify(toolInput ?? {}, null, 2),
             outputText: "",
             status: "running",

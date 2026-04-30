@@ -25,6 +25,7 @@ from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.tool_service import tool_service
+from app.services.tool_display_service import tool_display_service
 
 
 class AgentEngine:
@@ -585,6 +586,7 @@ class AgentEngine:
                 for _, tool_call in sorted(tool_calls.items()):
                     tool_name = tool_call["name"]
                     tool_input = tool_service.parse_tool_arguments(tool_call["arguments"])
+                    tool_display = tool_display_service.resolve(tool_name, tool_input)
                     tool_block_id = tool_call["id"]
                     session.mark_tool_running(run_id, tool_call_id=tool_block_id, tool_name=tool_name)
                     self._append_assistant_block(
@@ -592,8 +594,8 @@ class AgentEngine:
                         {
                             "id": tool_block_id,
                             "kind": "tool",
-                            "title": tool_name,
-                            "meta": str(tool_input.get("shell", "tool")) if isinstance(tool_input, dict) else "tool",
+                            "title": tool_display.get("title", tool_name),
+                            "meta": tool_display.get("meta", "tool"),
                             "argumentsText": json.dumps(tool_input, ensure_ascii=False, indent=2),
                             "outputText": "",
                             "status": "running",
@@ -604,6 +606,7 @@ class AgentEngine:
                         "tool_started",
                         id=tool_call["id"],
                         tool_name=tool_name,
+                        tool_display=tool_display,
                         input=tool_input,
                     )
                     tool_started_at = time.perf_counter()

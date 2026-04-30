@@ -71,6 +71,33 @@ def test_transcript_service_merges_tool_result_into_assistant_tool_block():
     assert transcript[2]["elapsedMs"] == 120
 
 
+def test_transcript_service_uses_canonical_display_for_sandbox_shell_alias():
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "sandboxshell",
+                        "arguments": '{"command":"npm run build","shell":"bash"}',
+                    },
+                }
+            ],
+            "message_id": "m_assistant_hidden",
+            "visible_in_transcript": True,
+        }
+    ]
+
+    transcript = transcript_service.build_chat_transcript(messages)
+    assert len(transcript) == 1
+    block = transcript[0]["blocks"][0]
+    assert block["kind"] == "tool"
+    assert block["title"] == "npm"
+    assert block["meta"] == "bash"
+
+
 def test_transcript_service_preserves_runtime_notice_block():
     messages = [
         {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.services.tool_display_service import tool_display_service
 
 class TranscriptService:
     """Build a stable, UI-oriented transcript from raw session messages."""
@@ -56,6 +57,7 @@ class TranscriptService:
                     continue
 
                 # Orphan tool result: still keep it visible by converting to a standalone assistant tool card.
+                orphan_display = tool_display_service.resolve(str(message.get("tool_name") or "tool"), {})
                 transcript.append(
                     {
                         "id": str(message.get("message_id") or f"tool-{index}"),
@@ -64,8 +66,8 @@ class TranscriptService:
                             {
                                 "id": tool_call_id or f"tool-{index}",
                                 "kind": "tool",
-                                "title": str(message.get("tool_name") or "tool"),
-                                "meta": str(message.get("tool_name") or "tool"),
+                                "title": orphan_display.get("title", "tool"),
+                                "meta": orphan_display.get("meta", "tool"),
                                 "argumentsText": "",
                                 "outputText": self._format_tool_output(message.get("content")),
                                 "status": self._infer_tool_status(message.get("content")),
@@ -161,12 +163,13 @@ class TranscriptService:
                 if not isinstance(function, dict):
                     continue
                 tool_id = str(tool_call.get("id") or f"call-{index}-{offset}")
+                display = tool_display_service.resolve(str(function.get("name") or "tool"), self._parse_arguments(function.get("arguments")))
                 normalized_blocks.append(
                     {
                         "id": tool_id,
                         "kind": "tool",
-                        "title": str(function.get("name") or "tool"),
-                        "meta": "tool",
+                        "title": display.get("title", str(function.get("name") or "tool")),
+                        "meta": display.get("meta", "tool"),
                         "argumentsText": self._pretty_arguments(function.get("arguments")),
                         "outputText": "",
                         "status": "running",
@@ -231,6 +234,20 @@ class TranscriptService:
                 return stripped
             return json.dumps(parsed, ensure_ascii=False, indent=2)
         return str(value)
+
+    def _parse_arguments(self, value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return {}
+            try:
+                parsed = json.loads(stripped)
+            except Exception:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
 
     def _format_tool_output(self, content: Any) -> str:
         if content is None:

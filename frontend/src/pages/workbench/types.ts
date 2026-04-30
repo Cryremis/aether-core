@@ -34,12 +34,6 @@ export type AssistantBlock =
       status: "running" | "done" | "aborted";
     };
 
-export type SessionMessage = {
-  role: "user" | "assistant" | "tool";
-  content: string;
-  blocks?: AssistantBlock[];
-};
-
 export type AssistantSegment =
   | { id: string; kind: "bubble"; blocks: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" }>> }
   | { id: string; kind: "tool"; block: Extract<AssistantBlock, { kind: "tool" }> };
