@@ -22,6 +22,19 @@ function LiveElapsedBadge({ startTime }: { startTime: number }) {
   return <div className="elapsed-badge">{formatElapsedMs(elapsed)}</div>;
 }
 
+function RuntimeNotice({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <div className="runtime-notice" aria-live="polite">
+      <div className="runtime-notice__header">
+        <div className="runtime-notice__line" />
+        <div className="runtime-notice__title">{title}</div>
+        <div className="runtime-notice__line" />
+      </div>
+      {detail ? <div className="runtime-notice__detail">{detail}</div> : null}
+    </div>
+  );
+}
+
 export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProps) {
   return (
     <div ref={contentRef} className="chat-container">
@@ -123,6 +136,8 @@ export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProp
                             <MemoizedMarkdown content={block.content} />
                           </div>
                         </details>
+                      ) : block.kind === "runtime_notice" ? (
+                        <RuntimeNotice key={block.id} title={block.title} detail={block.detail} />
                       ) : (
                         <MemoizedMarkdown key={block.id} content={block.content} />
                       ),

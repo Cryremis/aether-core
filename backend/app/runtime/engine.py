@@ -41,6 +41,20 @@ class AgentEngine:
                 block.update(updates)
                 return
 
+    def _append_runtime_notice_block(self, blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
+        if str(payload.get("status") or "") != "recreated":
+            return
+        self._append_assistant_block(
+            blocks,
+            {
+                "id": f"runtime_notice_{uuid.uuid4().hex}",
+                "kind": "runtime_notice",
+                "eventType": "runtime_recreated",
+                "title": "沙箱已重建",
+                "detail": str(payload["reason"]) if payload.get("reason") else None,
+            },
+        )
+
     def _next_turn_index(self, session: AgentSession) -> int:
         if not session.messages:
             return 1
@@ -631,6 +645,8 @@ class AgentEngine:
                     for runtime_event in result.get("runtime_events", []) if isinstance(result, dict) else []:
                         event_type = runtime_event.get("type")
                         event_payload = runtime_event.get("payload") or {}
+                        if event_type == "runtime_recreated" and isinstance(event_payload, dict):
+                            self._append_runtime_notice_block(persisted_assistant_blocks, event_payload)
                         if event_type:
                             yield make_event(session, str(event_type), **event_payload)
                     yield make_event(

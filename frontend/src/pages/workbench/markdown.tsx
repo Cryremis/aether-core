@@ -146,7 +146,7 @@ export function MemoizedMarkdown({ content }: { content?: string }) {
 
 export function renderAssistantSegments(blocks: AssistantBlock[]): AssistantSegment[] {
     const segments: AssistantSegment[] = [];
-    let currentBubble: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" }>> = [];
+    let currentBubble: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" | "runtime_notice" }>> = [];
 
     for (const block of blocks) {
         if (block.kind === "tool") {
@@ -160,7 +160,7 @@ export function renderAssistantSegments(blocks: AssistantBlock[]): AssistantSegm
         if (block.kind === "elapsed") {
             continue;
         }
-        currentBubble.push(block as Extract<AssistantBlock, { kind: "reasoning" | "content" }>);
+        currentBubble.push(block as Extract<AssistantBlock, { kind: "reasoning" | "content" | "runtime_notice" }>);
     }
 
     if (currentBubble.length > 0) {

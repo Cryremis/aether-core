@@ -99,6 +99,17 @@ function buildSystemEventMessage(
   };
 }
 
+function buildRuntimeNoticeBlock(payload: Record<string, unknown>): AssistantBlock {
+  const reason = typeof payload.reason === "string" ? payload.reason : "";
+  return {
+    id: `runtime-notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: "runtime_notice",
+    eventType: "runtime_recreated",
+    title: "沙箱已重建",
+    detail: reason || undefined,
+  };
+}
+
 function getOpenWorkItemCount(workboard: WorkboardState | null): number {
   if (!workboard) return 0;
   return workboard.items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
@@ -651,6 +662,16 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     setMessages((current) => [...current, buildSystemEventMessage(eventType, payload)]);
   };
 
+  const appendAssistantRuntimeNotice = (messageId: string, payload: Record<string, unknown>) => {
+    setMessages((current) =>
+      current.map((item) =>
+        item.id === messageId && item.role === "assistant"
+          ? { ...item, blocks: [...item.blocks, buildRuntimeNoticeBlock(payload)] }
+          : item,
+      ),
+    );
+  };
+
   const updateAssistantBlock = (messageId: string, blockId: string, updater: (block: AssistantBlock) => AssistantBlock) => {
     setMessages((current) =>
       current.map((item) =>
@@ -914,8 +935,12 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           return;
         }
 
-        if (event.type === "runtime_created" || event.type === "runtime_recreated") {
-          appendSystemEvent(event.type, payload);
+        if (event.type === "runtime_created") {
+          return;
+        }
+
+        if (event.type === "runtime_recreated") {
+          appendAssistantRuntimeNotice(assistantId, payload);
           return;
         }
 
@@ -1140,8 +1165,12 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           return;
         }
 
-        if (event.type === "runtime_created" || event.type === "runtime_recreated") {
-          appendSystemEvent(event.type, payload);
+        if (event.type === "runtime_created") {
+          return;
+        }
+
+        if (event.type === "runtime_recreated") {
+          appendAssistantRuntimeNotice(assistantId, payload);
           return;
         }
 

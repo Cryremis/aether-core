@@ -304,6 +304,45 @@
 .assistant-content { width: 100%; display: flex; flex-direction: column; gap: 16px; }
 .text-bubble { font-size: 15px; line-height: 1.7; color: var(--text-primary); max-width: 100%; }
 
+.runtime-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(100%, 560px);
+  margin: 2px auto 4px;
+  align-items: center;
+}
+
+.runtime-notice__header {
+  display: grid;
+  grid-template-columns: minmax(24px, 1fr) auto minmax(24px, 1fr);
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.runtime-notice__line {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0), rgba(148, 163, 184, 0.55), rgba(148, 163, 184, 0));
+}
+
+.runtime-notice__title {
+  display: inline-block;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.runtime-notice__detail {
+  padding: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #94a3b8;
+  text-align: center;
+}
+
 /* Thinking 模块美化 */
 .reasoning-block { margin-bottom: 16px; }
 .reasoning-block summary {

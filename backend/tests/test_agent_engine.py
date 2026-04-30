@@ -439,6 +439,10 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
     assert "runtime_recreated" in event_types
     assert "tool_finished" in event_types
     assert event_types.index("runtime_recreated") < event_types.index("tool_finished")
+    assert any(
+        block.get("kind") == "runtime_notice" and block.get("eventType") == "runtime_recreated"
+        for block in session.messages[-1]["blocks"]
+    )
 
 
 def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tmp_path):

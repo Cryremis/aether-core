@@ -19,6 +19,13 @@ export type AssistantBlock =
   | { id: string; kind: "elapsed"; elapsed_ms: number }
   | {
       id: string;
+      kind: "runtime_notice";
+      eventType: "runtime_recreated";
+      title: string;
+      detail?: string;
+    }
+  | {
+      id: string;
       kind: "tool";
       title: string;
       meta: string;
