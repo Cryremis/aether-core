@@ -367,6 +367,80 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
     assert result_events[0]["payload"]["result"] == "skill workflow finished"
 
 
+def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    rounds = {"value": 0}
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        if rounds["value"] == 0:
+            rounds["value"] += 1
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_runtime_1",
+                                    "function": {
+                                        "name": "sandbox_shell",
+                                        "arguments": '{"command":"pip install pandas","shell":"bash"}',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+            return
+
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "runtime settled"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    async def fake_execute(session, tool_name, arguments):
+        return {
+            "command": arguments["command"],
+            "shell": arguments.get("shell", "bash"),
+            "executor": "docker",
+            "exit_code": 0,
+            "stdout": "ok\n",
+            "stderr": "",
+            "duration_ms": 10,
+            "log_path": "logs/cmd_runtime.json",
+            "runtime_events": [
+                {
+                    "type": "runtime_recreated",
+                    "payload": {
+                        "status": "recreated",
+                        "reason": "runtime_config_changed",
+                        "generation": 2,
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
+
+    session = AgentSession(session_id="sess_engine_runtime_event")
+    events = asyncio.run(collect_stream(session, "repair runtime"))
+    event_types = [item["type"] for item in events]
+    assert "runtime_recreated" in event_types
+    assert "tool_finished" in event_types
+    assert event_types.index("runtime_recreated") < event_types.index("tool_finished")
+
+
 def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     rounds = {"value": 0}

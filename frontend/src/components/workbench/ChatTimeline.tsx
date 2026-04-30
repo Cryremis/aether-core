@@ -48,6 +48,12 @@ export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProp
               <MemoizedMarkdown content={message.content} />
             </div>
           </div>
+        ) : message.role === "system_event" ? (
+          <div key={message.id} className="timeline-system-event msg-anim" aria-live="polite">
+            <div className="timeline-system-event__line" />
+            <div className="timeline-system-event__label">{message.title}</div>
+            <div className="timeline-system-event__line" />
+          </div>
         ) : message.role === "elicitation_response" ? (
           <div key={message.id} className="message-row message-row--elicitation-response msg-anim">
             <div className="elicitation-response-bubble">

@@ -165,6 +165,38 @@
 .message-row.assistant { justify-content: flex-start; flex-direction: column; gap: 6px; }
 .message-row--elicitation-response { justify-content: flex-end; }
 
+.timeline-system-event {
+  display: grid;
+  grid-template-columns: minmax(24px, 1fr) auto minmax(24px, 1fr);
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin: 2px 0;
+}
+
+.timeline-system-event__line {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(148, 163, 184, 0), rgba(148, 163, 184, 0.55), rgba(148, 163, 184, 0));
+}
+
+.timeline-system-event__label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.96));
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px -18px rgba(15, 23, 42, 0.5);
+}
+
 .elapsed-badge {
   display: inline-flex;
   align-items: center;

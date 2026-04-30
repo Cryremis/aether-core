@@ -52,19 +52,24 @@ def test_session_runtime_builds_persistent_container_args(tmp_path, monkeypatch)
     assert "--network none" not in joined
     assert "--read-only" not in joined
     assert "--cap-drop ALL" in joined
-    assert "--user sandbox" in joined
     assert "--dns 8.8.8.8" in joined
     assert "PIP_CACHE_DIR=/workspace/cache/pip" in joined
     assert "/workspace/home/.local/bin" in joined
     assert f"dst={settings.sandbox_docker_workspace_mount}" in joined
     assert settings.sandbox_docker_home_dir in joined
+    assert "chown -R 10001:10001 /workspace" in joined
+    assert "chmod -R u+rwX,g+rwX,o+rwX /workspace" in joined
     assert settings.sandbox_docker_image in args
 
 
-def test_session_runtime_exec_uses_workspace_root(tmp_path):
+def test_session_runtime_exec_uses_work_dir_and_sandbox_user(tmp_path):
     workspace = build_workspace(tmp_path / "sandbox")
     args = session_runtime_service._build_exec_args("test-container", "bash", "pwd")
-    assert args[:4] == ["exec", "--workdir", "/workspace", "test-container"]
+    assert args[:6] == ["exec", "--user", "sandbox", "--workdir", "/workspace/work", "--env"]
+    assert "HOME=/workspace/home" in args
+    assert "PYTHONUSERBASE=/workspace/home/.local" in args
+    assert "test-container" in args
+    assert args[-3:] == ["/bin/bash", "-lc", "pwd"]
 
 
 def test_runtime_spec_drift_requests_recreate(monkeypatch):

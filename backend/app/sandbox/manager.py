@@ -10,6 +10,7 @@ class SandboxManager:
     """负责为每个会话准备独立工作区。"""
 
     _SESSION_ROOTS = ("input", "skills", "work", "output", "logs")
+    _WRITABLE_DIR_MODE = 0o777
 
     def ensure_workspace(self, session_id: str, baseline_root: Path | None = None) -> SandboxWorkspace:
         session_root = (settings.sessions_root / session_id / "sandbox").resolve()
@@ -35,9 +36,14 @@ class SandboxManager:
             metadata_dir,
         ]:
             directory.mkdir(parents=True, exist_ok=True)
+            self._ensure_writable_permissions(directory)
 
         for name in self._SESSION_ROOTS:
-            (overlay_work_dir / name).mkdir(parents=True, exist_ok=True)
+            overlay_dir = overlay_work_dir / name
+            overlay_dir.mkdir(parents=True, exist_ok=True)
+            self._ensure_writable_permissions(overlay_dir)
+
+        self._ensure_writable_permissions(session_root)
 
         return SandboxWorkspace(
             session_id=session_id,
@@ -53,6 +59,13 @@ class SandboxManager:
             overlay_work_dir=overlay_work_dir,
             metadata_dir=metadata_dir,
         )
+
+    def _ensure_writable_permissions(self, target: Path) -> None:
+        try:
+            target.chmod(self._WRITABLE_DIR_MODE)
+        except OSError:
+            # 某些宿主文件系统不支持 chmod；这里尽力而为即可。
+            return
 
     def ensure_within_workspace(self, workspace: SandboxWorkspace, target: Path) -> Path:
         resolved = target.resolve(strict=False)

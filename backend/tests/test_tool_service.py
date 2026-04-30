@@ -172,7 +172,45 @@ def test_sandbox_shell_reports_runtime_recreated(monkeypatch, tmp_path):
 
     assert result["runtime"]["status"] == "recreated"
     assert result["runtime_events"][0]["type"] == "runtime_recreated"
-    assert "会话 runtime 已被重建" in result["injected_messages"][0]["content"]
+    assert "injected_messages" not in result
+    assert "command" not in result
+
+
+def test_sandbox_shell_raw_output_omits_command(monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_shell_no_command")
+
+    async def fake_run_shell(*, workspace, command, shell):
+        return SandboxCommandResult(
+            command=command,
+            shell=shell,
+            executor="docker",
+            exit_code=0,
+            stdout="ok\n",
+            stderr="",
+            duration_ms=12,
+            log_path="logs/cmd_raw.json",
+            runtime_metadata=None,
+        )
+
+    monkeypatch.setattr("app.services.tool_service.sandbox_runner.run_shell", fake_run_shell)
+
+    result = __import__("asyncio").run(
+        tool_service.execute(
+            session,
+            "sandbox_shell",
+            {
+                "command": "echo hello",
+                "shell": "bash",
+            },
+        )
+    )
+
+    assert "command" not in result
+    assert result["shell"] == "bash"
 
 
 def test_prompt_workspace_paths_use_container_paths(tmp_path):

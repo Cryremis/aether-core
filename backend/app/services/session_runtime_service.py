@@ -20,6 +20,9 @@ from app.services.store import store_service, utcnow_iso
 class SessionRuntimeService:
     """管理会话级持久化容器 runtime。"""
 
+    _DEFAULT_SANDBOX_UID = 10001
+    _DEFAULT_SANDBOX_GID = 10001
+
     def __init__(self) -> None:
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._gc_task: asyncio.Task[None] | None = None
@@ -455,9 +458,6 @@ class SessionRuntimeService:
         ]
         for env_name, env_value in self._build_passthrough_env_vars().items():
             args.extend(["--env", f"{env_name}={env_value}"])
-        configured_user = settings.sandbox_docker_user.strip()
-        if configured_user:
-            args.extend(["--user", configured_user])
         if settings.sandbox_docker_read_only_rootfs:
             args.append("--read-only")
         for tmpfs in settings.sandbox_docker_tmpfs:
@@ -482,6 +482,11 @@ class SessionRuntimeService:
                     f"{shlex.quote(settings.sandbox_docker_logs_dir)} "
                     f"{shlex.quote(settings.sandbox_docker_home_dir)} "
                     f"{shlex.quote(settings.sandbox_docker_cache_dir)}"
+                    "; chown -R "
+                    f"{self._sandbox_uid()}:{self._sandbox_gid()} "
+                    f"{shlex.quote(settings.sandbox_docker_workspace_mount)}"
+                    "; chmod -R u+rwX,g+rwX,o+rwX "
+                    f"{shlex.quote(settings.sandbox_docker_workspace_mount)}"
                     "; while true; do sleep 3600; done"
                 ),
             ]
@@ -491,8 +496,38 @@ class SessionRuntimeService:
     def _build_exec_args(self, container_name: str, shell: str, command: str) -> list[str]:
         args = [
             "exec",
+            "--user",
+            settings.sandbox_docker_user.strip() or f"{self._sandbox_uid()}:{self._sandbox_gid()}",
             "--workdir",
-            settings.sandbox_docker_workspace_mount,
+            settings.sandbox_docker_work_dir,
+            "--env",
+            f"HOME={settings.sandbox_docker_home_dir}",
+            "--env",
+            (
+                "PATH="
+                f"{settings.sandbox_docker_home_dir}/.local/bin:"
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ),
+            "--env",
+            f"XDG_CACHE_HOME={settings.sandbox_docker_cache_dir}",
+            "--env",
+            f"XDG_CONFIG_HOME={settings.sandbox_docker_home_dir}/.config",
+            "--env",
+            f"PIP_CACHE_DIR={settings.sandbox_docker_cache_dir}/pip",
+            "--env",
+            f"PYTHONUSERBASE={settings.sandbox_docker_home_dir}/.local",
+            "--env",
+            f"AETHER_SANDBOX_ROOT={settings.sandbox_docker_workspace_mount}",
+            "--env",
+            f"AETHER_INPUT_DIR={settings.sandbox_docker_input_dir}",
+            "--env",
+            f"AETHER_SKILLS_DIR={settings.sandbox_docker_skills_dir}",
+            "--env",
+            f"AETHER_WORK_DIR={settings.sandbox_docker_work_dir}",
+            "--env",
+            f"AETHER_OUTPUT_DIR={settings.sandbox_docker_output_dir}",
+            "--env",
+            f"AETHER_LOGS_DIR={settings.sandbox_docker_logs_dir}",
             container_name,
         ]
         if shell == "bash":
@@ -554,13 +589,36 @@ class SessionRuntimeService:
             "image": settings.sandbox_docker_image,
             "network_mode": self._runtime_network_mode(),
             "dns_servers": self._runtime_dns_servers(),
-            "user": settings.sandbox_docker_user.strip() or None,
+            "user": settings.sandbox_docker_user.strip() or f"{self._sandbox_uid()}:{self._sandbox_gid()}",
             "read_only_rootfs": bool(settings.sandbox_docker_read_only_rootfs),
             "workspace_mount": settings.sandbox_docker_workspace_mount,
             "work_dir": settings.sandbox_docker_work_dir,
             "home_dir": settings.sandbox_docker_home_dir,
             "cache_dir": settings.sandbox_docker_cache_dir,
         }
+
+    def _sandbox_uid(self) -> int:
+        configured = settings.sandbox_docker_user.strip()
+        if ":" in configured:
+            user, _, _ = configured.partition(":")
+            if user.isdigit():
+                return int(user)
+        if configured.isdigit():
+            return int(configured)
+        return self._DEFAULT_SANDBOX_UID
+
+    def _sandbox_gid(self) -> int:
+        configured = settings.sandbox_docker_user.strip()
+        if ":" in configured:
+            _, _, group = configured.partition(":")
+            if group.isdigit():
+                return int(group)
+            user, _, _ = configured.partition(":")
+            if user.isdigit():
+                return int(user)
+        if configured.isdigit():
+            return int(configured)
+        return self._DEFAULT_SANDBOX_GID
 
     def _detect_runtime_recreate_reason(self, runtime: dict[str, Any], now: datetime) -> str | None:
         expired_reason = self._detect_expired_reason(runtime, now)

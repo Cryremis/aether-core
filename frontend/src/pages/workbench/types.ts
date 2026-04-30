@@ -41,6 +41,13 @@ export type ChatMessage =
   | { id: string; role: "user"; content: string }
   | {
       id: string;
+      role: "system_event";
+      title: string;
+      detail?: string;
+      eventType: "runtime_created" | "runtime_recreated" | "context_compacted" | "context_recovered" | "context_warning" | "context_blocked";
+    }
+  | {
+      id: string;
       role: "elicitation_response";
       title: string;
       summary: string;

@@ -76,6 +76,29 @@ function createHistoryMessages(items: SessionMessage[]): ChatMessage[] {
     );
 }
 
+function buildSystemEventMessage(
+  eventType: Extract<ChatMessage, { role: "system_event" }>["eventType"],
+  payload: Record<string, unknown>,
+): Extract<ChatMessage, { role: "system_event" }> {
+  const reason = typeof payload.reason === "string" ? payload.reason : "";
+  const titleByType: Record<Extract<ChatMessage, { role: "system_event" }>["eventType"], string> = {
+    runtime_created: "沙箱已创建",
+    runtime_recreated: "沙箱已重建",
+    context_compacted: "上下文已压缩",
+    context_recovered: "上下文已恢复",
+    context_warning: "上下文接近上限",
+    context_blocked: "上下文已阻塞",
+  };
+  const detail = reason ? `原因: ${reason}` : undefined;
+  return {
+    id: `system-event-${eventType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role: "system_event",
+    title: titleByType[eventType],
+    detail,
+    eventType,
+  };
+}
+
 function getOpenWorkItemCount(workboard: WorkboardState | null): number {
   if (!workboard) return 0;
   return workboard.items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
@@ -624,6 +647,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     );
   };
 
+  const appendSystemEvent = (eventType: Extract<ChatMessage, { role: "system_event" }>["eventType"], payload: Record<string, unknown>) => {
+    setMessages((current) => [...current, buildSystemEventMessage(eventType, payload)]);
+  };
+
   const updateAssistantBlock = (messageId: string, blockId: string, updater: (block: AssistantBlock) => AssistantBlock) => {
     setMessages((current) =>
       current.map((item) =>
@@ -858,6 +885,15 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           return;
         }
 
+        if (event.type === "runtime_created" || event.type === "runtime_recreated") {
+          appendSystemEvent(event.type, payload);
+          return;
+        }
+
+        if (event.type === "context_compacted" || event.type === "context_recovered" || event.type === "context_warning" || event.type === "context_blocked") {
+          appendSystemEvent(event.type, payload);
+        }
+
         if (event.type === "reasoning_delta") {
           if (!activeReasoningId) {
             activeReasoningId = `reasoning-${Date.now()}`;
@@ -923,7 +959,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
             if (nextElicitation) setElicitation(nextElicitation);
           }
           updateAssistantBlock(assistantId, String(payload.id), (block) =>
-            block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block,
+            block.kind === "tool" ? { ...block, outputText: JSON.stringify(output, null, 2), status: "done" } : block,
           );
           if (["sandbox_shell", "create_text_artifact"].includes(String(payload.tool_name ?? ""))) {
             void refreshResources(effectiveSessionId);
@@ -1063,6 +1099,15 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           return;
         }
 
+        if (event.type === "runtime_created" || event.type === "runtime_recreated") {
+          appendSystemEvent(event.type, payload);
+          return;
+        }
+
+        if (event.type === "context_compacted" || event.type === "context_recovered" || event.type === "context_warning" || event.type === "context_blocked") {
+          appendSystemEvent(event.type, payload);
+        }
+
         if (event.type === "reasoning_delta") {
           if (!activeReasoningId) {
             activeReasoningId = `reasoning-${Date.now()}`;
@@ -1128,7 +1173,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
             if (nextElicitation) setElicitation(nextElicitation);
           }
           updateAssistantBlock(assistantId, String(payload.id), (block) =>
-            block.kind === "tool" ? { ...block, outputText: JSON.stringify(payload.output ?? {}, null, 2), status: "done" } : block,
+            block.kind === "tool" ? { ...block, outputText: JSON.stringify(output, null, 2), status: "done" } : block,
           );
           if (["sandbox_shell", "create_text_artifact"].includes(String(payload.tool_name ?? ""))) {
             void refreshResources(effectiveSessionId);
