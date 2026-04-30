@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import re
 from typing import Any, Callable, Awaitable
@@ -22,6 +23,7 @@ from app.services.session_types import AgentSession
 from app.services.search_service import search_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
+from app.services.session_runtime_service import RuntimeBusyError, session_runtime_service
 
 
 ToolHandler = Callable[[AgentSession, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -286,11 +288,23 @@ class ToolService:
                 "properties": {
                     "command": {"type": "string"},
                     "shell": {"type": "string", "enum": ["powershell", "bash"]},
+                    "timeout_seconds": {"type": "integer", "minimum": 1},
                 },
                 "additionalProperties": False,
             },
             self._handle_sandbox_shell,
             required=["command"],
+        )
+        self._registry.register(
+            "rebuild_runtime",
+            "重建当前会话的持久化沙箱 runtime。当 runtime 卡住、退出异常或容器状态不一致时使用。",
+            {
+                "properties": {
+                    "reason": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+            self._handle_rebuild_runtime,
         )
 
         # 注册搜索工具（来自 search_service）
@@ -409,14 +423,65 @@ class ToolService:
         )
         return {"artifact": artifact.model_dump(mode="json")}
 
-    async def _handle_sandbox_shell(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_rebuild_runtime(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
         if session.workspace is None:
             raise RuntimeError("会话沙箱尚未初始化。")
-        result = await sandbox_runner.run_shell(
-            workspace=session.workspace,
-            command=str(arguments["command"]),
-            shell=arguments.get("shell"),
+        metadata = await session_runtime_service.rebuild_runtime(
+            session.workspace,
+            reason=str(arguments.get("reason") or "agent_requested_rebuild"),
         )
+        return {
+            "summary": "沙箱 runtime 已重建",
+            "runtime": metadata,
+            "runtime_events": [
+                {
+                    "type": "runtime_recreated" if metadata["status"] == "recreated" else "runtime_created",
+                    "payload": metadata,
+                }
+            ],
+        }
+
+    async def _handle_sandbox_shell(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+        *,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        if session.workspace is None:
+            raise RuntimeError("会话沙箱尚未初始化。")
+        runner_kwargs: dict[str, Any] = {
+            "workspace": session.workspace,
+            "command": str(arguments["command"]),
+            "shell": arguments.get("shell"),
+            "timeout_seconds": self._parse_int(arguments.get("timeout_seconds")),
+        }
+        try:
+            signature = inspect.signature(sandbox_runner.run_shell)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None:
+            if "session" in signature.parameters:
+                runner_kwargs["session"] = session
+            if run_id is not None and "run_id" in signature.parameters:
+                runner_kwargs["run_id"] = run_id
+        try:
+            result = await sandbox_runner.run_shell(**runner_kwargs)
+        except RuntimeBusyError as exc:
+            return {
+                "summary": exc.summary,
+                "error_code": "runtime_busy",
+                "recoverable": True,
+                "suggested_actions": list(exc.suggested_actions),
+                "runtime": exc.runtime,
+                "public_output": {
+                    "summary": exc.summary,
+                    "error_code": "runtime_busy",
+                    "recoverable": True,
+                    "suggested_actions": list(exc.suggested_actions),
+                    "runtime": exc.runtime,
+                },
+            }
         artifact_service.sync_output_directory(session)
         response: dict[str, Any] = {
             "shell": result.shell,
@@ -486,11 +551,22 @@ class ToolService:
 
         return tools
 
-    async def execute(self, session: AgentSession, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def execute(
+        self,
+        session: AgentSession,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
         """执行指定工具。"""
         # 检查注册表中的内置工具
         handler = self._registry.get_handler(tool_name)
         if handler:
+            if tool_name == "sandbox_shell":
+                return await self._handle_sandbox_shell(session, arguments, run_id=run_id)
+            if tool_name == "rebuild_runtime":
+                return await self._handle_rebuild_runtime(session, arguments)
             return await handler(session, arguments)
 
         # 处理动态工具

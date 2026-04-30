@@ -85,7 +85,13 @@ export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProp
                         {segment.block.title}
                       </div>
                       <div className="tool-status">
-                        {segment.block.status === "running" ? <span className="status-run"><Icons.Loader /> 执行中...</span> : <span className="status-done"><Icons.Check /> 完成</span>}
+                        {segment.block.status === "running" ? (
+                          <span className="status-run"><Icons.Loader /> 执行中...</span>
+                        ) : segment.block.status === "aborted" ? (
+                          <span className="status-done">已停止</span>
+                        ) : (
+                          <span className="status-done"><Icons.Check /> 完成</span>
+                        )}
                       </div>
                     </summary>
                     <div className="tool-body-wrapper">

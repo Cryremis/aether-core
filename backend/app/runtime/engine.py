@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import time
 import uuid
@@ -94,12 +95,82 @@ class AgentEngine:
         ]
         return any(pattern in lowered for pattern in patterns)
 
+    def _run_is_active(self, session: AgentSession, run_id: str) -> bool:
+        return session.current_run_id() == run_id
+
+    def _run_is_aborted(self, session: AgentSession, run_id: str) -> bool:
+        return not self._run_is_active(session, run_id) or session.is_aborted(run_id)
+
+    async def _emit_aborted(
+        self,
+        session: AgentSession,
+        *,
+        run_id: str,
+        started_at: float,
+        interrupt_point: str,
+    ) -> AsyncGenerator:
+        partial_content = session.get_partial_content(run_id)
+        yield make_event(
+            session,
+            "aborted",
+            partial_content=partial_content,
+            interrupt_point=interrupt_point,
+        )
+        yield make_event(
+            session,
+            "completed",
+            elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+            subtype="aborted",
+        )
+
+    async def _cancel_tool_execution(self, execution_task: asyncio.Task[Any]) -> dict[str, Any]:
+        execution_task.cancel()
+        try:
+            await execution_task
+        except asyncio.CancelledError:
+            pass
+        return {
+            "summary": "工具执行已停止",
+            "aborted": True,
+        }
+
+    def _synthetic_aborted_tool_result(self) -> dict[str, Any]:
+        return {
+            "summary": "工具执行已停止",
+            "aborted": True,
+        }
+
+    async def _cleanup_tool_execution(self, execution_task: asyncio.Task[Any]) -> None:
+        try:
+            await self._cancel_tool_execution(execution_task)
+        except Exception:
+            pass
+
+    def _start_tool_execution(
+        self,
+        session: AgentSession,
+        *,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        run_id: str,
+    ) -> asyncio.Task[Any]:
+        execute_kwargs: dict[str, Any] = {}
+        try:
+            signature = inspect.signature(tool_service.execute)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None and "run_id" in signature.parameters:
+            execute_kwargs["run_id"] = run_id
+        return asyncio.create_task(tool_service.execute(session, tool_name, tool_input, **execute_kwargs))
+
     async def stream_chat(
         self,
         session: AgentSession,
         message: str,
     ) -> AsyncGenerator:
         started_at = time.perf_counter()
+        run_id = f"run_{uuid.uuid4().hex}"
+        session.begin_run(run_id)
         request_turn_index = self._next_turn_index(session)
         session.messages.append(
             context_message_adapter.make_user_message(
@@ -145,21 +216,16 @@ class AgentEngine:
 
         while True:
             turn_count += 1
-            
-            if session.is_aborted():
-                yield make_event(
+
+            if self._run_is_aborted(session, run_id):
+                async for event in self._emit_aborted(
                     session,
-                    "aborted",
-                    partial_content=session.partial_content,
+                    run_id=run_id,
+                    started_at=started_at,
                     interrupt_point="turn_start",
-                )
-                yield make_event(
-                    session,
-                    "completed",
-                    elapsed_ms=int((time.perf_counter() - started_at) * 1000),
-                    subtype="aborted",
-                )
-                session.clear_abort()
+                ):
+                    yield event
+                session.finish_run(run_id)
                 return
             
             runtime_seconds = int(time.perf_counter() - started_at)
@@ -255,6 +321,16 @@ class AgentEngine:
 
             try:
                 async for chunk in llm_client.stream_chat_completion(llm_runtime, messages, tools):
+                    if self._run_is_aborted(session, run_id):
+                        async for event in self._emit_aborted(
+                            session,
+                            run_id=run_id,
+                            started_at=started_at,
+                            interrupt_point="llm_stream",
+                        ):
+                            yield event
+                        session.finish_run(run_id)
+                        return
                     if isinstance(chunk.get("usage"), dict):
                         last_usage_payload = dict(chunk["usage"])
                     choices = chunk.get("choices") or []
@@ -288,6 +364,7 @@ class AgentEngine:
                     content_delta = delta.get("content") or ""
                     if content_delta:
                         assistant_content += content_delta
+                        session.set_partial_content(run_id, assistant_content)
                         if not active_content_block_id:
                             active_content_block_id = f"content_{uuid.uuid4().hex}"
                             self._append_assistant_block(
@@ -438,6 +515,7 @@ class AgentEngine:
                     tool_name = tool_call["name"]
                     tool_input = tool_service.parse_tool_arguments(tool_call["arguments"])
                     tool_block_id = tool_call["id"]
+                    session.mark_tool_running(run_id, tool_call_id=tool_block_id, tool_name=tool_name)
                     self._append_assistant_block(
                         persisted_assistant_blocks,
                         {
@@ -458,16 +536,69 @@ class AgentEngine:
                         input=tool_input,
                     )
                     tool_started_at = time.perf_counter()
-                    execution_task = asyncio.create_task(tool_service.execute(session, tool_name, tool_input))
+                    execution_task = self._start_tool_execution(
+                        session,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                        run_id=run_id,
+                    )
+                    session.set_tool_task(run_id, execution_task)
                     try:
                         while True:
-                            try:
-                                result = await asyncio.wait_for(
-                                    asyncio.shield(execution_task),
-                                    timeout=self._TOOL_PROGRESS_INTERVAL_SECONDS,
+                            if self._run_is_aborted(session, run_id):
+                                result = self._synthetic_aborted_tool_result()
+                                cleanup_task = asyncio.create_task(self._cleanup_tool_execution(execution_task))
+                                session.set_cleanup_task(run_id, cleanup_task)
+                                self._update_assistant_block(
+                                    persisted_assistant_blocks,
+                                    tool_block_id,
+                                    outputText=json.dumps(result, ensure_ascii=False, indent=2),
+                                    status="aborted",
                                 )
-                                break
-                            except TimeoutError:
+                                yield make_event(
+                                    session,
+                                    "tool_finished",
+                                    id=tool_call["id"],
+                                    tool_name=tool_name,
+                                    output=result,
+                                )
+                                async for event in self._emit_aborted(
+                                    session,
+                                    run_id=run_id,
+                                    started_at=started_at,
+                                    interrupt_point="tool_running",
+                                ):
+                                    yield event
+                                session.clear_tool_running(run_id)
+                                session.finish_run(run_id)
+                                return
+                            try:
+                                wait_task = asyncio.create_task(asyncio.sleep(self._TOOL_PROGRESS_INTERVAL_SECONDS))
+                                abort_wait_task = asyncio.create_task(session.get_run(run_id).abort_event.wait()) if session.get_run(run_id) else None
+                                wait_set = {execution_task, wait_task}
+                                if abort_wait_task is not None:
+                                    wait_set.add(abort_wait_task)
+                                done, pending = await asyncio.wait(
+                                    wait_set,
+                                    return_when=asyncio.FIRST_COMPLETED,
+                                )
+                                if execution_task in done:
+                                    result = execution_task.result()
+                                    if not wait_task.done():
+                                        wait_task.cancel()
+                                        try:
+                                            await wait_task
+                                        except asyncio.CancelledError:
+                                            pass
+                                    if abort_wait_task is not None and not abort_wait_task.done():
+                                        abort_wait_task.cancel()
+                                        try:
+                                            await abort_wait_task
+                                        except asyncio.CancelledError:
+                                            pass
+                                    break
+                                if abort_wait_task is not None and abort_wait_task in done:
+                                    continue
                                 yield make_event(
                                     session,
                                     "tool_progress",
@@ -475,11 +606,27 @@ class AgentEngine:
                                     tool_name=tool_name,
                                     elapsed_ms=int((time.perf_counter() - tool_started_at) * 1000),
                                 )
+                                for pending_task in pending:
+                                    if pending_task is not execution_task:
+                                        pending_task.cancel()
+                                        try:
+                                            await pending_task
+                                        except asyncio.CancelledError:
+                                            pass
+                            except asyncio.CancelledError:
+                                result = {
+                                    "summary": "工具执行已停止",
+                                    "aborted": True,
+                                }
+                                break
                     except Exception as exc:  # noqa: BLE001
                         result = {
                             "error": str(exc),
                             "summary": f"工具执行失败: {exc}",
                         }
+                    finally:
+                        session.clear_tool_running(run_id)
+                        session.set_tool_task(run_id, None)
                     visible_result = result.get("public_output", result) if isinstance(result, dict) else result
                     for runtime_event in result.get("runtime_events", []) if isinstance(result, dict) else []:
                         event_type = runtime_event.get("type")
@@ -531,22 +678,18 @@ class AgentEngine:
                             subtype="awaiting_user_input",
                             request_id=control.get("request_id"),
                         )
+                        session.finish_run(run_id)
                         return
-                    
-                    if session.is_aborted():
-                        yield make_event(
+
+                    if self._run_is_aborted(session, run_id):
+                        async for event in self._emit_aborted(
                             session,
-                            "aborted",
-                            partial_content=session.partial_content,
+                            run_id=run_id,
+                            started_at=started_at,
                             interrupt_point="tool_finished",
-                        )
-                        yield make_event(
-                            session,
-                            "completed",
-                            elapsed_ms=int((time.perf_counter() - started_at) * 1000),
-                            subtype="aborted",
-                        )
-                        session.clear_abort()
+                        ):
+                            yield event
+                        session.finish_run(run_id)
                         return
                     
                 context_pipeline.reset_reactive_retry(session)
@@ -594,6 +737,7 @@ class AgentEngine:
                     subtype="success",
                     stop_reason=last_stop_reason,
                 )
+                session.finish_run(run_id)
                 return
 
             yield make_event(
@@ -611,6 +755,7 @@ class AgentEngine:
                 subtype="error_empty_response",
                 stop_reason=last_stop_reason,
             )
+            session.finish_run(run_id)
             return
 
     def _fingerprint_tool_calls(self, tool_calls: dict[int, dict[str, str]]) -> str:

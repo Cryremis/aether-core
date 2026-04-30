@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.sandbox.executors import SandboxExecutor
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 from app.services.session_runtime_service import session_runtime_service
+from app.services.session_types import AgentSession
 
 
 @dataclass(frozen=True)
@@ -37,11 +38,17 @@ class DockerSandboxExecutor(SandboxExecutor):
         workspace: SandboxWorkspace,
         command: str,
         shell: str,
+        timeout_seconds: int | None = None,
+        session: AgentSession | None = None,
+        run_id: str | None = None,
     ) -> SandboxCommandResult:
         return await session_runtime_service.run_shell(
             workspace,
             command=command,
             shell=shell,
+            timeout_seconds=timeout_seconds,
+            session=session,
+            run_id=run_id,
         )
 
     async def check_availability(self) -> tuple[bool, str]:

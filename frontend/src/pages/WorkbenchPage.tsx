@@ -661,6 +661,34 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     );
   };
 
+  const settleAssistantBlocksAborted = (messageId: string, partialContent?: string) => {
+    setMessages((current) =>
+      current.map((item) => {
+        if (item.id !== messageId || item.role !== "assistant") return item;
+        return {
+          ...item,
+          blocks: item.blocks.map((block) => {
+            if (block.kind === "tool" && block.status === "running") {
+              return {
+                ...block,
+                status: "aborted",
+                outputText: block.outputText || JSON.stringify({ summary: "工具执行已停止", aborted: true }, null, 2),
+              };
+            }
+            if (block.kind === "content" && block.status === "streaming") {
+              return {
+                ...block,
+                content: partialContent && partialContent.length > 0 ? partialContent : block.content,
+                status: "aborted",
+              };
+            }
+            return block;
+          }),
+        };
+      }),
+    );
+  };
+
   const getToolDisplay = (toolName: string, inputValue: Record<string, unknown>) => {
     if (toolName === "sandbox_shell") {
       const rawCommand = String(inputValue.command ?? "").trim();
@@ -795,9 +823,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           partialContent = String(payload.partial_content ?? "");
           if (partialContent && activeContentId) {
             updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: partialContent, status: "done" } : block,
+              block.kind === "content" ? { ...block, content: partialContent, status: "aborted" } : block,
             );
           }
+          settleAssistantBlocksAborted(assistantId, partialContent);
           return;
         }
 
@@ -1047,9 +1076,9 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         await abortSession(effectiveSessionId);
       } catch (err) {
         console.error("中断请求失败:", err);
+        abortControllerRef.current.abort();
       }
     }
-    abortControllerRef.current.abort();
   };
 
   const handleElicitationSubmit = async (responses: ElicitationResponseItem[]) => {
@@ -1096,6 +1125,18 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         if (event.type === "ask_requested") {
           const snapshot = payload.snapshot as ElicitationState | undefined;
           if (snapshot) setElicitation(snapshot);
+          return;
+        }
+
+        if (event.type === "aborted") {
+          const partial = String(payload.partial_content ?? "");
+          if (partial && activeContentId) {
+            updateAssistantBlock(assistantId, activeContentId, (block) =>
+              block.kind === "content" ? { ...block, content: partial, status: "aborted" } : block,
+            );
+          }
+          settleAssistantBlocksAborted(assistantId, partial);
+          setElicitationBusy(false);
           return;
         }
 

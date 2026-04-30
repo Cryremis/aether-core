@@ -15,7 +15,7 @@ export type SkillItem = {
 
 export type AssistantBlock =
   | { id: string; kind: "reasoning"; content: string }
-  | { id: string; kind: "content"; content: string; status: "streaming" | "done" }
+  | { id: string; kind: "content"; content: string; status: "streaming" | "done" | "aborted" }
   | { id: string; kind: "elapsed"; elapsed_ms: number }
   | {
       id: string;
@@ -24,7 +24,7 @@ export type AssistantBlock =
       meta: string;
       argumentsText: string;
       outputText: string;
-      status: "running" | "done";
+      status: "running" | "done" | "aborted";
     };
 
 export type SessionMessage = {

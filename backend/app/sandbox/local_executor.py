@@ -12,6 +12,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.sandbox.executors import SandboxExecutor
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
+from app.services.session_types import AgentSession
 
 
 class LocalSandboxExecutor(SandboxExecutor):
@@ -24,12 +25,16 @@ class LocalSandboxExecutor(SandboxExecutor):
         workspace: SandboxWorkspace,
         command: str,
         shell: str,
+        timeout_seconds: int | None = None,
+        session: AgentSession | None = None,
+        run_id: str | None = None,
     ) -> SandboxCommandResult:
         if not settings.sandbox_local_enabled:
             raise RuntimeError("当前环境未开启本地执行器，已拒绝宿主机直连执行。")
 
         program, args = self._build_shell_command(shell, command)
         started_at = time.perf_counter()
+        effective_timeout = timeout_seconds or settings.sandbox_command_timeout_seconds
         kwargs: dict = {
             "cwd": str(workspace.work_dir),
             "stdout": asyncio.subprocess.PIPE,
@@ -43,13 +48,17 @@ class LocalSandboxExecutor(SandboxExecutor):
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),
-                timeout=settings.sandbox_command_timeout_seconds,
+                timeout=effective_timeout,
             )
+        except asyncio.CancelledError:
+            process.kill()
+            await process.communicate()
+            raise
         except asyncio.TimeoutError:
             process.kill()
             await process.communicate()
             raise RuntimeError(
-                f"沙箱命令执行超时，超过 {settings.sandbox_command_timeout_seconds} 秒。"
+                f"沙箱命令执行超时，超过 {effective_timeout} 秒。"
             ) from None
 
         duration_ms = int((time.perf_counter() - started_at) * 1000)

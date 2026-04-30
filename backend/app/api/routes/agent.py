@@ -75,8 +75,9 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
 async def abort_session(session_id: str, auth: AuthContext = Depends(get_auth_context)):
     """中断当前回合，保存已生成的内容。"""
     session = _ensure_session_access(session_id, auth)
-    session.request_abort()
-    return {"success": True, "partial_content": session.partial_content}
+    run_id = session.request_abort()
+    partial_content = session.get_partial_content(run_id) if run_id else ""
+    return {"success": True, "partial_content": partial_content}
 
 
 @router.post("/{session_id}/elicitation/{request_id}/respond")

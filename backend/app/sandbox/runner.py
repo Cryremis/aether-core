@@ -11,6 +11,7 @@ from app.sandbox.docker_executor import DockerSandboxExecutor
 from app.sandbox.local_executor import LocalSandboxExecutor
 from app.sandbox.manager import sandbox_manager
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
+from app.services.session_types import AgentSession
 
 
 class SandboxRunner:
@@ -27,9 +28,13 @@ class SandboxRunner:
         workspace: SandboxWorkspace,
         command: str,
         shell: str | None = None,
+        timeout_seconds: int | None = None,
+        session: AgentSession | None = None,
+        run_id: str | None = None,
     ) -> SandboxCommandResult:
         active_shell = (shell or settings.sandbox_shell).lower()
         self._validate_command(command)
+        effective_timeout = self._normalize_timeout(timeout_seconds)
 
         log_name = f"cmd_{uuid.uuid4().hex}.json"
         log_path = sandbox_manager.ensure_within_workspace(workspace, workspace.logs_dir / log_name)
@@ -41,7 +46,19 @@ class SandboxRunner:
             raise RuntimeError(f"沙箱执行器不可用: {detail}")
 
         started_at = time.perf_counter()
-        result = await executor.run_shell(workspace, command, active_shell)
+        extra_kwargs: dict[str, Any] = {}
+        if session is not None:
+            extra_kwargs["session"] = session
+        if run_id is not None:
+            extra_kwargs["run_id"] = run_id
+        if effective_timeout is not None:
+            extra_kwargs["timeout_seconds"] = effective_timeout
+        result = await executor.run_shell(
+            workspace,
+            command,
+            active_shell,
+            **extra_kwargs,
+        )
         if result.duration_ms <= 0:
             result = SandboxCommandResult(
                 command=result.command,
@@ -77,6 +94,11 @@ class SandboxRunner:
         if executor is None:
             raise RuntimeError(f"未知沙箱执行器: {settings.sandbox_executor}")
         return executor
+
+    def _normalize_timeout(self, timeout_seconds: int | None) -> int | None:
+        if timeout_seconds is None:
+            return None
+        return max(1, min(int(timeout_seconds), int(settings.sandbox_command_max_timeout_seconds)))
 
     def _write_log(
         self,

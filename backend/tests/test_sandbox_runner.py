@@ -6,8 +6,8 @@ import pytest
 
 from app.core.config import settings
 from app.sandbox.runner import SandboxRunner
-from app.sandbox.models import SandboxWorkspace
-from app.services.session_runtime_service import session_runtime_service
+from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
+from app.services.session_runtime_service import RuntimeBusyError, session_runtime_service
 from app.services.store import store_service
 
 
@@ -185,3 +185,102 @@ def test_collect_expired_runtime_marks_record(tmp_path, monkeypatch):
     assert runtime is not None
     assert runtime["status"] == "expired"
     assert runtime["destroy_reason"] == "idle_ttl_expired"
+
+
+def test_runner_passes_session_context_to_executor(tmp_path, monkeypatch):
+    runner = SandboxRunner()
+    observed: dict[str, object] = {}
+
+    class FakeExecutor:
+        async def check_availability(self):
+            return True, "ok"
+
+        async def run_shell(self, workspace, command, shell, timeout_seconds=None, session=None, run_id=None):
+            observed["session"] = session
+            observed["run_id"] = run_id
+            observed["timeout_seconds"] = timeout_seconds
+            return SandboxCommandResult(
+                command=command,
+                shell=shell,
+                executor="fake",
+                exit_code=0,
+                stdout="ok\n",
+                stderr="",
+                duration_ms=1,
+                log_path="",
+            )
+
+    monkeypatch.setitem(runner._executors, "docker", FakeExecutor())
+    monkeypatch.setattr(settings, "sandbox_executor", "docker")
+    monkeypatch.setattr(settings, "sandbox_fail_closed", True)
+
+    from app.services.session_types import AgentSession
+
+    workspace = build_workspace(tmp_path / "sandbox")
+    session = AgentSession(session_id=workspace.session_id)
+
+    async def execute():
+        await runner.run_shell(workspace, "echo hello", "bash", timeout_seconds=45, session=session, run_id="run_test")
+
+    asyncio.run(execute())
+
+    assert observed["session"] is session
+    assert observed["run_id"] == "run_test"
+    assert observed["timeout_seconds"] == 45
+
+
+def test_runtime_timeout_is_clamped_by_max(monkeypatch):
+    monkeypatch.setattr(settings, "sandbox_command_timeout_seconds", 120)
+    monkeypatch.setattr(settings, "sandbox_command_max_timeout_seconds", 300)
+
+    assert session_runtime_service._effective_timeout_seconds(None) == 120
+    assert session_runtime_service._effective_timeout_seconds(30) == 30
+    assert session_runtime_service._effective_timeout_seconds(9999) == 300
+
+
+def test_runtime_busy_error_when_runtime_remains_draining(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    workspace = build_workspace(tmp_path / "sandbox")
+    now = datetime.now(timezone.utc)
+    store_service.upsert_session_runtime(
+        session_id=workspace.session_id,
+        conversation_id=None,
+        platform_id=None,
+        owner_user_id=None,
+        external_user_id=None,
+        container_name="test-container",
+        container_id="container-id",
+        image=settings.sandbox_docker_image,
+        status="draining",
+        generation=2,
+        network_mode="none",
+        created_at=now.isoformat(),
+        updated_at=now.isoformat(),
+        last_started_at=now.isoformat(),
+        last_used_at=now.isoformat(),
+        idle_expires_at=(now + timedelta(days=1)).isoformat(),
+        max_expires_at=(now + timedelta(days=7)).isoformat(),
+        destroyed_at=None,
+        destroy_reason=None,
+        restart_count=0,
+        workspace_root=str(workspace.root),
+        home_root=str(workspace.home_dir),
+        metadata={"runtime_spec": session_runtime_service._build_runtime_spec()},
+    )
+
+    monkeypatch.setattr(settings, "sandbox_runtime_busy_wait_seconds", 0)
+
+    async def fake_inspect(_container_name: str):
+        return "exited"
+
+    monkeypatch.setattr(session_runtime_service, "_inspect_container_state", fake_inspect)
+
+    async def execute():
+        with pytest.raises(RuntimeBusyError, match="前一个命令仍在退出中"):
+            await session_runtime_service.run_shell(
+                workspace,
+                command="echo hello",
+                shell="bash",
+            )
+
+    asyncio.run(execute())

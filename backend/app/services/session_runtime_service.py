@@ -8,13 +8,26 @@ import shutil
 import subprocess
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
+from app.services.session_types import AgentSession
 from app.services.store import store_service, utcnow_iso
+
+
+@dataclass(frozen=True)
+class RuntimeBusyError(RuntimeError):
+    session_id: str
+    summary: str
+    runtime: dict[str, Any]
+    suggested_actions: tuple[str, ...] = ("retry_wait", "rebuild_runtime")
+
+    def __str__(self) -> str:
+        return self.summary
 
 
 class SessionRuntimeService:
@@ -49,6 +62,9 @@ class SessionRuntimeService:
         *,
         command: str,
         shell: str,
+        timeout_seconds: int | None = None,
+        session: AgentSession | None = None,
+        run_id: str | None = None,
     ) -> SandboxCommandResult:
         lock = self._locks[workspace.session_id]
         async with lock:
@@ -56,8 +72,30 @@ class SessionRuntimeService:
                 workspace,
                 command=command,
                 shell=shell,
+                timeout_seconds=timeout_seconds,
                 allow_network_recovery=True,
+                session=session,
+                run_id=run_id,
             )
+
+    async def rebuild_runtime(self, workspace: SandboxWorkspace, *, reason: str) -> dict[str, Any]:
+        lock = self._locks[workspace.session_id]
+        async with lock:
+            current = await self.refresh_runtime(workspace.session_id)
+            previous_generation = int(current.get("generation") or 0)
+            previous_status = str(current.get("status") or "missing")
+            if current.get("container_name"):
+                await self._collect_locked(workspace.session_id, reason=reason)
+            runtime = await self._create_runtime_locked(workspace, generation=previous_generation + 1)
+            return {
+                "status": "recreated" if previous_generation > 0 else "created",
+                "reason": reason,
+                "previous_status": previous_status,
+                "previous_generation": previous_generation,
+                "generation": runtime["generation"],
+                "container_name": runtime["container_name"],
+                "idle_expires_at": runtime["idle_expires_at"],
+            }
 
     async def check_availability(self) -> tuple[bool, str]:
         docker_binary = self._resolve_docker_binary()
@@ -195,6 +233,17 @@ class SessionRuntimeService:
                 "notice": None,
             }
         if current.get("status") == "busy" and recreate_reason is None:
+            return {
+                "runtime": current,
+                "notice": None,
+            }
+        if current.get("status") in {"draining", "stuck", "exited"} and recreate_reason is None:
+            return {
+                "runtime": current,
+                "notice": None,
+            }
+
+        if recreate_reason is None and current.get("status") != "missing":
             return {
                 "runtime": current,
                 "notice": None,
@@ -389,8 +438,8 @@ class SessionRuntimeService:
             last_used_at=self._to_iso(last_used_at),
             idle_expires_at=idle_expires_at,
             max_expires_at=runtime.get("max_expires_at"),
-            destroyed_at=None if status in {"running", "busy"} else runtime.get("destroyed_at"),
-            destroy_reason=None if status in {"running", "busy"} else runtime.get("destroy_reason"),
+            destroyed_at=None if status in {"running", "busy", "draining", "stuck"} else runtime.get("destroyed_at"),
+            destroy_reason=None if status in {"running", "busy", "draining", "stuck"} else runtime.get("destroy_reason"),
             restart_count=int(runtime.get("restart_count") or 0),
             workspace_root=str(workspace.root),
             home_root=str(workspace.home_dir),
@@ -687,10 +736,30 @@ class SessionRuntimeService:
         *,
         command: str,
         shell: str,
+        timeout_seconds: int | None,
         allow_network_recovery: bool,
+        session: AgentSession | None,
+        run_id: str | None,
     ) -> SandboxCommandResult:
         runtime_state = await self._ensure_runtime_locked(workspace)
         runtime = runtime_state["runtime"]
+        effective_timeout = self._effective_timeout_seconds(timeout_seconds)
+        runtime_status = str(runtime.get("status") or "")
+        if runtime_status in {"draining", "stuck", "failed", "collected", "exited"}:
+            refreshed = await self._wait_for_runtime_ready_locked(workspace, runtime)
+            refreshed_status = str(refreshed.get("status") or "")
+            if refreshed_status != "running":
+                raise RuntimeBusyError(
+                    session_id=workspace.session_id,
+                    summary="前一个命令仍在退出中，当前沙箱暂时不可用。可以继续等待，或调用 rebuild_runtime 重建沙箱。",
+                    runtime={
+                        "status": refreshed_status,
+                        "generation": refreshed.get("generation"),
+                        "container_name": refreshed.get("container_name"),
+                        "destroy_reason": refreshed.get("destroy_reason"),
+                    },
+                )
+            runtime = refreshed
         container_name = str(runtime["container_name"])
         now = self._now()
         await self._persist_runtime(
@@ -710,15 +779,48 @@ class SessionRuntimeService:
                 stderr=asyncio.subprocess.PIPE,
                 **self._subprocess_kwargs(),
             )
+            if session is not None and run_id is not None:
+                session.set_tool_task(run_id, process)
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),
-                timeout=settings.sandbox_command_timeout_seconds,
+                timeout=effective_timeout,
             )
+        except asyncio.CancelledError:
+            await self._terminate_process(process, container_name=container_name)
+            now = self._now()
+            await self._persist_runtime(
+                session_id=workspace.session_id,
+                workspace=workspace,
+                runtime=runtime,
+                status="draining",
+                last_used_at=now,
+                idle_expires_at=self._to_iso(now + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds)),
+            )
+            raise
         except asyncio.TimeoutError:
-            await self._collect_locked(workspace.session_id, reason="command_timeout")
-            raise RuntimeError(
-                f"容器沙箱执行超时，已回收当前 runtime，超过 {settings.sandbox_command_timeout_seconds} 秒。"
+            await self._terminate_process(process, container_name=container_name)
+            now = self._now()
+            await self._persist_runtime(
+                session_id=workspace.session_id,
+                workspace=workspace,
+                runtime=runtime,
+                status="stuck",
+                last_used_at=now,
+                idle_expires_at=self._to_iso(now + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds)),
+            )
+            raise RuntimeBusyError(
+                session_id=workspace.session_id,
+                summary=f"命令执行超过 {effective_timeout} 秒仍未完成，当前沙箱可能卡住。可以继续等待，或调用 rebuild_runtime 重建沙箱。",
+                runtime={
+                    "status": "stuck",
+                    "generation": runtime.get("generation"),
+                    "container_name": runtime.get("container_name"),
+                    "destroy_reason": "command_timeout",
+                },
             ) from None
+        finally:
+            if session is not None and run_id is not None:
+                session.set_tool_task(run_id, None)
 
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         stdout_text = self._decode_output(stdout_bytes)
@@ -736,7 +838,10 @@ class SessionRuntimeService:
                 workspace,
                 command=command,
                 shell=shell,
+                timeout_seconds=effective_timeout,
                 allow_network_recovery=False,
+                session=session,
+                run_id=run_id,
             )
 
         now = self._now()
@@ -763,8 +868,73 @@ class SessionRuntimeService:
                 "generation": runtime["generation"],
                 "container_name": runtime["container_name"],
                 "idle_expires_at": runtime["idle_expires_at"],
+                "timeout_seconds": effective_timeout,
             },
         )
+
+    def _effective_timeout_seconds(self, requested_timeout: int | None) -> int:
+        default_timeout = max(1, int(settings.sandbox_command_timeout_seconds))
+        max_timeout = max(default_timeout, int(settings.sandbox_command_max_timeout_seconds))
+        if requested_timeout is None:
+            return min(default_timeout, max_timeout)
+        return max(1, min(int(requested_timeout), max_timeout))
+
+    async def _wait_for_runtime_ready_locked(
+        self,
+        workspace: SandboxWorkspace,
+        runtime: dict[str, Any],
+    ) -> dict[str, Any]:
+        deadline = time.perf_counter() + max(0, settings.sandbox_runtime_busy_wait_seconds)
+        current = runtime
+        while time.perf_counter() < deadline:
+            state = await self._inspect_container_state(str(current.get("container_name") or ""))
+            if state == "running":
+                now = self._now()
+                current = await self._persist_runtime(
+                    session_id=workspace.session_id,
+                    workspace=workspace,
+                    runtime=current,
+                    status="running",
+                    last_used_at=now,
+                    idle_expires_at=self._to_iso(now + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds)),
+                )
+                return current
+            await asyncio.sleep(0.2)
+            current = await self.refresh_runtime(workspace.session_id)
+        return await self.refresh_runtime(workspace.session_id)
+
+    async def _terminate_process(
+        self,
+        process: asyncio.subprocess.Process,
+        *,
+        container_name: str | None = None,
+    ) -> None:
+        if process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=settings.sandbox_cancel_grace_seconds)
+            return
+        except (asyncio.TimeoutError, ProcessLookupError):
+            pass
+        if process.returncode is None:
+            process.kill()
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=settings.sandbox_force_kill_grace_seconds)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            if container_name:
+                docker_binary = self._resolve_docker_binary()
+                if docker_binary:
+                    forced = await asyncio.create_subprocess_exec(
+                        docker_binary,
+                        "rm",
+                        "-f",
+                        container_name,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        **self._subprocess_kwargs(),
+                    )
+                    await forced.communicate()
 
     def _runtime_dns_servers(self) -> list[str]:
         configured = [item.strip() for item in settings.sandbox_docker_dns_servers if item.strip()]

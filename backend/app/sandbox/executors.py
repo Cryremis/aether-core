@@ -4,6 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
+from app.services.session_types import AgentSession
 
 
 class SandboxExecutor(ABC):
@@ -17,6 +18,9 @@ class SandboxExecutor(ABC):
         workspace: SandboxWorkspace,
         command: str,
         shell: str,
+        timeout_seconds: int | None = None,
+        session: AgentSession | None = None,
+        run_id: str | None = None,
     ) -> SandboxCommandResult:
         """在受控执行环境中运行命令。"""
 

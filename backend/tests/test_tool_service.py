@@ -138,7 +138,7 @@ def test_sandbox_shell_reports_runtime_recreated(monkeypatch, tmp_path):
     settings.storage_root = tmp_path / "storage"
     session = session_service.get_or_create("sess_runtime_recreated")
 
-    async def fake_run_shell(*, workspace, command, shell):
+    async def fake_run_shell(*, workspace, command, shell, timeout_seconds=None):
         return SandboxCommandResult(
             command=command,
             shell=shell,
@@ -183,7 +183,7 @@ def test_sandbox_shell_raw_output_omits_command(monkeypatch, tmp_path):
     settings.storage_root = tmp_path / "storage"
     session = session_service.get_or_create("sess_shell_no_command")
 
-    async def fake_run_shell(*, workspace, command, shell):
+    async def fake_run_shell(*, workspace, command, shell, timeout_seconds=None):
         return SandboxCommandResult(
             command=command,
             shell=shell,
@@ -211,6 +211,114 @@ def test_sandbox_shell_raw_output_omits_command(monkeypatch, tmp_path):
 
     assert "command" not in result
     assert result["shell"] == "bash"
+
+
+def test_sandbox_shell_passes_timeout_override(monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_shell_timeout")
+    observed: dict[str, object] = {}
+
+    async def fake_run_shell(*, workspace, command, shell, timeout_seconds=None, session=None, run_id=None):
+        observed["timeout_seconds"] = timeout_seconds
+        return SandboxCommandResult(
+            command=command,
+            shell=shell,
+            executor="docker",
+            exit_code=0,
+            stdout="ok\n",
+            stderr="",
+            duration_ms=12,
+            log_path="logs/cmd_timeout.json",
+            runtime_metadata={"status": "running", "timeout_seconds": timeout_seconds},
+        )
+
+    monkeypatch.setattr("app.services.tool_service.sandbox_runner.run_shell", fake_run_shell)
+
+    result = __import__("asyncio").run(
+        tool_service.execute(
+            session,
+            "sandbox_shell",
+            {
+                "command": "echo hello",
+                "shell": "bash",
+                "timeout_seconds": 321,
+            },
+        )
+    )
+
+    assert observed["timeout_seconds"] == 321
+    assert result["runtime"]["timeout_seconds"] == 321
+
+
+def test_sandbox_shell_returns_runtime_busy_payload(monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+    from app.services.session_runtime_service import RuntimeBusyError
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_shell_busy")
+
+    async def fake_run_shell(*, workspace, command, shell, timeout_seconds=None, session=None, run_id=None):
+        raise RuntimeBusyError(
+            session_id=workspace.session_id,
+            summary="前一个命令仍在退出中，当前沙箱暂时不可用。可以继续等待，或调用 rebuild_runtime 重建沙箱。",
+            runtime={"status": "draining", "generation": 2},
+        )
+
+    monkeypatch.setattr("app.services.tool_service.sandbox_runner.run_shell", fake_run_shell)
+
+    result = __import__("asyncio").run(
+        tool_service.execute(
+            session,
+            "sandbox_shell",
+            {
+                "command": "echo hello",
+                "shell": "bash",
+            },
+        )
+    )
+
+    assert result["error_code"] == "runtime_busy"
+    assert result["recoverable"] is True
+    assert "rebuild_runtime" in result["suggested_actions"]
+
+
+def test_rebuild_runtime_tool_reports_runtime_event(monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_runtime_rebuild_tool")
+
+    async def fake_rebuild_runtime(workspace, *, reason):
+        return {
+            "status": "recreated",
+            "reason": reason,
+            "previous_status": "stuck",
+            "previous_generation": 1,
+            "generation": 2,
+            "container_name": "aethercore-sess-demo-g2",
+            "idle_expires_at": "2026-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr("app.services.tool_service.session_runtime_service.rebuild_runtime", fake_rebuild_runtime)
+
+    result = __import__("asyncio").run(
+        tool_service.execute(
+            session,
+            "rebuild_runtime",
+            {
+                "reason": "agent_requested_rebuild",
+            },
+        )
+    )
+
+    assert result["summary"] == "沙箱 runtime 已重建"
+    assert result["runtime"]["status"] == "recreated"
+    assert result["runtime_events"][0]["type"] == "runtime_recreated"
 
 
 def test_prompt_workspace_paths_use_container_paths(tmp_path):

@@ -582,3 +582,88 @@ def test_agent_engine_recovers_from_prompt_too_long(monkeypatch, tmp_path):
     assert any(item["type"] == "context_recovered" for item in events)
     assert any(item["type"] == "result" and item["payload"]["subtype"] == "success" for item in events)
     assert any(message.get("is_compact_summary") for message in session.messages)
+
+
+def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        user_messages = [message for message in messages if message.get("role") == "user"]
+        latest_user = str(user_messages[-1].get("content", "")) if user_messages else ""
+        if latest_user == "stop me":
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_stop",
+                                    "function": {
+                                        "name": "sandbox_shell",
+                                        "arguments": '{"command":"sleep 5","shell":"bash"}',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            }
+            return
+
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "second run ok"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    tool_started = asyncio.Event()
+
+    async def fake_execute(session, tool_name, arguments, *, run_id=None):
+        tool_started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
+    monkeypatch.setattr(agent_engine, "_TOOL_PROGRESS_INTERVAL_SECONDS", 0.01)
+
+    session = AgentSession(session_id="sess_engine_abort_and_resume")
+
+    async def run_flow():
+        first_events: list[dict] = []
+
+        async def consume_first():
+            async for event in agent_engine.stream_chat(session, "stop me"):
+                first_events.append(event.model_dump(mode="json"))
+
+        task = asyncio.create_task(consume_first())
+        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        aborted_run_id = session.request_abort()
+        assert aborted_run_id is not None
+        await asyncio.wait_for(task, timeout=1)
+
+        second_events = await collect_stream(session, "next message")
+        return first_events, second_events
+
+    first_events, second_events = asyncio.run(run_flow())
+
+    assert any(item["type"] == "aborted" for item in first_events)
+    tool_finished = next(item for item in first_events if item["type"] == "tool_finished")
+    assert tool_finished["payload"]["output"]["aborted"] is True
+    assert session.current_run_id() is None
+
+    result_event = next(item for item in second_events if item["type"] == "result")
+    assert result_event["payload"]["subtype"] == "success"
+    assert result_event["payload"]["result"] == "second run ok"
+    assert all(item["type"] != "aborted" for item in second_events)
