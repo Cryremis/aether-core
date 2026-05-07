@@ -1,8 +1,7 @@
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { AnsiUp } from "ansi_up";
 import "@xterm/xterm/css/xterm.css";
 import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs } from "../../pages/workbench/markdown";
 import type { ChatMessage } from "../../pages/workbench/types";
@@ -18,6 +17,40 @@ type SummaryResult = {
   primary: string;
   meta: Array<[string, string]>;
   raw: string;
+};
+
+type TerminalSpan = {
+  text: string;
+  style: CSSProperties;
+  styleKey: string;
+};
+
+type TerminalLine = {
+  spans: TerminalSpan[];
+};
+
+const ANSI_BASIC_COLORS = [
+  "#6b7280",
+  "#cd3131",
+  "#0dbc79",
+  "#e5e510",
+  "#2472c8",
+  "#bc3fbc",
+  "#11a8cd",
+  "#e5e5e5",
+  "#9ca3af",
+  "#f14c4c",
+  "#23d18b",
+  "#f5f543",
+  "#3b8eea",
+  "#d670d6",
+  "#29b8db",
+  "#ffffff",
+];
+
+const RESULT_TERMINAL_THEME = {
+  background: "#f8fffb",
+  foreground: "#166534",
 };
 
 function LiveElapsedBadge({ startTime }: { startTime: number }) {
@@ -190,9 +223,205 @@ function summarizeToolOutput(outputText: string, liveOutputText?: string): Summa
   };
 }
 
+function extractTerminalTextFromOutput(outputText: string): string | null {
+  const parsed = parseJsonSafely(outputText);
+  if (!parsed) return null;
+  const hasStdout = typeof parsed.stdout === "string";
+  const hasStderr = typeof parsed.stderr === "string";
+  if (!hasStdout && !hasStderr) return null;
+  const stdout = hasStdout ? String(parsed.stdout ?? "") : "";
+  const stderr = hasStderr ? String(parsed.stderr ?? "") : "";
+  if (!stdout) return stderr;
+  if (!stderr) return stdout;
+  return stdout.endsWith("\n") ? `${stdout}${stderr}` : `${stdout}\n${stderr}`;
+}
+
 function countTerminalLines(value: string): number {
   if (!value) return 0;
   return value.split(/\r\n|\r|\n/).length;
+}
+
+function toHexChannel(value: number) {
+  return value.toString(16).padStart(2, "0");
+}
+
+function ansi256ToHex(index: number) {
+  if (index < 0) return null;
+  if (index < 16) return ANSI_BASIC_COLORS[index] ?? null;
+  if (index <= 231) {
+    const normalized = index - 16;
+    const r = Math.floor(normalized / 36);
+    const g = Math.floor((normalized % 36) / 6);
+    const b = normalized % 6;
+    const channels = [r, g, b].map((part) => (part === 0 ? 0 : 55 + part * 40));
+    return `#${channels.map(toHexChannel).join("")}`;
+  }
+  if (index <= 255) {
+    const c = 8 + (index - 232) * 10;
+    return `#${toHexChannel(c)}${toHexChannel(c)}${toHexChannel(c)}`;
+  }
+  return null;
+}
+
+function rgbNumberToHex(value: number) {
+  return `#${value.toString(16).padStart(6, "0")}`;
+}
+
+function serializeStyle(style: CSSProperties) {
+  return JSON.stringify(style);
+}
+
+function buildCellStyle(cell: {
+  isFgRGB(): boolean;
+  isFgPalette(): boolean;
+  isFgDefault(): boolean;
+  isBgRGB(): boolean;
+  isBgPalette(): boolean;
+  isBgDefault(): boolean;
+  getFgColor(): number;
+  getBgColor(): number;
+  isBold(): number;
+  isItalic(): number;
+  isUnderline(): number;
+  isStrikethrough(): number;
+  isInverse(): number;
+  isInvisible(): number;
+  isDim(): number;
+}): CSSProperties {
+  const style: CSSProperties = {};
+
+  let foreground = RESULT_TERMINAL_THEME.foreground;
+  if (cell.isFgRGB()) {
+    foreground = rgbNumberToHex(cell.getFgColor());
+  } else if (cell.isFgPalette()) {
+    foreground = ansi256ToHex(cell.getFgColor()) ?? foreground;
+  } else if (!cell.isFgDefault()) {
+    foreground = RESULT_TERMINAL_THEME.foreground;
+  }
+
+  let background = "transparent";
+  if (cell.isBgRGB()) {
+    background = rgbNumberToHex(cell.getBgColor());
+  } else if (cell.isBgPalette()) {
+    background = ansi256ToHex(cell.getBgColor()) ?? background;
+  } else if (!cell.isBgDefault()) {
+    background = RESULT_TERMINAL_THEME.background;
+  }
+
+  if (cell.isInverse()) {
+    const swappedForeground = background === "transparent" ? RESULT_TERMINAL_THEME.background : background;
+    background = foreground;
+    foreground = swappedForeground;
+  }
+
+  style.color = foreground;
+  if (background !== "transparent") {
+    style.backgroundColor = background;
+  }
+  if (cell.isBold()) style.fontWeight = 700;
+  if (cell.isItalic()) style.fontStyle = "italic";
+  if (cell.isDim()) style.opacity = 0.72;
+  const decorations: string[] = [];
+  if (cell.isUnderline()) decorations.push("underline");
+  if (cell.isStrikethrough()) decorations.push("line-through");
+  if (decorations.length > 0) style.textDecoration = decorations.join(" ");
+  if (cell.isInvisible()) style.visibility = "hidden";
+
+  return style;
+}
+
+function extractTerminalLines(terminal: XTerm): TerminalLine[] {
+  const lines: TerminalLine[] = [];
+  const buffer = terminal.buffer.active;
+
+  for (let lineIndex = 0; lineIndex <= buffer.baseY + buffer.cursorY; lineIndex += 1) {
+    const bufferLine = buffer.getLine(lineIndex);
+    if (!bufferLine) continue;
+
+    let maxCellIndex = -1;
+    const scanLimit = Math.min(bufferLine.length, terminal.cols);
+    for (let cellIndex = 0; cellIndex < scanLimit; cellIndex += 1) {
+      const cell = bufferLine.getCell(cellIndex);
+      if (!cell) continue;
+      if (cell.getChars() || cell.getCode() !== 0 || !cell.isAttributeDefault()) {
+        maxCellIndex = cellIndex;
+      }
+    }
+
+    if (maxCellIndex < 0) {
+      lines.push({ spans: [] });
+      continue;
+    }
+
+    const spans: TerminalSpan[] = [];
+    for (let cellIndex = 0; cellIndex <= maxCellIndex; cellIndex += 1) {
+      const cell = bufferLine.getCell(cellIndex);
+      if (!cell || cell.getWidth() === 0) continue;
+      const text = cell.getChars() || " ";
+      const style = buildCellStyle(cell);
+      const styleKey = serializeStyle(style);
+      const previous = spans[spans.length - 1];
+      if (previous && previous.styleKey === styleKey) {
+        previous.text += text;
+      } else {
+        spans.push({ text, style, styleKey });
+      }
+    }
+
+    lines.push({ spans });
+  }
+
+  return lines;
+}
+
+function ParsedTerminalRenderer({ text }: { text: string }) {
+  const [lines, setLines] = useState<TerminalLine[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const terminal = new XTerm({
+      cols: 4096,
+      rows: 1,
+      scrollback: 5000,
+      allowTransparency: true,
+      convertEol: false,
+      disableStdin: true,
+    });
+
+    terminal.write(text || " ", () => {
+      if (cancelled) {
+        terminal.dispose();
+        return;
+      }
+      setLines(extractTerminalLines(terminal));
+      terminal.dispose();
+    });
+
+    return () => {
+      cancelled = true;
+      terminal.dispose();
+    };
+  }, [text]);
+
+  if (lines.length === 0) {
+    return <span className="tool-panel__empty tool-panel__empty--result">等待执行结果...</span>;
+  }
+
+  return (
+    <div className="tool-plain-terminal" role="textbox" aria-readonly="true">
+      {lines.map((line, lineIndex) => (
+        <span key={`line-${lineIndex}`} className="tool-terminal-line">
+          {line.spans.length === 0
+            ? "\u00a0"
+            : line.spans.map((span, spanIndex) => (
+                <span key={`span-${lineIndex}-${spanIndex}`} style={span.style}>
+                  {span.text}
+                </span>
+              ))}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function XTermRenderer({ text, variant, active = true }: { text: string; variant: "terminal" | "result"; active?: boolean }) {
@@ -289,40 +518,6 @@ function XTermRenderer({ text, variant, active = true }: { text: string; variant
   }, [active]);
 
   return <div ref={hostRef} className={`tool-xterm tool-xterm--${variant}`} />;
-}
-
-function normalizeTerminalOutput(value: string): string {
-  if (!value) return value;
-  const normalizedNewlines = value.replace(/\r\n/g, "\n");
-  const logicalLines = normalizedNewlines
-    .split("\n")
-    .map((line) => {
-      if (!line.includes("\r")) return line;
-      const frames = line.split("\r");
-      return frames[frames.length - 1] ?? "";
-    });
-  return logicalLines.join("\n");
-}
-
-function extractRunTextFromOutput(outputText: string): string {
-  const parsed = parseJsonSafely(outputText);
-  if (!parsed) return "";
-  const stdout = typeof parsed.stdout === "string" ? parsed.stdout : "";
-  const stderr = typeof parsed.stderr === "string" ? parsed.stderr : "";
-  if (!stdout && !stderr) return "";
-  if (!stdout) return stderr;
-  if (!stderr) return stdout;
-  return stdout.endsWith("\n") ? `${stdout}${stderr}` : `${stdout}\n${stderr}`;
-}
-
-function PlainOutputRenderer({ text }: { text: string }) {
-  const html = useMemo(() => {
-    const ansi = new AnsiUp();
-    ansi.use_classes = false;
-    return ansi.ansi_to_html(normalizeTerminalOutput(text || " "));
-  }, [text]);
-
-  return <pre className="tool-plain-output" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function IconPopover({ label, children, icon }: { label: string; children: ReactNode; icon: ReactNode }) {
@@ -449,6 +644,7 @@ function ToolResultPanel({ outputText, liveOutputText, status }: { outputText: s
   const [height, setHeight] = useState(180);
   const result = useMemo(() => summarizeToolOutput(outputText, liveOutputText), [outputText, liveOutputText]);
   const primary = result.primary || (status === "running" ? "等待执行结果..." : "");
+  const terminalText = useMemo(() => extractTerminalTextFromOutput(outputText), [outputText]);
   const handleResizeStart = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const startY = event.clientY;
     const startHeight = height;
@@ -492,7 +688,7 @@ function ToolResultPanel({ outputText, liveOutputText, status }: { outputText: s
       </div>
       <div className="tool-panel__body" style={{ height }}>
         <div className="tool-panel__content tool-panel__content--result">
-          <PlainOutputRenderer text={primary || " "} />
+          {terminalText !== null ? <ParsedTerminalRenderer text={terminalText} /> : <ParsedTerminalRenderer text={primary || " "} />}
         </div>
         <button
           type="button"
@@ -517,9 +713,7 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status }: 
   const [expanded, setExpanded] = useState(status === "running");
   const inputSummary = useMemo(() => summarizeToolArguments(argumentsText, title), [argumentsText, title]);
   const outputSummary = useMemo(() => summarizeToolOutput(outputText, liveOutputText), [outputText, liveOutputText]);
-  const persistedRunText = useMemo(() => extractRunTextFromOutput(outputText), [outputText]);
-  const runText = liveOutputText ?? persistedRunText;
-  const showRunPanel = status === "running" || Boolean(runText);
+  const runText = liveOutputText ?? "";
 
   useEffect(() => {
     if (status === "running") {
@@ -561,7 +755,7 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status }: 
       <div className="tool-body-wrapper">
         <div className="tool-body-inner">
           <div className="tool-body">
-            {showRunPanel ? <ToolLivePanel text={runText} /> : null}
+            {status === "running" ? <ToolLivePanel text={runText} /> : null}
             {status !== "running" ? <ToolResultPanel outputText={outputText} liveOutputText={liveOutputText} status={status} /> : null}
           </div>
         </div>
