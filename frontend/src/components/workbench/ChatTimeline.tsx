@@ -291,11 +291,35 @@ function XTermRenderer({ text, variant, active = true }: { text: string; variant
   return <div ref={hostRef} className={`tool-xterm tool-xterm--${variant}`} />;
 }
 
+function normalizeTerminalOutput(value: string): string {
+  if (!value) return value;
+  const normalizedNewlines = value.replace(/\r\n/g, "\n");
+  const logicalLines = normalizedNewlines
+    .split("\n")
+    .map((line) => {
+      if (!line.includes("\r")) return line;
+      const frames = line.split("\r");
+      return frames[frames.length - 1] ?? "";
+    });
+  return logicalLines.join("\n");
+}
+
+function extractRunTextFromOutput(outputText: string): string {
+  const parsed = parseJsonSafely(outputText);
+  if (!parsed) return "";
+  const stdout = typeof parsed.stdout === "string" ? parsed.stdout : "";
+  const stderr = typeof parsed.stderr === "string" ? parsed.stderr : "";
+  if (!stdout && !stderr) return "";
+  if (!stdout) return stderr;
+  if (!stderr) return stdout;
+  return stdout.endsWith("\n") ? `${stdout}${stderr}` : `${stdout}\n${stderr}`;
+}
+
 function PlainOutputRenderer({ text }: { text: string }) {
   const html = useMemo(() => {
     const ansi = new AnsiUp();
     ansi.use_classes = false;
-    return ansi.ansi_to_html(text || " ");
+    return ansi.ansi_to_html(normalizeTerminalOutput(text || " "));
   }, [text]);
 
   return <pre className="tool-plain-output" dangerouslySetInnerHTML={{ __html: html }} />;
@@ -493,6 +517,9 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status }: 
   const [expanded, setExpanded] = useState(status === "running");
   const inputSummary = useMemo(() => summarizeToolArguments(argumentsText, title), [argumentsText, title]);
   const outputSummary = useMemo(() => summarizeToolOutput(outputText, liveOutputText), [outputText, liveOutputText]);
+  const persistedRunText = useMemo(() => extractRunTextFromOutput(outputText), [outputText]);
+  const runText = liveOutputText ?? persistedRunText;
+  const showRunPanel = status === "running" || Boolean(runText);
 
   useEffect(() => {
     if (status === "running") {
@@ -534,7 +561,7 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status }: 
       <div className="tool-body-wrapper">
         <div className="tool-body-inner">
           <div className="tool-body">
-            {status === "running" || liveOutputText ? <ToolLivePanel text={liveOutputText ?? ""} /> : null}
+            {showRunPanel ? <ToolLivePanel text={runText} /> : null}
             {status !== "running" ? <ToolResultPanel outputText={outputText} liveOutputText={liveOutputText} status={status} /> : null}
           </div>
         </div>
