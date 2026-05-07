@@ -35,6 +35,28 @@ function RuntimeNotice({ title, detail }: { title: string; detail?: string }) {
   );
 }
 
+function ToolTerminal({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(true);
+  const lineCount = text.length === 0 ? 0 : text.split(/\r?\n/).length;
+
+  return (
+    <div className="tool-live-panel">
+      <button
+        type="button"
+        className="tool-live-panel__header"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+      >
+        <span className="tool-live-panel__title">实时执行日志</span>
+        <span className="tool-live-panel__meta">{expanded ? "收起" : `展开全部${lineCount > 0 ? ` (${lineCount} 行)` : ""}`}</span>
+      </button>
+      {expanded ? (
+        <pre className="tool-terminal-output">{text || "等待工具输出..."}</pre>
+      ) : null}
+    </div>
+  );
+}
+
 export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProps) {
   return (
     <div ref={contentRef} className="chat-container">
@@ -114,6 +136,11 @@ export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProp
                             <div className="tool-section">
                               <div className="section-label">输入参数</div>
                               <pre className="code-block input">{segment.block.argumentsText}</pre>
+                            </div>
+                          ) : null}
+                          {segment.block.status === "running" || segment.block.liveOutputText ? (
+                            <div className="tool-section">
+                              <ToolTerminal text={segment.block.liveOutputText ?? ""} />
                             </div>
                           ) : null}
                           {segment.block.outputText ? (

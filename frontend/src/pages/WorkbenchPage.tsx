@@ -18,6 +18,8 @@ import {
   listSkills,
   streamElicitationResponse,
   streamChat,
+  streamRunEvents,
+  type ActiveRunSummary,
   type WorkboardState,
   updateSessionWorkboard,
   updateUserLlmConfig,
@@ -112,6 +114,16 @@ function buildRuntimeNoticeBlock(payload: Record<string, unknown>): AssistantBlo
   };
 }
 
+function stringifyStructured(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 function getOpenWorkItemCount(workboard: WorkboardState | null): number {
   if (!workboard) return 0;
   return workboard.items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
@@ -173,6 +185,7 @@ export function WorkbenchPage({
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
   const isStreamingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const liveRunRef = useRef<{ runId: string; assistantId: string } | null>(null);
   const newlyCreatedSessionRef = useRef<string | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
@@ -563,10 +576,10 @@ window.addEventListener("resize", handleResize);
         blocking_limit?: number;
         percent_used?: number;
       };
+      active_run?: ActiveRunSummary | null;
     };
-    setMessages(
-      fromTranscriptMessages(summary.transcript ?? []),
-    );
+    const transcriptMessages = fromTranscriptMessages(summary.transcript ?? []);
+    setMessages(transcriptMessages);
     setAllowNetwork(summary.allow_network ?? true);
     setSkills(summary.skills ?? []);
     setFiles(summary.files ?? []);
@@ -586,6 +599,12 @@ window.addEventListener("resize", handleResize);
         detail: "已恢复上下文状态",
       });
     }
+    liveRunRef.current = null;
+    if (summary.active_run?.status === "running") {
+      restoreActiveRunAssistant(summary.active_run, Date.now());
+      return summary.active_run;
+    }
+    return null;
   };
 
   const handleWorkboardOps = async (ops: WorkboardOperation[]) => {
@@ -643,6 +662,32 @@ window.addEventListener("resize", handleResize);
     setLoading(true);
     setError("");
     void loadSession(targetSessionId)
+      .then((activeRun) => {
+        if (!activeRun) return;
+        const reconnectAssistantId = activeRun.assistant.id || `live-${activeRun.run_id}`;
+        const reconnectAbortController = new AbortController();
+        abortControllerRef.current = reconnectAbortController;
+        isStreamingRef.current = true;
+        setBusy(true);
+        const reconnectRefs = {
+          activeReasoningId: { value: "" },
+          activeContentId: { value: "" },
+          activeContentText: { value: "" },
+        };
+        const handleEvent = buildEventProcessor(reconnectAssistantId, targetSessionId, reconnectRefs);
+        void streamRunEvents(targetSessionId, activeRun.run_id, handleEvent, reconnectAbortController.signal)
+          .catch((streamError) => {
+            if (!(streamError instanceof Error && streamError.name === "AbortError")) {
+              setError(streamError instanceof Error ? streamError.message : "恢复运行订阅失败");
+            }
+          })
+          .finally(() => {
+            isStreamingRef.current = false;
+            abortControllerRef.current = null;
+            setBusy(false);
+            void onSessionRefresh?.();
+          });
+      })
       .catch((loadError) => {
         setError(loadError instanceof Error ? loadError.message : "初始化失败");
         setMessages([]);
@@ -686,6 +731,41 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     );
   };
 
+  const upsertAssistantMessage = (
+    messageId: string,
+    updater: (message: Extract<ChatMessage, { role: "assistant" }> | null) => Extract<ChatMessage, { role: "assistant" }>,
+  ) => {
+    setMessages((current) => {
+      let found = false;
+      const next = current.map((item) => {
+        if (item.id === messageId && item.role === "assistant") {
+          found = true;
+          return updater(item);
+        }
+        return item;
+      });
+      if (found) {
+        return next;
+      }
+      return [...next, updater(null)];
+    });
+  };
+
+  const restoreActiveRunAssistant = (activeRun: ActiveRunSummary, fallbackStartTime: number) => {
+    const assistantId = activeRun.assistant.id || `live-${activeRun.run_id}`;
+    liveRunRef.current = { runId: activeRun.run_id, assistantId };
+    const startTime = Date.parse(activeRun.started_at);
+    const normalizedStartTime = Number.isFinite(startTime) ? startTime : fallbackStartTime;
+    upsertAssistantMessage(assistantId, () => ({
+      id: assistantId,
+      role: "assistant",
+      blocks: (activeRun.assistant.blocks ?? []) as AssistantBlock[],
+      elapsedMs: activeRun.assistant.elapsedMs ?? null,
+      streaming: activeRun.assistant.streaming,
+      startTime: activeRun.assistant.streaming ? normalizedStartTime : undefined,
+    }));
+  };
+
   const settleAssistantBlocksAborted = (messageId: string, partialContent?: string) => {
     setMessages((current) =>
       current.map((item) => {
@@ -712,6 +792,346 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         };
       }),
     );
+  };
+
+  const buildEventProcessor = (
+    assistantId: string,
+    effectiveSessionId: string,
+    refs: {
+      activeReasoningId: { value: string };
+      activeContentId: { value: string };
+      activeContentText: { value: string };
+      wasAborted?: { value: boolean };
+      partialContent?: { value: string };
+    },
+  ) => {
+    return (event: Record<string, unknown>) => {
+      const eventType = String(event.type ?? "");
+      const payload = (event.payload ?? {}) as Record<string, unknown>;
+
+      if (eventType === "run_started") {
+        const runId = String(payload.run_id ?? "");
+        if (runId) {
+          liveRunRef.current = { runId, assistantId };
+        }
+        return;
+      }
+
+      if (eventType === "workboard_snapshot" || eventType === "workboard_updated") {
+        const snapshot = payload.snapshot as WorkboardState | undefined;
+        if (snapshot) setWorkboard(snapshot);
+        return;
+      }
+
+      if (eventType === "elicitation_snapshot") {
+        const snapshot = payload.snapshot as ElicitationState | undefined;
+        if (snapshot) setElicitation(snapshot);
+        return;
+      }
+
+      if (eventType === "ask_requested") {
+        const snapshot = payload.snapshot as ElicitationState | undefined;
+        if (snapshot) {
+          setElicitation(snapshot);
+        } else if (payload.request) {
+          setElicitation((current) => ({
+            session_id: effectiveSessionId,
+            revision: (current?.revision ?? 0) + 1,
+            pending: payload.request as ElicitationRequest,
+            history: current?.history ?? [],
+            updated_at: new Date().toISOString(),
+          }));
+        }
+        return;
+      }
+
+      if (eventType === "ask_resolved" || eventType === "ask_cancelled") {
+        const snapshot = payload.snapshot as ElicitationState | undefined;
+        if (snapshot) setElicitation(snapshot);
+        return;
+      }
+
+      if (eventType === "aborted") {
+        const partial = String(payload.partial_content ?? "");
+        refs.wasAborted && (refs.wasAborted.value = true);
+        refs.partialContent && (refs.partialContent.value = partial);
+        if (partial && refs.activeContentId.value) {
+          updateAssistantBlock(assistantId, refs.activeContentId.value, (block) =>
+            block.kind === "content" ? { ...block, content: partial, status: "aborted" } : block,
+          );
+        }
+        settleAssistantBlocksAborted(assistantId, partial);
+        return;
+      }
+
+      if (eventType === "context_status") {
+        setContextStatus({
+          model: String(payload.model ?? ""),
+          estimatedTokens: Number(payload.estimated_tokens ?? 0),
+          effectiveWindow: Number(payload.effective_window ?? 0),
+          contextWindow: Number(payload.context_window ?? 0),
+          targetInputTokens: Number(payload.target_input_tokens ?? 0),
+          warningThreshold: Number(payload.warning_threshold ?? 0),
+          blockingLimit: Number(payload.blocking_limit ?? 0),
+          percentUsed: Number(payload.percent_used ?? 0),
+          state: "idle",
+          detail: "上下文稳定",
+        });
+        return;
+      }
+
+      if (eventType === "context_warning") {
+        setContextStatus((current) => ({
+          model: current?.model ?? "",
+          estimatedTokens: Number(payload.estimated_tokens ?? current?.estimatedTokens ?? 0),
+          effectiveWindow: current?.effectiveWindow ?? 0,
+          contextWindow: current?.contextWindow ?? 0,
+          targetInputTokens: current?.targetInputTokens ?? 0,
+          warningThreshold: Number(payload.warning_threshold ?? current?.warningThreshold ?? 0),
+          blockingLimit: Number(payload.blocking_limit ?? current?.blockingLimit ?? 0),
+          percentUsed: Number(payload.percent_used ?? current?.percentUsed ?? 0),
+          state: "warning",
+          detail: "接近压缩阈值",
+        }));
+      }
+
+      if (eventType === "context_compacted") {
+        setContextStatus((current) => {
+          const nextEstimated = Number(payload.tokens_after ?? current?.estimatedTokens ?? 0);
+          const effectiveWindow = current?.effectiveWindow ?? 0;
+          return {
+            model: current?.model ?? "",
+            estimatedTokens: nextEstimated,
+            effectiveWindow,
+            contextWindow: current?.contextWindow ?? 0,
+            targetInputTokens: current?.targetInputTokens ?? 0,
+            warningThreshold: current?.warningThreshold ?? 0,
+            blockingLimit: current?.blockingLimit ?? 0,
+            percentUsed: effectiveWindow > 0 ? Number(((nextEstimated / effectiveWindow) * 100).toFixed(2)) : current?.percentUsed ?? 0,
+            state: "compacted",
+            detail: `已压缩 ${String(payload.strategy ?? "context")}，节省 ${formatTokenCount(Number(payload.tokens_saved ?? 0))} tokens`,
+          };
+        });
+      }
+
+      if (eventType === "context_recovered") {
+        setContextStatus((current) => ({
+          model: current?.model ?? "",
+          estimatedTokens: current?.estimatedTokens ?? 0,
+          effectiveWindow: current?.effectiveWindow ?? 0,
+          contextWindow: current?.contextWindow ?? 0,
+          targetInputTokens: current?.targetInputTokens ?? 0,
+          warningThreshold: current?.warningThreshold ?? 0,
+          blockingLimit: current?.blockingLimit ?? 0,
+          percentUsed: current?.percentUsed ?? 0,
+          state: "recovered",
+          detail: `上下文已恢复，采用 ${String(payload.strategy ?? "recovery")}`,
+        }));
+      }
+
+      if (eventType === "context_blocked") {
+        setContextStatus((current) => ({
+          model: current?.model ?? "",
+          estimatedTokens: Number(payload.estimated_tokens ?? current?.estimatedTokens ?? 0),
+          effectiveWindow: Number(payload.effective_window ?? current?.effectiveWindow ?? 0),
+          contextWindow: current?.contextWindow ?? 0,
+          targetInputTokens: current?.targetInputTokens ?? 0,
+          warningThreshold: current?.warningThreshold ?? 0,
+          blockingLimit: Number(payload.blocking_limit ?? current?.blockingLimit ?? 0),
+          percentUsed: 100,
+          state: "blocked",
+          detail: String(payload.message ?? "上下文已阻塞"),
+        }));
+      }
+
+      if (eventType === "runtime_recreated") {
+        appendAssistantRuntimeNotice(assistantId, payload);
+        return;
+      }
+
+      if (eventType === "runtime_created") {
+        return;
+      }
+
+      if (
+        eventType === "context_compacted" ||
+        eventType === "context_recovered" ||
+        eventType === "context_warning" ||
+        eventType === "context_blocked"
+      ) {
+        appendSystemEvent(eventType as Extract<ChatMessage, { role: "system_event" }>["eventType"], payload);
+      }
+
+      if (eventType === "reasoning_delta") {
+        if (!refs.activeReasoningId.value) {
+          refs.activeReasoningId.value = `reasoning-${Date.now()}`;
+          appendAssistantBlock(assistantId, {
+            id: refs.activeReasoningId.value,
+            kind: "reasoning",
+            content: String(payload.delta ?? ""),
+          });
+        } else {
+          updateAssistantBlock(assistantId, refs.activeReasoningId.value, (block) =>
+            block.kind === "reasoning" ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` } : block,
+          );
+        }
+        return;
+      }
+
+      if (eventType === "content_delta") {
+        refs.activeContentText.value += String(payload.delta ?? "");
+        if (!refs.activeContentId.value) {
+          refs.activeContentId.value = `content-${Date.now()}`;
+          appendAssistantBlock(assistantId, {
+            id: refs.activeContentId.value,
+            kind: "content",
+            content: refs.activeContentText.value,
+            status: "streaming",
+          });
+        } else {
+          updateAssistantBlock(assistantId, refs.activeContentId.value, (block) =>
+            block.kind === "content" ? { ...block, content: refs.activeContentText.value, status: "streaming" } : block,
+          );
+        }
+        return;
+      }
+
+      if (eventType === "content_completed") {
+        if (refs.activeContentId.value && refs.activeContentText.value) {
+          updateAssistantBlock(assistantId, refs.activeContentId.value, (block) =>
+            block.kind === "content" ? { ...block, content: refs.activeContentText.value, status: "done" } : block,
+          );
+        }
+        refs.activeReasoningId.value = "";
+        return;
+      }
+
+      if (eventType === "tool_started") {
+        refs.activeReasoningId.value = "";
+        refs.activeContentId.value = "";
+        refs.activeContentText.value = "";
+        const displayPayload = (payload.tool_display ?? {}) as Record<string, unknown>;
+        if (typeof displayPayload.title !== "string") return;
+        appendAssistantBlock(assistantId, {
+          id: String(payload.id ?? `tool-${Date.now()}`),
+          kind: "tool",
+          title: displayPayload.title,
+          meta: typeof displayPayload.meta === "string" ? displayPayload.meta : "tool",
+          argumentsText: stringifyStructured(payload.input ?? {}),
+          outputText: "",
+          liveOutputText: "",
+          status: "running",
+        });
+        return;
+      }
+
+      if (eventType === "tool_output_delta") {
+        const toolId = String(payload.id ?? "");
+        if (!toolId) return;
+        updateAssistantBlock(assistantId, toolId, (block) =>
+          block.kind === "tool"
+            ? {
+                ...block,
+                liveOutputText: `${block.liveOutputText ?? ""}${String(payload.text ?? "")}`,
+                status: "running",
+              }
+            : block,
+        );
+        return;
+      }
+
+      if (eventType === "tool_finished") {
+        const toolName = String(payload.tool_name ?? "");
+        const output = payload.output;
+        if (toolName === "update_workboard") {
+          const nextWorkboard = ((output as Record<string, unknown> | undefined)?.workboard ??
+            (output as Record<string, unknown> | undefined)?.snapshot) as WorkboardState | undefined;
+          if (nextWorkboard) setWorkboard(nextWorkboard);
+        }
+        if (toolName === "request_user_input") {
+          const nextElicitation = ((output as Record<string, unknown> | undefined)?.elicitation ??
+            (output as Record<string, unknown> | undefined)?.snapshot) as ElicitationState | undefined;
+          if (nextElicitation) setElicitation(nextElicitation);
+        }
+        updateAssistantBlock(assistantId, String(payload.id), (block) =>
+          block.kind === "tool"
+            ? {
+                ...block,
+                outputText: stringifyStructured(output),
+                liveOutputText: undefined,
+                status:
+                  typeof output === "object" && output !== null && "aborted" in (output as Record<string, unknown>) && (output as Record<string, unknown>).aborted === true
+                    ? "aborted"
+                    : "done",
+              }
+            : block,
+        );
+        if (["sandbox_shell", "create_text_artifact"].includes(toolName)) {
+          void refreshResources(effectiveSessionId);
+        }
+        return;
+      }
+
+      if (eventType === "message" && typeof payload.summary === "string") {
+        refs.activeContentText.value = payload.summary;
+        if (refs.activeContentId.value) {
+          updateAssistantBlock(assistantId, refs.activeContentId.value, (block) =>
+            block.kind === "content" ? { ...block, content: payload.summary as string, status: "done" } : block,
+          );
+        } else {
+          refs.activeContentId.value = `content-${Date.now()}`;
+          appendAssistantBlock(assistantId, {
+            id: refs.activeContentId.value,
+            kind: "content",
+            content: payload.summary,
+            status: "done",
+          });
+        }
+        return;
+      }
+
+      if (eventType === "artifact_created") {
+        void refreshResources(effectiveSessionId);
+        return;
+      }
+
+      if (eventType === "result") {
+        const subtype = String(payload.subtype ?? "");
+        if (subtype && subtype !== "success") setError(RESULT_MESSAGES[subtype] ?? "执行失败");
+        return;
+      }
+
+      if (eventType === "completed") {
+        const elapsedMs = Number(payload.elapsed_ms ?? 0);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantId && item.role === "assistant"
+              ? {
+                  ...item,
+                  elapsedMs: elapsedMs > 0 ? elapsedMs : item.elapsedMs,
+                  streaming: false,
+                  startTime: undefined,
+                }
+              : item,
+          ),
+        );
+        liveRunRef.current = null;
+        return;
+      }
+
+      if (eventType === "error") {
+        appendAssistantBlock(assistantId, {
+          id: `tool-error-${Date.now()}`,
+          kind: "tool",
+          title: "执行错误",
+          meta: "error",
+          argumentsText: "",
+          outputText: `${String(payload.message ?? "执行失败")}${payload.traceback ? `\n\n${payload.traceback}` : ""}`,
+          status: "done",
+        });
+        setError(typeof payload.message === "string" ? payload.message : "执行失败");
+      }
+    };
   };
 
   const buildElicitationResponseMessage = (
@@ -791,269 +1211,56 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     let activeContentText = "";
     let wasAborted = false;
     let partialContent = "";
+    const eventRefs = {
+      activeReasoningId: {
+        get value() {
+          return activeReasoningId;
+        },
+        set value(value: string) {
+          activeReasoningId = value;
+        },
+      },
+      activeContentId: {
+        get value() {
+          return activeContentId;
+        },
+        set value(value: string) {
+          activeContentId = value;
+        },
+      },
+      activeContentText: {
+        get value() {
+          return activeContentText;
+        },
+        set value(value: string) {
+          activeContentText = value;
+        },
+      },
+      wasAborted: {
+        get value() {
+          return wasAborted;
+        },
+        set value(value: boolean) {
+          wasAborted = value;
+        },
+      },
+      partialContent: {
+        get value() {
+          return partialContent;
+        },
+        set value(value: string) {
+          partialContent = value;
+        },
+      },
+    };
 
     try {
       if (!effectiveSessionId) {
         setError("无法获取会话 ID");
         return;
       }
-      await streamChat(effectiveSessionId, userText, allowNetwork, (event) => {
-        const payload = (event.payload ?? {}) as Record<string, unknown>;
-
-        if (event.type === "workboard_snapshot" || event.type === "workboard_updated") {
-          const snapshot = payload.snapshot as WorkboardState | undefined;
-          if (snapshot) setWorkboard(snapshot);
-          return;
-        }
-
-        if (event.type === "elicitation_snapshot") {
-          const snapshot = payload.snapshot as ElicitationState | undefined;
-          if (snapshot) setElicitation(snapshot);
-          return;
-        }
-
-        if (event.type === "ask_requested") {
-          const snapshot = payload.snapshot as ElicitationState | undefined;
-          if (snapshot) {
-            setElicitation(snapshot);
-          } else if (payload.request) {
-            setElicitation((current) => ({
-              session_id: effectiveSessionId,
-              revision: (current?.revision ?? 0) + 1,
-              pending: payload.request as ElicitationRequest,
-              history: current?.history ?? [],
-              updated_at: new Date().toISOString(),
-            }));
-          }
-          return;
-        }
-
-        if (event.type === "ask_resolved" || event.type === "ask_cancelled") {
-          const snapshot = payload.snapshot as ElicitationState | undefined;
-          if (snapshot) setElicitation(snapshot);
-          return;
-        }
-
-        if (event.type === "aborted") {
-          wasAborted = true;
-          partialContent = String(payload.partial_content ?? "");
-          if (partialContent && activeContentId) {
-            updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: partialContent, status: "aborted" } : block,
-            );
-          }
-          settleAssistantBlocksAborted(assistantId, partialContent);
-          return;
-        }
-
-        if (event.type === "context_status") {
-          setContextStatus({
-            model: String(payload.model ?? ""),
-            estimatedTokens: Number(payload.estimated_tokens ?? 0),
-            effectiveWindow: Number(payload.effective_window ?? 0),
-            contextWindow: Number(payload.context_window ?? 0),
-            targetInputTokens: Number(payload.target_input_tokens ?? 0),
-            warningThreshold: Number(payload.warning_threshold ?? 0),
-            blockingLimit: Number(payload.blocking_limit ?? 0),
-            percentUsed: Number(payload.percent_used ?? 0),
-            state: "idle",
-            detail: "上下文稳定",
-          });
-          return;
-        }
-
-        if (event.type === "context_warning") {
-          setContextStatus((current) => ({
-            model: current?.model ?? "",
-            estimatedTokens: Number(payload.estimated_tokens ?? current?.estimatedTokens ?? 0),
-            effectiveWindow: current?.effectiveWindow ?? 0,
-            contextWindow: current?.contextWindow ?? 0,
-            targetInputTokens: current?.targetInputTokens ?? 0,
-            warningThreshold: Number(payload.warning_threshold ?? current?.warningThreshold ?? 0),
-            blockingLimit: Number(payload.blocking_limit ?? current?.blockingLimit ?? 0),
-            percentUsed: Number(payload.percent_used ?? current?.percentUsed ?? 0),
-            state: "warning",
-            detail: "接近压缩阈值",
-          }));
-          return;
-        }
-
-        if (event.type === "context_compacted") {
-          setContextStatus((current) => {
-            const nextEstimated = Number(payload.tokens_after ?? current?.estimatedTokens ?? 0);
-            const effectiveWindow = current?.effectiveWindow ?? 0;
-            return {
-              model: current?.model ?? "",
-              estimatedTokens: nextEstimated,
-              effectiveWindow,
-              contextWindow: current?.contextWindow ?? 0,
-              targetInputTokens: current?.targetInputTokens ?? 0,
-              warningThreshold: current?.warningThreshold ?? 0,
-              blockingLimit: current?.blockingLimit ?? 0,
-              percentUsed: effectiveWindow > 0 ? Number(((nextEstimated / effectiveWindow) * 100).toFixed(2)) : current?.percentUsed ?? 0,
-              state: "compacted",
-              detail: `已压缩 ${String(payload.strategy ?? "context")}，节省 ${formatTokenCount(Number(payload.tokens_saved ?? 0))} tokens`,
-            };
-          });
-          return;
-        }
-
-        if (event.type === "context_recovered") {
-          setContextStatus((current) => ({
-            model: current?.model ?? "",
-            estimatedTokens: current?.estimatedTokens ?? 0,
-            effectiveWindow: current?.effectiveWindow ?? 0,
-            contextWindow: current?.contextWindow ?? 0,
-            targetInputTokens: current?.targetInputTokens ?? 0,
-            warningThreshold: current?.warningThreshold ?? 0,
-            blockingLimit: current?.blockingLimit ?? 0,
-            percentUsed: current?.percentUsed ?? 0,
-            state: "recovered",
-            detail: `上下文已恢复，采用 ${String(payload.strategy ?? "recovery")}`,
-          }));
-          return;
-        }
-
-        if (event.type === "context_blocked") {
-          setContextStatus((current) => ({
-            model: current?.model ?? "",
-            estimatedTokens: Number(payload.estimated_tokens ?? current?.estimatedTokens ?? 0),
-            effectiveWindow: Number(payload.effective_window ?? current?.effectiveWindow ?? 0),
-            contextWindow: current?.contextWindow ?? 0,
-            targetInputTokens: current?.targetInputTokens ?? 0,
-            warningThreshold: current?.warningThreshold ?? 0,
-            blockingLimit: Number(payload.blocking_limit ?? current?.blockingLimit ?? 0),
-            percentUsed: 100,
-            state: "blocked",
-            detail: String(payload.message ?? "上下文已阻塞"),
-          }));
-          return;
-        }
-
-        if (event.type === "runtime_created") {
-          return;
-        }
-
-        if (event.type === "runtime_recreated") {
-          appendAssistantRuntimeNotice(assistantId, payload);
-          return;
-        }
-
-        if (event.type === "context_compacted" || event.type === "context_recovered" || event.type === "context_warning" || event.type === "context_blocked") {
-          appendSystemEvent(event.type, payload);
-        }
-
-        if (event.type === "reasoning_delta") {
-          if (!activeReasoningId) {
-            activeReasoningId = `reasoning-${Date.now()}`;
-            appendAssistantBlock(assistantId, { id: activeReasoningId, kind: "reasoning", content: String(payload.delta ?? "") });
-          } else {
-            updateAssistantBlock(assistantId, activeReasoningId, (block) =>
-              block.kind === "reasoning" ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` } : block,
-            );
-          }
-          return;
-        }
-
-        if (event.type === "content_delta") {
-          activeContentText += String(payload.delta ?? "");
-          if (!activeContentId) {
-            activeContentId = `content-${Date.now()}`;
-            appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: activeContentText, status: "streaming" });
-          } else {
-            updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: activeContentText, status: "streaming" } : block,
-            );
-          }
-          return;
-        }
-
-        if (event.type === "content_completed") {
-          if (activeContentId && activeContentText) {
-            updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: activeContentText, status: "done" } : block,
-            );
-          }
-          activeReasoningId = "";
-          return;
-        }
-
-        if (event.type === "tool_started") {
-          activeReasoningId = "";
-          activeContentId = "";
-          activeContentText = "";
-          const displayPayload = (payload.tool_display ?? {}) as Record<string, unknown>;
-          if (typeof displayPayload.title !== "string") return;
-          const toolInput = (payload.input ?? {}) as Record<string, unknown>;
-          appendAssistantBlock(assistantId, {
-            id: String(payload.id ?? `tool-${Date.now()}`),
-            kind: "tool",
-            title: displayPayload.title,
-            meta: typeof displayPayload.meta === "string" ? displayPayload.meta : "tool",
-            argumentsText: JSON.stringify(toolInput ?? {}, null, 2),
-            outputText: "",
-            status: "running",
-          });
-          return;
-        }
-
-        if (event.type === "tool_finished") {
-          const toolName = String(payload.tool_name ?? "");
-          const output = (payload.output ?? {}) as Record<string, unknown>;
-          if (toolName === "update_workboard") {
-            const nextWorkboard = (output.workboard ?? output.snapshot) as WorkboardState | undefined;
-            if (nextWorkboard) setWorkboard(nextWorkboard);
-          }
-          if (toolName === "request_user_input") {
-            const nextElicitation = (output.elicitation ?? output.snapshot) as ElicitationState | undefined;
-            if (nextElicitation) setElicitation(nextElicitation);
-          }
-          updateAssistantBlock(assistantId, String(payload.id), (block) =>
-            block.kind === "tool" ? { ...block, outputText: JSON.stringify(output, null, 2), status: "done" } : block,
-          );
-          if (["sandbox_shell", "create_text_artifact"].includes(String(payload.tool_name ?? ""))) {
-            void refreshResources(effectiveSessionId);
-          }
-          return;
-        }
-
-        if (event.type === "message" && typeof payload.summary === "string") {
-          activeContentText = payload.summary;
-          if (activeContentId) {
-            updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: payload.summary as string, status: "done" } : block,
-            );
-          } else {
-            activeContentId = `content-${Date.now()}`;
-            appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: payload.summary, status: "done" });
-          }
-          return;
-        }
-
-        if (event.type === "artifact_created") {
-          void refreshResources(effectiveSessionId);
-          return;
-        }
-
-        if (event.type === "result") {
-          const subtype = String(payload.subtype ?? "");
-          if (subtype && subtype !== "success") setError(RESULT_MESSAGES[subtype] ?? "执行失败");
-          return;
-        }
-
-        if (event.type === "error") {
-          appendAssistantBlock(assistantId, {
-            id: `tool-error-${Date.now()}`,
-            kind: "tool",
-            title: "执行错误",
-            meta: "error",
-            argumentsText: "",
-            outputText: `${String(payload.message ?? "执行失败")}${payload.traceback ? `\n\n${payload.traceback}` : ""}`,
-            status: "done",
-          });
-          setError(typeof payload.message === "string" ? payload.message : "执行失败");
-        }
-      }, abortController.signal);
+      const handleEvent = buildEventProcessor(assistantId, effectiveSessionId, eventRefs);
+      await streamChat(effectiveSessionId, userText, allowNetwork, handleEvent, abortController.signal);
     } catch (chatError) {
       if (chatError instanceof Error && chatError.name === "AbortError") {
         wasAborted = true;
@@ -1126,156 +1333,36 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     let activeReasoningId = "";
     let activeContentId = "";
     let activeContentText = "";
+    const eventRefs = {
+      activeReasoningId: {
+        get value() {
+          return activeReasoningId;
+        },
+        set value(value: string) {
+          activeReasoningId = value;
+        },
+      },
+      activeContentId: {
+        get value() {
+          return activeContentId;
+        },
+        set value(value: string) {
+          activeContentId = value;
+        },
+      },
+      activeContentText: {
+        get value() {
+          return activeContentText;
+        },
+        set value(value: string) {
+          activeContentText = value;
+        },
+      },
+    };
 
     try {
-      await streamElicitationResponse(effectiveSessionId, pendingRequest.id, responses, (event) => {
-        const payload = (event.payload ?? {}) as Record<string, unknown>;
-
-        if (event.type === "workboard_snapshot" || event.type === "workboard_updated") {
-          const snapshot = payload.snapshot as WorkboardState | undefined;
-          if (snapshot) setWorkboard(snapshot);
-          return;
-        }
-
-        if (event.type === "elicitation_snapshot" || event.type === "ask_resolved" || event.type === "ask_cancelled") {
-          const snapshot = payload.snapshot as ElicitationState | undefined;
-          if (snapshot) setElicitation(snapshot);
-          return;
-        }
-
-        if (event.type === "ask_requested") {
-          const snapshot = payload.snapshot as ElicitationState | undefined;
-          if (snapshot) setElicitation(snapshot);
-          return;
-        }
-
-        if (event.type === "aborted") {
-          const partial = String(payload.partial_content ?? "");
-          if (partial && activeContentId) {
-            updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: partial, status: "aborted" } : block,
-            );
-          }
-          settleAssistantBlocksAborted(assistantId, partial);
-          setElicitationBusy(false);
-          return;
-        }
-
-        if (event.type === "runtime_created") {
-          return;
-        }
-
-        if (event.type === "runtime_recreated") {
-          appendAssistantRuntimeNotice(assistantId, payload);
-          return;
-        }
-
-        if (event.type === "context_compacted" || event.type === "context_recovered" || event.type === "context_warning" || event.type === "context_blocked") {
-          appendSystemEvent(event.type, payload);
-        }
-
-        if (event.type === "reasoning_delta") {
-          if (!activeReasoningId) {
-            activeReasoningId = `reasoning-${Date.now()}`;
-            appendAssistantBlock(assistantId, { id: activeReasoningId, kind: "reasoning", content: String(payload.delta ?? "") });
-          } else {
-            updateAssistantBlock(assistantId, activeReasoningId, (block) =>
-              block.kind === "reasoning" ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` } : block,
-            );
-          }
-          return;
-        }
-
-        if (event.type === "content_delta") {
-          activeContentText += String(payload.delta ?? "");
-          if (!activeContentId) {
-            activeContentId = `content-${Date.now()}`;
-            appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: activeContentText, status: "streaming" });
-          } else {
-            updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: activeContentText, status: "streaming" } : block,
-            );
-          }
-          return;
-        }
-
-        if (event.type === "content_completed") {
-          if (activeContentId && activeContentText) {
-            updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: activeContentText, status: "done" } : block,
-            );
-          }
-          activeReasoningId = "";
-          return;
-        }
-
-        if (event.type === "tool_started") {
-          activeReasoningId = "";
-          activeContentId = "";
-          activeContentText = "";
-          const displayPayload = (payload.tool_display ?? {}) as Record<string, unknown>;
-          if (typeof displayPayload.title !== "string") return;
-          const toolInput = (payload.input ?? {}) as Record<string, unknown>;
-          appendAssistantBlock(assistantId, {
-            id: String(payload.id ?? `tool-${Date.now()}`),
-            kind: "tool",
-            title: displayPayload.title,
-            meta: typeof displayPayload.meta === "string" ? displayPayload.meta : "tool",
-            argumentsText: JSON.stringify(toolInput ?? {}, null, 2),
-            outputText: "",
-            status: "running",
-          });
-          return;
-        }
-
-        if (event.type === "tool_finished") {
-          const toolName = String(payload.tool_name ?? "");
-          const output = (payload.output ?? {}) as Record<string, unknown>;
-          if (toolName === "update_workboard") {
-            const nextWorkboard = (output.workboard ?? output.snapshot) as WorkboardState | undefined;
-            if (nextWorkboard) setWorkboard(nextWorkboard);
-          }
-          if (toolName === "request_user_input") {
-            const nextElicitation = (output.elicitation ?? output.snapshot) as ElicitationState | undefined;
-            if (nextElicitation) setElicitation(nextElicitation);
-          }
-          updateAssistantBlock(assistantId, String(payload.id), (block) =>
-            block.kind === "tool" ? { ...block, outputText: JSON.stringify(output, null, 2), status: "done" } : block,
-          );
-          if (["sandbox_shell", "create_text_artifact"].includes(String(payload.tool_name ?? ""))) {
-            void refreshResources(effectiveSessionId);
-          }
-          return;
-        }
-
-        if (event.type === "message" && typeof payload.summary === "string") {
-          activeContentText = payload.summary;
-          if (activeContentId) {
-            updateAssistantBlock(assistantId, activeContentId, (block) =>
-              block.kind === "content" ? { ...block, content: payload.summary as string, status: "done" } : block,
-            );
-          } else {
-            activeContentId = `content-${Date.now()}`;
-            appendAssistantBlock(assistantId, { id: activeContentId, kind: "content", content: payload.summary, status: "done" });
-          }
-          return;
-        }
-
-        if (event.type === "artifact_created") {
-          void refreshResources(effectiveSessionId);
-          return;
-        }
-
-        if (event.type === "result") {
-          const subtype = String(payload.subtype ?? "");
-          if (subtype && subtype !== "success") setError(RESULT_MESSAGES[subtype] ?? "鎵ц澶辫触");
-          return;
-        }
-
-        if (event.type === "error") {
-          setError(typeof payload.message === "string" ? payload.message : "鎵ц澶辫触");
-        }
-      }, abortController.signal);
+      const handleEvent = buildEventProcessor(assistantId, effectiveSessionId, eventRefs);
+      await streamElicitationResponse(effectiveSessionId, pendingRequest.id, responses, handleEvent, abortController.signal);
     } catch (err) {
       if (!(err instanceof Error && err.name === "AbortError")) {
         setError(err instanceof Error ? err.message : "鎻愪氦鍥炵瓟澶辫触");

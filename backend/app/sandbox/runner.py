@@ -8,6 +8,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.sandbox.docker_executor import DockerSandboxExecutor
+from app.sandbox.executors import SandboxOutputCallback
 from app.sandbox.local_executor import LocalSandboxExecutor
 from app.sandbox.manager import sandbox_manager
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
@@ -31,6 +32,7 @@ class SandboxRunner:
         timeout_seconds: int | None = None,
         session: AgentSession | None = None,
         run_id: str | None = None,
+        output_callback: SandboxOutputCallback | None = None,
     ) -> SandboxCommandResult:
         active_shell = (shell or settings.sandbox_shell).lower()
         self._validate_command(command)
@@ -53,6 +55,8 @@ class SandboxRunner:
             extra_kwargs["run_id"] = run_id
         if effective_timeout is not None:
             extra_kwargs["timeout_seconds"] = effective_timeout
+        if output_callback is not None:
+            extra_kwargs["output_callback"] = output_callback
         result = await executor.run_shell(
             workspace,
             command,

@@ -65,6 +65,7 @@ class AgentSession:
     workspace: SandboxWorkspace | None = None
     active_run: SessionRunContext | None = None
     last_abort: SessionRunContext | None = None
+    active_run_view: dict[str, Any] | None = None
 
     def touch(self) -> None:
         self.last_access = time.time()

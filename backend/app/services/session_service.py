@@ -127,6 +127,7 @@ class SessionService:
                 session_id,
                 Path(payload["baseline_root"]) if payload.get("baseline_root") else None,
             ),
+            active_run_view=payload.get("active_run_view"),
         )
 
     def _write_metadata(self, session: AgentSession) -> None:
@@ -154,6 +155,7 @@ class SessionService:
             "allow_network": session.allow_network,
             "created_at": session.created_at,
             "last_access": session.last_access,
+            "active_run_view": session.active_run_view,
         }
         metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

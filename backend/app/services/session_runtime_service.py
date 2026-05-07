@@ -11,12 +11,15 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from app.core.config import settings
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 from app.services.session_types import AgentSession
 from app.services.store import store_service, utcnow_iso
+
+
+SandboxOutputCallback = Callable[[str, str], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,7 @@ class SessionRuntimeService:
         timeout_seconds: int | None = None,
         session: AgentSession | None = None,
         run_id: str | None = None,
+        output_callback: SandboxOutputCallback | None = None,
     ) -> SandboxCommandResult:
         lock = self._locks[workspace.session_id]
         async with lock:
@@ -76,6 +80,7 @@ class SessionRuntimeService:
                 allow_network_recovery=True,
                 session=session,
                 run_id=run_id,
+                output_callback=output_callback,
             )
 
     async def rebuild_runtime(self, workspace: SandboxWorkspace, *, reason: str) -> dict[str, Any]:
@@ -740,6 +745,7 @@ class SessionRuntimeService:
         allow_network_recovery: bool,
         session: AgentSession | None,
         run_id: str | None,
+        output_callback: SandboxOutputCallback | None,
     ) -> SandboxCommandResult:
         runtime_state = await self._ensure_runtime_locked(workspace)
         runtime = runtime_state["runtime"]
@@ -782,7 +788,7 @@ class SessionRuntimeService:
             if session is not None and run_id is not None:
                 session.set_tool_task(run_id, process)
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
+                self._collect_stream_output(process, output_callback=output_callback),
                 timeout=effective_timeout,
             )
         except asyncio.CancelledError:
@@ -842,6 +848,7 @@ class SessionRuntimeService:
                 allow_network_recovery=False,
                 session=session,
                 run_id=run_id,
+                output_callback=output_callback,
             )
 
         now = self._now()
@@ -907,6 +914,33 @@ class SessionRuntimeService:
             await asyncio.sleep(0.2)
             current = await self.refresh_runtime(workspace.session_id)
         return await self.refresh_runtime(workspace.session_id)
+
+    async def _collect_stream_output(
+        self,
+        process: asyncio.subprocess.Process,
+        *,
+        output_callback: SandboxOutputCallback | None,
+    ) -> tuple[bytes, bytes]:
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+
+        async def read_stream(stream: asyncio.StreamReader | None, sink: list[bytes], stream_name: str) -> None:
+            if stream is None:
+                return
+            while True:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    break
+                sink.append(chunk)
+                if output_callback is not None:
+                    await output_callback(stream_name, self._decode_output(chunk))
+
+        await asyncio.gather(
+            read_stream(process.stdout, stdout_chunks, "stdout"),
+            read_stream(process.stderr, stderr_chunks, "stderr"),
+        )
+        await process.wait()
+        return b"".join(stdout_chunks), b"".join(stderr_chunks)
 
     async def _terminate_process(
         self,

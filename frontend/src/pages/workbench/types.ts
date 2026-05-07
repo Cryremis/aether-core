@@ -31,6 +31,7 @@ export type AssistantBlock =
       meta: string;
       argumentsText: string;
       outputText: string;
+      liveOutputText?: string;
       status: "running" | "done" | "aborted";
     };
 

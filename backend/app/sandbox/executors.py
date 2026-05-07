@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 from app.services.session_types import AgentSession
+
+SandboxOutputCallback = Callable[[str, str], Awaitable[None]]
 
 
 class SandboxExecutor(ABC):
@@ -21,6 +24,7 @@ class SandboxExecutor(ABC):
         timeout_seconds: int | None = None,
         session: AgentSession | None = None,
         run_id: str | None = None,
+        output_callback: SandboxOutputCallback | None = None,
     ) -> SandboxCommandResult:
         """在受控执行环境中运行命令。"""
 

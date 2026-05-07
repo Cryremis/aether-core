@@ -11,6 +11,7 @@ class AgentChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     allow_network: bool | None = None
+    run_id: str | None = None
 
 
 class ElicitationResponseItem(BaseModel):
@@ -35,8 +36,10 @@ class AgentEvent(BaseModel):
         "tool_call_delta",
         "tool_call_completed",
         "tool_started",
+        "tool_output_delta",
         "tool_progress",
         "tool_finished",
+        "run_started",
         "artifact_created",
         "runtime_created",
         "runtime_recreated",

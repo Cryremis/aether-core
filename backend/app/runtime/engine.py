@@ -201,6 +201,8 @@ class AgentEngine:
         tool_name: str,
         tool_input: dict[str, Any],
         run_id: str,
+        tool_call_id: str,
+        output_event_queue: asyncio.Queue[dict[str, Any]],
     ) -> asyncio.Task[Any]:
         execute_kwargs: dict[str, Any] = {}
         try:
@@ -209,15 +211,33 @@ class AgentEngine:
             signature = None
         if signature is not None and "run_id" in signature.parameters:
             execute_kwargs["run_id"] = run_id
+        if signature is not None and "tool_call_id" in signature.parameters:
+            execute_kwargs["tool_call_id"] = tool_call_id
+        if signature is not None and "output_event_callback" in signature.parameters:
+            async def emit_output_event(event) -> None:
+                await output_event_queue.put(
+                    {
+                        "id": event.tool_call_id,
+                        "tool_name": event.tool_name,
+                        "stream": event.stream,
+                        "text": event.text,
+                        "seq": event.seq,
+                        "timestamp": event.timestamp,
+                    }
+                )
+
+            execute_kwargs["output_event_callback"] = emit_output_event
         return asyncio.create_task(tool_service.execute(session, tool_name, tool_input, **execute_kwargs))
 
     async def stream_chat(
         self,
         session: AgentSession,
         message: str,
+        *,
+        run_id: str | None = None,
     ) -> AsyncGenerator:
         started_at = time.perf_counter()
-        run_id = f"run_{uuid.uuid4().hex}"
+        run_id = run_id or f"run_{uuid.uuid4().hex}"
         session.begin_run(run_id)
         request_turn_index = self._next_turn_index(session)
         session.messages.append(
@@ -610,11 +630,14 @@ class AgentEngine:
                         input=tool_input,
                     )
                     tool_started_at = time.perf_counter()
+                    tool_output_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
                     execution_task = self._start_tool_execution(
                         session,
                         tool_name=tool_name,
                         tool_input=tool_input,
                         run_id=run_id,
+                        tool_call_id=tool_call["id"],
+                        output_event_queue=tool_output_queue,
                     )
                     session.set_tool_task(run_id, execution_task)
                     try:
@@ -659,7 +682,8 @@ class AgentEngine:
                             try:
                                 wait_task = asyncio.create_task(asyncio.sleep(self._TOOL_PROGRESS_INTERVAL_SECONDS))
                                 abort_wait_task = asyncio.create_task(session.get_run(run_id).abort_event.wait()) if session.get_run(run_id) else None
-                                wait_set = {execution_task, wait_task}
+                                output_wait_task = asyncio.create_task(tool_output_queue.get())
+                                wait_set = {execution_task, wait_task, output_wait_task}
                                 if abort_wait_task is not None:
                                     wait_set.add(abort_wait_task)
                                 done, pending = await asyncio.wait(
@@ -680,7 +704,33 @@ class AgentEngine:
                                             await abort_wait_task
                                         except asyncio.CancelledError:
                                             pass
+                                    if not output_wait_task.done():
+                                        output_wait_task.cancel()
+                                        try:
+                                            await output_wait_task
+                                        except asyncio.CancelledError:
+                                            pass
                                     break
+                                if output_wait_task in done:
+                                    output_event = output_wait_task.result()
+                                    yield make_event(
+                                        session,
+                                        "tool_output_delta",
+                                        id=output_event["id"],
+                                        tool_name=output_event["tool_name"],
+                                        stream=output_event["stream"],
+                                        text=output_event["text"],
+                                        seq=output_event["seq"],
+                                        timestamp=output_event["timestamp"],
+                                    )
+                                    for pending_task in pending:
+                                        if pending_task not in {execution_task, output_wait_task}:
+                                            pending_task.cancel()
+                                            try:
+                                                await pending_task
+                                            except asyncio.CancelledError:
+                                                pass
+                                    continue
                                 if abort_wait_task is not None and abort_wait_task in done:
                                     continue
                                 yield make_event(

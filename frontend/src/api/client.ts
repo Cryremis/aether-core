@@ -251,11 +251,26 @@ export type TranscriptAssistantBlock =
   | { id: string; kind: "content"; content: string; status: "streaming" | "done" | "aborted" }
   | { id: string; kind: "runtime_notice"; eventType: "runtime_recreated"; title: string; detail?: string }
   | { id: string; kind: "elapsed"; elapsed_ms: number }
-  | { id: string; kind: "tool"; title: string; meta: string; argumentsText: string; outputText: string; status: "running" | "done" | "aborted" };
+  | { id: string; kind: "tool"; title: string; meta: string; argumentsText: string; outputText: string; liveOutputText?: string; status: "running" | "done" | "aborted" };
 
 export type TranscriptChatMessage =
   | { id: string; role: "user"; content: string }
   | { id: string; role: "assistant"; blocks: TranscriptAssistantBlock[]; elapsedMs: number | null; streaming: boolean };
+
+export type ActiveRunSummary = {
+  run_id: string;
+  session_id: string;
+  status: "running" | "completed";
+  started_at: string;
+  updated_at: string;
+  assistant: {
+    id: string;
+    role: "assistant";
+    blocks: TranscriptAssistantBlock[];
+    elapsedMs: number | null;
+    streaming: boolean;
+  };
+};
 
 export type AuditConversationDetail = {
   session_id: string;
@@ -747,6 +762,64 @@ export async function getSessionSummary(sessionId: string) {
     throw new Error(`获取会话摘要失败: ${response.status}`);
   }
   return response.json();
+}
+
+export async function streamRunEvents(
+  sessionId: string,
+  runId: string,
+  onEvent: (event: Record<string, unknown>) => void,
+  abortSignal?: AbortSignal,
+) {
+  const headers = new Headers();
+  const token = getAccessToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  let streamOpened = false;
+
+  try {
+    const response = await fetch(`${API_BASE}/agent/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events`, {
+      method: "GET",
+      headers,
+      signal: abortSignal,
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`恢复运行订阅失败: ${response.status}`);
+    }
+
+    streamOpened = true;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
+      while (match) {
+        const chunk = match[1];
+        buffer = buffer.slice(match[0].length);
+        const line = chunk.split(/\r?\n/).find((item) => item.startsWith("data:"));
+        if (line) {
+          onEvent(JSON.parse(line.slice(5).trim()));
+        }
+        match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
+    const detail = error instanceof Error && error.message ? error.message : "unknown error";
+    if (streamOpened) {
+      throw new Error(`运行订阅已中断: ${detail}`);
+    }
+    throw new Error(`恢复运行订阅失败: ${detail}`);
+  }
 }
 
 export async function uploadPlatformBaselineSkill(platformId: number, skillFile: File) {

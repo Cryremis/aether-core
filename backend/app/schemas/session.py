@@ -27,6 +27,7 @@ class SessionSummary(BaseModel):
     runtime: dict[str, Any] | None = None
     workboard: WorkboardState = Field(default_factory=lambda: WorkboardState(session_id=""))
     elicitation: ElicitationState = Field(default_factory=lambda: ElicitationState(session_id=""))
+    active_run: dict[str, Any] | None = None
 
 
 class WorkboardUpdateRequest(BaseModel):

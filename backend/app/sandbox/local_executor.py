@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from app.core.config import settings
-from app.sandbox.executors import SandboxExecutor
+from app.sandbox.executors import SandboxExecutor, SandboxOutputCallback
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 from app.services.session_types import AgentSession
 
@@ -28,6 +28,7 @@ class LocalSandboxExecutor(SandboxExecutor):
         timeout_seconds: int | None = None,
         session: AgentSession | None = None,
         run_id: str | None = None,
+        output_callback: SandboxOutputCallback | None = None,
     ) -> SandboxCommandResult:
         if not settings.sandbox_local_enabled:
             raise RuntimeError("当前环境未开启本地执行器，已拒绝宿主机直连执行。")
@@ -47,7 +48,7 @@ class LocalSandboxExecutor(SandboxExecutor):
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
+                self._collect_stream_output(process, output_callback=output_callback),
                 timeout=effective_timeout,
             )
         except asyncio.CancelledError:
@@ -72,6 +73,33 @@ class LocalSandboxExecutor(SandboxExecutor):
             duration_ms=duration_ms,
             log_path="",
         )
+
+    async def _collect_stream_output(
+        self,
+        process: asyncio.subprocess.Process,
+        *,
+        output_callback: SandboxOutputCallback | None,
+    ) -> tuple[bytes, bytes]:
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+
+        async def read_stream(stream: asyncio.StreamReader | None, sink: list[bytes], stream_name: str) -> None:
+            if stream is None:
+                return
+            while True:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    break
+                sink.append(chunk)
+                if output_callback is not None:
+                    await output_callback(stream_name, self._decode_output(chunk))
+
+        await asyncio.gather(
+            read_stream(process.stdout, stdout_chunks, "stdout"),
+            read_stream(process.stderr, stderr_chunks, "stderr"),
+        )
+        await process.wait()
+        return b"".join(stdout_chunks), b"".join(stderr_chunks)
 
     async def check_availability(self) -> tuple[bool, str]:
         if not settings.sandbox_local_enabled:

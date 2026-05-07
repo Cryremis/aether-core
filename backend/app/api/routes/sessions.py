@@ -8,6 +8,7 @@ from app.schemas.common import ApiResponse
 from app.schemas.session import SessionSummary, WorkboardUpdateRequest
 from app.services.runtime_state import runtime_state_service
 from app.services.artifact_service import artifact_service
+from app.services.agent_run_service import agent_run_service
 from app.services.conversation_service import conversation_service
 from app.services.file_service import file_service
 from app.services.platform_baseline_service import platform_baseline_service
@@ -157,6 +158,7 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         runtime=store_service.get_session_runtime(session.session_id),
         workboard=runtime_state_service.get_workboard(session),
         elicitation=runtime_state_service.get_elicitation(session),
+        active_run=agent_run_service.get_active_run_view(session),
     )
     return ApiResponse(message="会话摘要", data=summary.model_dump(mode="json"))
 

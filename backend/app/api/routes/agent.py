@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import AuthContext, get_auth_context
 from app.runtime.engine import agent_engine
 from app.schemas.agent import AgentChatRequest, AgentElicitationResponseRequest, AgentEvent
+from app.services.agent_run_service import agent_run_service
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.store import store_service
@@ -54,8 +55,25 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
     async def event_stream():
         yield f"data: {AgentEvent(type='session_created', session_id=session.session_id).model_dump_json()}\n\n"
         try:
-            async for event in agent_engine.stream_chat(session, request.message):
-                yield f"data: {event.model_dump_json()}\n\n"
+            if request.run_id:
+                run_id = request.run_id
+            else:
+                run_id = await agent_run_service.start_chat_run(session, request.message)
+                started_event = AgentEvent(
+                    type="run_started",
+                    session_id=session.session_id,
+                    payload={"run_id": run_id},
+                )
+                yield f"data: {started_event.model_dump_json()}\n\n"
+            queue = await agent_run_service.subscribe(run_id)
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield f"data: {event.model_dump_json()}\n\n"
+            finally:
+                await agent_run_service.unsubscribe(run_id, queue)
         except Exception as exc:  # noqa: BLE001
             error_event = AgentEvent(
                 type="error",
@@ -112,6 +130,41 @@ async def respond_to_elicitation(
         try:
             async for event in agent_engine.stream_chat(session, resume_message):
                 yield f"data: {event.model_dump_json()}\n\n"
+        except Exception as exc:  # noqa: BLE001
+            error_event = AgentEvent(
+                type="error",
+                session_id=session.session_id,
+                payload={"message": str(exc), "traceback": traceback.format_exc()},
+            )
+            yield f"data: {error_event.model_dump_json()}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@router.get("/{session_id}/runs/{run_id}/events")
+async def stream_run_events(
+    session_id: str,
+    run_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+) -> StreamingResponse:
+    session = _ensure_session_access(session_id, auth)
+
+    async def event_stream():
+        yield f"data: {AgentEvent(type='session_created', session_id=session.session_id).model_dump_json()}\n\n"
+        try:
+            queue = await agent_run_service.subscribe(run_id, replay_history=False)
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield f"data: {event.model_dump_json()}\n\n"
+            finally:
+                await agent_run_service.unsubscribe(run_id, queue)
         except Exception as exc:  # noqa: BLE001
             error_event = AgentEvent(
                 type="error",
