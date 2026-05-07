@@ -1,5 +1,9 @@
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { Terminal as XTerm } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { AnsiUp } from "ansi_up";
+import "@xterm/xterm/css/xterm.css";
 import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs } from "../../pages/workbench/markdown";
 import type { ChatMessage } from "../../pages/workbench/types";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
@@ -15,40 +19,6 @@ type SummaryResult = {
   meta: Array<[string, string]>;
   raw: string;
 };
-
-type TerminalStyleState = {
-  fg: string | null;
-  bg: string | null;
-  bold: boolean;
-  dim: boolean;
-  italic: boolean;
-  underline: boolean;
-  strike: boolean;
-  inverse: boolean;
-  hidden: boolean;
-};
-
-type TerminalSpan = { text: string; style: CSSProperties };
-type TerminalLine = { spans: TerminalSpan[] };
-
-const ANSI_BASIC_COLORS = [
-  "#6b7280",
-  "#cd3131",
-  "#0dbc79",
-  "#e5e510",
-  "#2472c8",
-  "#bc3fbc",
-  "#11a8cd",
-  "#e5e5e5",
-  "#9ca3af",
-  "#f14c4c",
-  "#23d18b",
-  "#f5f543",
-  "#3b8eea",
-  "#d670d6",
-  "#29b8db",
-  "#ffffff",
-];
 
 function LiveElapsedBadge({ startTime }: { startTime: number }) {
   const [elapsed, setElapsed] = useState(0);
@@ -220,316 +190,115 @@ function summarizeToolOutput(outputText: string, liveOutputText?: string): Summa
   };
 }
 
-function toHexChannel(value: number) {
-  return value.toString(16).padStart(2, "0");
+function countTerminalLines(value: string): number {
+  if (!value) return 0;
+  return value.split(/\r\n|\r|\n/).length;
 }
 
-function ansi256ToHex(index: number) {
-  if (index < 0) return null;
-  if (index < 16) return ANSI_BASIC_COLORS[index] ?? null;
-  if (index <= 231) {
-    const normalized = index - 16;
-    const r = Math.floor(normalized / 36);
-    const g = Math.floor((normalized % 36) / 6);
-    const b = normalized % 6;
-    const channels = [r, g, b].map((part) => (part === 0 ? 0 : 55 + part * 40));
-    return `#${channels.map(toHexChannel).join("")}`;
-  }
-  if (index <= 255) {
-    const c = 8 + (index - 232) * 10;
-    return `#${toHexChannel(c)}${toHexChannel(c)}${toHexChannel(c)}`;
-  }
-  return null;
-}
-
-function cloneAnsiState(state: TerminalStyleState): TerminalStyleState {
-  return { ...state };
-}
-
-function defaultAnsiState(): TerminalStyleState {
-  return {
-    fg: null,
-    bg: null,
-    bold: false,
-    dim: false,
-    italic: false,
-    underline: false,
-    strike: false,
-    inverse: false,
-    hidden: false,
-  };
-}
-
-function ansiStateToStyle(state: TerminalStyleState): CSSProperties {
-  const style: CSSProperties = {};
-  const fg = state.inverse ? state.bg : state.fg;
-  const bg = state.inverse ? state.fg : state.bg;
-
-  if (fg) style.color = fg;
-  if (bg) style.backgroundColor = bg;
-  if (state.bold) style.fontWeight = 700;
-  if (state.dim) style.opacity = 0.72;
-  if (state.italic) style.fontStyle = "italic";
-  const decorations: string[] = [];
-  if (state.underline) decorations.push("underline");
-  if (state.strike) decorations.push("line-through");
-  if (decorations.length > 0) style.textDecoration = decorations.join(" ");
-  if (state.hidden) style.opacity = 0.38;
-  return style;
-}
-
-function applyAnsiCodes(state: TerminalStyleState, codes: number[]) {
-  if (codes.length === 0) {
-    Object.assign(state, defaultAnsiState());
-    return;
-  }
-
-  for (let index = 0; index < codes.length; index += 1) {
-    const code = codes[index];
-    if (code === 0) {
-      Object.assign(state, defaultAnsiState());
-      continue;
-    }
-    if (code === 1) {
-      state.bold = true;
-      continue;
-    }
-    if (code === 2) {
-      state.dim = true;
-      continue;
-    }
-    if (code === 3) {
-      state.italic = true;
-      continue;
-    }
-    if (code === 4) {
-      state.underline = true;
-      continue;
-    }
-    if (code === 7) {
-      state.inverse = true;
-      continue;
-    }
-    if (code === 8) {
-      state.hidden = true;
-      continue;
-    }
-    if (code === 9) {
-      state.strike = true;
-      continue;
-    }
-    if (code === 22) {
-      state.bold = false;
-      state.dim = false;
-      continue;
-    }
-    if (code === 23) {
-      state.italic = false;
-      continue;
-    }
-    if (code === 24) {
-      state.underline = false;
-      continue;
-    }
-    if (code === 27) {
-      state.inverse = false;
-      continue;
-    }
-    if (code === 28) {
-      state.hidden = false;
-      continue;
-    }
-    if (code === 29) {
-      state.strike = false;
-      continue;
-    }
-    if (code === 39) {
-      state.fg = null;
-      continue;
-    }
-    if (code === 49) {
-      state.bg = null;
-      continue;
-    }
-    if (code >= 30 && code <= 37) {
-      state.fg = ANSI_BASIC_COLORS[code - 30] ?? null;
-      continue;
-    }
-    if (code >= 90 && code <= 97) {
-      state.fg = ANSI_BASIC_COLORS[code - 82] ?? null;
-      continue;
-    }
-    if (code >= 40 && code <= 47) {
-      state.bg = ANSI_BASIC_COLORS[code - 40] ?? null;
-      continue;
-    }
-    if (code >= 100 && code <= 107) {
-      state.bg = ANSI_BASIC_COLORS[code - 92] ?? null;
-      continue;
-    }
-    if (code === 38 || code === 48) {
-      const isForeground = code === 38;
-      const mode = codes[index + 1];
-      if (mode === 5 && typeof codes[index + 2] === "number") {
-        const color = ansi256ToHex(codes[index + 2]);
-        if (isForeground) {
-          state.fg = color;
-        } else {
-          state.bg = color;
-        }
-        index += 2;
-        continue;
-      }
-      if (mode === 2 && typeof codes[index + 2] === "number" && typeof codes[index + 3] === "number" && typeof codes[index + 4] === "number") {
-        const rgb = `#${toHexChannel(codes[index + 2])}${toHexChannel(codes[index + 3])}${toHexChannel(codes[index + 4])}`;
-        if (isForeground) {
-          state.fg = rgb;
-        } else {
-          state.bg = rgb;
-        }
-        index += 4;
-      }
-    }
-  }
-}
-
-function pushTerminalSpan(line: TerminalLine, state: TerminalStyleState, text: string) {
-  if (!text) return;
-  const style = ansiStateToStyle(state);
-  const previous = line.spans[line.spans.length - 1];
-  if (previous && JSON.stringify(previous.style) === JSON.stringify(style)) {
-    previous.text += text;
-    return;
-  }
-  line.spans.push({ text, style });
-}
-
-function parseTerminalText(value: string): TerminalLine[] {
-  if (!value) return [];
-
-  const lines: TerminalLine[] = [];
-  let currentLine: TerminalLine = { spans: [] };
-  let buffer = "";
-  let state = defaultAnsiState();
-
-  const flushBuffer = () => {
-    if (!buffer) return;
-    pushTerminalSpan(currentLine, state, buffer);
-    buffer = "";
-  };
-
-  const commitLine = () => {
-    flushBuffer();
-    lines.push(currentLine);
-    currentLine = { spans: [] };
-  };
-
-  for (let index = 0; index < value.length; index += 1) {
-    const char = value[index];
-    if (char === "\u001b" && value[index + 1] === "[") {
-      flushBuffer();
-      let cursor = index + 2;
-      while (cursor < value.length && !/[A-Za-z]/.test(value[cursor])) {
-        cursor += 1;
-      }
-      if (cursor >= value.length) {
-        break;
-      }
-      const command = value[cursor];
-      if (command === "m") {
-        const params = value.slice(index + 2, cursor).split(";").filter(Boolean).map((part) => Number(part));
-        applyAnsiCodes(state, params);
-      }
-      index = cursor;
-      continue;
-    }
-
-    if (char === "\r") {
-      if (value[index + 1] === "\n") {
-        flushBuffer();
-        if (currentLine.spans.length > 0) {
-          lines.push(currentLine);
-        }
-        currentLine = { spans: [] };
-        index += 1;
-        continue;
-      }
-      flushBuffer();
-      currentLine = { spans: [] };
-      continue;
-    }
-
-    if (char === "\n") {
-      flushBuffer();
-      if (currentLine.spans.length > 0) {
-        lines.push(currentLine);
-      }
-      currentLine = { spans: [] };
-      continue;
-    }
-
-    if (char === "\b") {
-      if (buffer.length > 0) {
-        buffer = buffer.slice(0, -1);
-      }
-      continue;
-    }
-
-    buffer += char;
-  }
-
-  flushBuffer();
-  lines.push(currentLine);
-  if (lines.length > 1 && lines[lines.length - 1].spans.length === 0 && value.endsWith("\n")) {
-    lines.pop();
-  }
-  return lines;
-}
-
-function TerminalRenderer({ text }: { text: string }) {
-  const lines = useMemo(() => parseTerminalText(text), [text]);
-  if (lines.length === 0) {
-    return <span className="tool-panel__empty">等待工具输出...</span>;
-  }
-
-  return (
-    <>
-      {lines.map((line, lineIndex) => (
-        <span key={`line-${lineIndex}`} className="tool-terminal-line">
-          {line.spans.length === 0 ? "\u00a0" : line.spans.map((span, spanIndex) => (
-            <span key={`span-${lineIndex}-${spanIndex}`} style={span.style}>
-              {span.text}
-            </span>
-          ))}
-        </span>
-      ))}
-    </>
-  );
-}
-
-function useAutoStickToBottom(text: string, enabled = true) {
+function XTermRenderer({ text, variant, active = true }: { text: string; variant: "terminal" | "result"; active?: boolean }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<XTerm | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const contentLengthRef = useRef(0);
   const stickToBottomRef = useRef(true);
 
   useEffect(() => {
-    const node = hostRef.current;
-    if (!node) return;
-    const handleScroll = () => {
-      const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
-      stickToBottomRef.current = distance <= 24;
+    const host = hostRef.current;
+    if (!host) return;
+
+    const terminal = new XTerm({
+      convertEol: false,
+      cursorBlink: false,
+      disableStdin: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
+      fontSize: 12.5,
+      lineHeight: 1.55,
+      scrollback: 5000,
+      theme:
+        variant === "result"
+          ? {
+              background: "#f8fffb",
+              foreground: "#166534",
+              cursor: "#166534",
+            }
+          : {
+              background: "#111827",
+              foreground: "#dbeafe",
+              cursor: "#93c5fd",
+            },
+    });
+
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(host);
+    fitAddon.fit();
+
+    terminal.onScroll(() => {
+      const buffer = terminal.buffer.active;
+      stickToBottomRef.current = buffer.baseY <= buffer.viewportY + 1;
+    });
+
+    if (text) {
+      terminal.write(text);
+      contentLengthRef.current = text.length;
+      if (active) terminal.scrollToBottom();
+    } else {
+      contentLengthRef.current = 0;
+    }
+
+    const observer = new ResizeObserver(() => {
+      fitAddon.fit();
+      if (active && stickToBottomRef.current) terminal.scrollToBottom();
+    });
+    observer.observe(host);
+
+    terminalRef.current = terminal;
+    fitAddonRef.current = fitAddon;
+
+    return () => {
+      observer.disconnect();
+      terminal.dispose();
+      terminalRef.current = null;
+      fitAddonRef.current = null;
+      contentLengthRef.current = 0;
     };
-    node.addEventListener("scroll", handleScroll);
-    return () => node.removeEventListener("scroll", handleScroll);
-  }, []);
+  }, [variant]);
 
   useEffect(() => {
-    const node = hostRef.current;
-    if (!node || !enabled) return;
-    if (!stickToBottomRef.current) return;
-    node.scrollTop = node.scrollHeight;
-  }, [text, enabled]);
+    const terminal = terminalRef.current;
+    if (!terminal) return;
 
-  return hostRef;
+    const previousLength = contentLengthRef.current;
+    if (text.length < previousLength) {
+      terminal.clear();
+      if (text) terminal.write(text);
+    } else if (text.length > previousLength) {
+      terminal.write(text.slice(previousLength));
+    }
+    contentLengthRef.current = text.length;
+    if (active && stickToBottomRef.current) terminal.scrollToBottom();
+  }, [text, active]);
+
+  useEffect(() => {
+    if (!active) return;
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!terminal || !fitAddon) return;
+    fitAddon.fit();
+    if (stickToBottomRef.current) terminal.scrollToBottom();
+  }, [active]);
+
+  return <div ref={hostRef} className={`tool-xterm tool-xterm--${variant}`} />;
+}
+
+function PlainOutputRenderer({ text }: { text: string }) {
+  const html = useMemo(() => {
+    const ansi = new AnsiUp();
+    ansi.use_classes = false;
+    return ansi.ansi_to_html(text || " ");
+  }, [text]);
+
+  return <pre className="tool-plain-output" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function IconPopover({ label, children, icon }: { label: string; children: ReactNode; icon: ReactNode }) {
@@ -594,8 +363,7 @@ function IconPopover({ label, children, icon }: { label: string; children: React
 function ToolLivePanel({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(true);
   const [height, setHeight] = useState(180);
-  const lineCount = useMemo(() => parseTerminalText(text).length, [text]);
-  const contentRef = useAutoStickToBottom(text, expanded);
+  const lineCount = useMemo(() => countTerminalLines(text), [text]);
 
   const handleResizeStart = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const startY = event.clientY;
@@ -634,8 +402,10 @@ function ToolLivePanel({ text }: { text: string }) {
       </button>
       {expanded ? (
         <div className="tool-panel__body" style={{ height }}>
-          <div ref={contentRef} className="tool-panel__content tool-panel__content--terminal">
-            <TerminalRenderer text={text} />
+          <div className="tool-panel__content tool-panel__content--terminal">
+            {text
+              ? <XTermRenderer text={text} variant="terminal" active={expanded} />
+              : <span className="tool-panel__empty">等待工具输出...</span>}
           </div>
           <button
             type="button"
@@ -698,7 +468,7 @@ function ToolResultPanel({ outputText, liveOutputText, status }: { outputText: s
       </div>
       <div className="tool-panel__body" style={{ height }}>
         <div className="tool-panel__content tool-panel__content--result">
-          <TerminalRenderer text={primary || " "} />
+          <PlainOutputRenderer text={primary || " "} />
         </div>
         <button
           type="button"
