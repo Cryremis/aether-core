@@ -947,18 +947,36 @@ class SessionRuntimeService:
             if stream is None:
                 return
             while True:
-                chunk = await stream.read(4096)
-                if not chunk:
+                try:
+                    chunk = await stream.read(4096)
+                    if not chunk:
+                        break
+                    sink.append(chunk)
+                    if output_callback is not None:
+                        await output_callback(stream_name, self._decode_output(chunk))
+                except OSError:
                     break
-                sink.append(chunk)
-                if output_callback is not None:
-                    await output_callback(stream_name, self._decode_output(chunk))
 
         await asyncio.gather(
             read_stream(process.stdout, stdout_chunks, "stdout"),
             read_stream(process.stderr, stderr_chunks, "stderr"),
         )
         await process.wait()
+
+        pty_pipe = getattr(process, "_pty_pipe", None)
+        if pty_pipe is not None:
+            try:
+                pty_pipe.close()
+            except OSError:
+                pass
+
+        pty_master_fd = getattr(process, "_pty_master_fd", None)
+        if pty_master_fd is not None:
+            try:
+                os.close(pty_master_fd)
+            except OSError:
+                pass
+
         return b"".join(stdout_chunks), b"".join(stderr_chunks)
 
     async def _create_exec_process(
@@ -969,7 +987,8 @@ class SessionRuntimeService:
     ) -> asyncio.subprocess.Process:
         docker_binary = self._require_docker_binary()
         exec_args = self._build_exec_args(container_name, shell, command)
-        if os.name == "nt":
+
+        if os.name == "nt" or not hasattr(os, "fork"):
             return await asyncio.create_subprocess_exec(
                 docker_binary,
                 *exec_args,
@@ -978,7 +997,20 @@ class SessionRuntimeService:
                 **self._subprocess_kwargs(),
             )
 
-        import pty
+        try:
+            import pty
+        except ImportError:
+            return await asyncio.create_subprocess_exec(
+                docker_binary,
+                *exec_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                **self._subprocess_kwargs(),
+            )
+
+        master_fd = None
+        slave_fd = None
+        pipe = None
 
         try:
             master_fd, slave_fd = pty.openpty()
@@ -1000,16 +1032,43 @@ class SessionRuntimeService:
                 stderr=slave_fd,
                 **self._subprocess_kwargs(),
             )
+        except Exception:
+            if master_fd is not None:
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+            raise
         finally:
-            os.close(slave_fd)
+            if slave_fd is not None:
+                try:
+                    os.close(slave_fd)
+                except OSError:
+                    pass
 
-        loop = asyncio.get_running_loop()
-        pipe = os.fdopen(master_fd, "rb", buffering=0)
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, pipe)
+        try:
+            loop = asyncio.get_running_loop()
+            pipe = os.fdopen(master_fd, "rb", buffering=0)
+            reader = asyncio.StreamReader()
+            protocol = asyncio.StreamReaderProtocol(reader)
+            await loop.connect_read_pipe(lambda: protocol, pipe)
+        except Exception:
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+            if master_fd is not None:
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+            raise
+
         process.stdout = reader  # type: ignore[attr-defined]
         process.stderr = None  # type: ignore[attr-defined]
+        process._pty_master_fd = master_fd  # type: ignore[attr-defined]
+        process._pty_pipe = pipe  # type: ignore[attr-defined]
         return process
 
     async def _terminate_process(
@@ -1020,16 +1079,28 @@ class SessionRuntimeService:
     ) -> None:
         if process.returncode is not None:
             return
+
+        pty_pipe = getattr(process, "_pty_pipe", None)
+        pty_master_fd = getattr(process, "_pty_master_fd", None)
+
         process.terminate()
         try:
-            await asyncio.wait_for(process.communicate(), timeout=settings.sandbox_cancel_grace_seconds)
+            if pty_pipe is None and process.stdout is not None:
+                await asyncio.wait_for(process.communicate(), timeout=settings.sandbox_cancel_grace_seconds)
+            else:
+                await asyncio.wait_for(process.wait(), timeout=settings.sandbox_cancel_grace_seconds)
             return
         except (asyncio.TimeoutError, ProcessLookupError):
             pass
+
         if process.returncode is None:
             process.kill()
+
         try:
-            await asyncio.wait_for(process.communicate(), timeout=settings.sandbox_force_kill_grace_seconds)
+            if pty_pipe is None and process.stdout is not None:
+                await asyncio.wait_for(process.communicate(), timeout=settings.sandbox_force_kill_grace_seconds)
+            else:
+                await asyncio.wait_for(process.wait(), timeout=settings.sandbox_force_kill_grace_seconds)
         except (asyncio.TimeoutError, ProcessLookupError):
             if container_name:
                 docker_binary = self._resolve_docker_binary()
@@ -1044,6 +1115,18 @@ class SessionRuntimeService:
                         **self._subprocess_kwargs(),
                     )
                     await forced.communicate()
+
+        if pty_pipe is not None:
+            try:
+                pty_pipe.close()
+            except OSError:
+                pass
+
+        if pty_master_fd is not None:
+            try:
+                os.close(pty_master_fd)
+            except OSError:
+                pass
 
     def _runtime_dns_servers(self) -> list[str]:
         configured = [item.strip() for item in settings.sandbox_docker_dns_servers if item.strip()]

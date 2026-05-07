@@ -445,10 +445,16 @@ function parseTerminalText(value: string): TerminalLine[] {
     }
 
     if (char === "\r") {
-      flushBuffer();
-      if (currentLine.spans.length > 0) {
-        lines.push(currentLine);
+      if (value[index + 1] === "\n") {
+        flushBuffer();
+        if (currentLine.spans.length > 0) {
+          lines.push(currentLine);
+        }
+        currentLine = { spans: [] };
+        index += 1;
+        continue;
       }
+      flushBuffer();
       currentLine = { spans: [] };
       continue;
     }
