@@ -75,7 +75,7 @@ class LlmClient:
         return exc.response.status_code in self._TOOL_RETRY_STATUS_CODES
 
     async def _post_json(self, config: RuntimeLlmConfig, payload: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
             response = await client.post(self._endpoint(config), headers=self._headers(config), json=payload)
             response.raise_for_status()
             return response.json()
@@ -85,7 +85,7 @@ class LlmClient:
         config: RuntimeLlmConfig,
         payload: dict[str, Any],
     ) -> AsyncGenerator[dict[str, Any], None]:
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
             async with client.stream("POST", self._endpoint(config), headers=self._headers(config), json=payload) as response:
                 if response.is_error:
                     await response.aread()

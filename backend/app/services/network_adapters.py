@@ -76,7 +76,7 @@ class OpenAIResponsesSearchAdapter:
             "Content-Type": "application/json",
             **runtime_config.extra_headers,
         }
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
             response = await client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -169,7 +169,7 @@ class GlmSearchAdapter:
             "Content-Type": "application/json",
             **runtime_config.extra_headers,
         }
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
             response = await client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -243,7 +243,7 @@ class DashScopeSearchAdapter:
             "Content-Type": "application/json",
             **runtime_config.extra_headers,
         }
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
             response = await client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()

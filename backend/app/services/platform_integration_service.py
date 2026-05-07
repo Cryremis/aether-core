@@ -114,7 +114,7 @@ class PlatformIntegrationService:
                     "apis": [],
                 }}
 
-                async with httpx.AsyncClient(timeout=30) as client:
+                async with httpx.AsyncClient(timeout=30, verify=settings.http_client_ssl_verify) as client:
                     response = await client.post(
                         f"{{settings.AETHERCORE_API_BASE_URL.rstrip('/')}}/api/v1/host/bind",
                         headers={{"X-Aether-Platform-Secret": settings.AETHERCORE_PLATFORM_SECRET}},

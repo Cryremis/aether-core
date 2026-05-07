@@ -384,7 +384,7 @@ function ParsedTerminalRenderer({ text }: { text: string }) {
       rows: 1,
       scrollback: 5000,
       allowTransparency: true,
-      convertEol: false,
+      convertEol: true,
       disableStdin: true,
     });
 
@@ -569,7 +569,19 @@ function IconPopover({ label, children, icon }: { label: string; children: React
       </button>
       {open
         ? createPortal(
-            <div className="tool-json-popover__panel" style={{ top: position.top, right: position.right }}>
+            <div
+              className="tool-json-popover__panel"
+              style={{ top: position.top, right: position.right }}
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                event.stopPropagation();
+              }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+              }}
+            >
               {children}
             </div>,
             document.body,

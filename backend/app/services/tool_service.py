@@ -677,7 +677,7 @@ class ToolService:
             "context": session.host_context,
         }
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=120, verify=settings.http_client_ssl_verify) as client:
             response = await client.request(
                 method=descriptor.get("method", "POST"),
                 url=endpoint,
@@ -761,7 +761,7 @@ class ToolService:
             require_base_url=False,
         )
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, verify=settings.http_client_ssl_verify) as client:
                 response = await client.request(
                     method="POST",
                     url=refresh_endpoint,

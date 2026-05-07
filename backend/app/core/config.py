@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     llm_network_fetch_timeout_seconds: int = 30
     llm_network_fetch_max_bytes: int = 2 * 1024 * 1024
     llm_network_user_agent: str = "AetherCore/1.0"
+    llm_ssl_verify: bool = True
+
+    http_client_ssl_verify: bool = True
 
     auth_secret_key: str = "aethercore-dev-secret-key"
     auth_algorithm: str = "HS256"

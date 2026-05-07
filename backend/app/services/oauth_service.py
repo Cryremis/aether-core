@@ -140,7 +140,7 @@ class OAuthService:
             request_kwargs["json"] = payload
         else:
             request_kwargs["data"] = payload
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, verify=settings.http_client_ssl_verify) as client:
             response = await client.post(config.token_url, **request_kwargs)
             response.raise_for_status()
         data = response.json()
@@ -172,7 +172,7 @@ class OAuthService:
             if config.extra_userinfo_params:
                 request_kwargs["params"] = dict(config.extra_userinfo_params)
             method = "GET"
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, verify=settings.http_client_ssl_verify) as client:
             response = await client.request(method, config.userinfo_url, **request_kwargs)
             response.raise_for_status()
         data = response.json()

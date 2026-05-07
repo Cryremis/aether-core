@@ -138,7 +138,7 @@ class NetworkService:
             "User-Agent": settings.llm_network_user_agent,
             "Accept": "text/html, text/plain;q=0.9, application/xhtml+xml;q=0.8, */*;q=0.1",
         }
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, verify=settings.http_client_ssl_verify) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
             body = await response.aread()
