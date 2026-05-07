@@ -36,7 +36,7 @@ export type AssistantBlock =
     };
 
 export type AssistantSegment =
-  | { id: string; kind: "bubble"; blocks: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" }>> }
+  | { id: string; kind: "bubble"; blocks: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" | "runtime_notice" }>> }
   | { id: string; kind: "tool"; block: Extract<AssistantBlock, { kind: "tool" }> };
 
 export type ChatMessage =

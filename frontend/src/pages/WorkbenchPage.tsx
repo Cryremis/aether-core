@@ -731,6 +731,24 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     );
   };
 
+  const upsertAssistantBlock = (messageId: string, blockId: string, createBlock: () => AssistantBlock, updater: (block: AssistantBlock) => AssistantBlock) => {
+    setMessages((current) =>
+      current.map((item) => {
+        if (item.id !== messageId || item.role !== "assistant") return item;
+        let found = false;
+        const nextBlocks = item.blocks.map((block) => {
+          if (block.id !== blockId) return block;
+          found = true;
+          return updater(block);
+        });
+        return {
+          ...item,
+          blocks: found ? nextBlocks : [...nextBlocks, createBlock()],
+        };
+      }),
+    );
+  };
+
   const upsertAssistantMessage = (
     messageId: string,
     updater: (message: Extract<ChatMessage, { role: "assistant" }> | null) => Extract<ChatMessage, { role: "assistant" }>,
@@ -1028,14 +1046,27 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       if (eventType === "tool_output_delta") {
         const toolId = String(payload.id ?? "");
         if (!toolId) return;
-        updateAssistantBlock(assistantId, toolId, (block) =>
-          block.kind === "tool"
-            ? {
-                ...block,
-                liveOutputText: `${block.liveOutputText ?? ""}${String(payload.text ?? "")}`,
-                status: "running",
-              }
-            : block,
+        upsertAssistantBlock(
+          assistantId,
+          toolId,
+          () => ({
+            id: toolId,
+            kind: "tool",
+            title: "运行命令",
+            meta: "",
+            argumentsText: "",
+            outputText: "",
+            liveOutputText: String(payload.text ?? ""),
+            status: "running",
+          }),
+          (block) =>
+            block.kind === "tool"
+              ? {
+                  ...block,
+                  liveOutputText: `${block.liveOutputText ?? ""}${String(payload.text ?? "")}`,
+                  status: "running",
+                }
+              : block,
         );
         return;
       }
@@ -1053,18 +1084,35 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
             (output as Record<string, unknown> | undefined)?.snapshot) as ElicitationState | undefined;
           if (nextElicitation) setElicitation(nextElicitation);
         }
-        updateAssistantBlock(assistantId, String(payload.id), (block) =>
-          block.kind === "tool"
-            ? {
-                ...block,
-                outputText: stringifyStructured(output),
-                liveOutputText: undefined,
-                status:
-                  typeof output === "object" && output !== null && "aborted" in (output as Record<string, unknown>) && (output as Record<string, unknown>).aborted === true
-                    ? "aborted"
-                    : "done",
-              }
-            : block,
+        const toolId = String(payload.id ?? "");
+        upsertAssistantBlock(
+          assistantId,
+          toolId,
+          () => ({
+            id: toolId || `tool-${Date.now()}`,
+            kind: "tool",
+            title: "运行命令",
+            meta: "",
+            argumentsText: "",
+            outputText: stringifyStructured(output),
+            liveOutputText: undefined,
+            status:
+              typeof output === "object" && output !== null && "aborted" in (output as Record<string, unknown>) && (output as Record<string, unknown>).aborted === true
+                ? "aborted"
+                : "done",
+          }),
+          (block) =>
+            block.kind === "tool"
+              ? {
+                  ...block,
+                  outputText: stringifyStructured(output),
+                  liveOutputText: undefined,
+                  status:
+                    typeof output === "object" && output !== null && "aborted" in (output as Record<string, unknown>) && (output as Record<string, unknown>).aborted === true
+                      ? "aborted"
+                      : "done",
+                }
+              : block,
         );
         if (["sandbox_shell", "create_text_artifact"].includes(toolName)) {
           void refreshResources(effectiveSessionId);

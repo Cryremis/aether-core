@@ -692,6 +692,18 @@ class AgentEngine:
                                 )
                                 if execution_task in done:
                                     result = execution_task.result()
+                                    while not output_wait_task.done() and not tool_output_queue.empty():
+                                        output_event = await tool_output_queue.get()
+                                        yield make_event(
+                                            session,
+                                            "tool_output_delta",
+                                            id=output_event["id"],
+                                            tool_name=output_event["tool_name"],
+                                            stream=output_event["stream"],
+                                            text=output_event["text"],
+                                            seq=output_event["seq"],
+                                            timestamp=output_event["timestamp"],
+                                        )
                                     if not wait_task.done():
                                         wait_task.cancel()
                                         try:

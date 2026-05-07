@@ -147,6 +147,9 @@ class LocalSandboxExecutor(SandboxExecutor):
                 "AETHER_OUTPUT_DIR": str(workspace.output_dir),
                 "AETHER_LOGS_DIR": str(workspace.logs_dir),
                 "PYTHONIOENCODING": "utf-8",
+                "TERM": "xterm-256color",
+                "FORCE_COLOR": "1",
+                "CLICOLOR_FORCE": "1",
             }
         )
         return env

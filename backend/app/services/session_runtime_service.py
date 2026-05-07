@@ -504,6 +504,12 @@ class SessionRuntimeService:
             "--env",
             "PYTHONIOENCODING=utf-8",
             "--env",
+            "TERM=xterm-256color",
+            "--env",
+            "FORCE_COLOR=1",
+            "--env",
+            "CLICOLOR_FORCE=1",
+            "--env",
             f"PIP_CACHE_DIR={settings.sandbox_docker_cache_dir}/pip",
             "--env",
             "PIP_ROOT_USER_ACTION=ignore",
@@ -550,6 +556,7 @@ class SessionRuntimeService:
     def _build_exec_args(self, container_name: str, shell: str, command: str) -> list[str]:
         args = [
             "exec",
+            "-i",
             "--user",
             settings.sandbox_docker_user.strip() or f"{self._sandbox_uid()}:{self._sandbox_gid()}",
             "--workdir",
@@ -582,13 +589,31 @@ class SessionRuntimeService:
             f"AETHER_OUTPUT_DIR={settings.sandbox_docker_output_dir}",
             "--env",
             f"AETHER_LOGS_DIR={settings.sandbox_docker_logs_dir}",
+            "--env",
+            "TERM=xterm-256color",
+            "--env",
+            "COLORTERM=truecolor",
+            "--env",
+            "FORCE_COLOR=1",
+            "--env",
+            "CLICOLOR_FORCE=1",
+            "--env",
+            "PYTHONUNBUFFERED=1",
             container_name,
         ]
         if shell == "bash":
-            return [*args, "/bin/bash", "-lc", command]
+            return [*args, "/bin/bash", "-lc", self._wrap_command_for_terminal(command)]
         if shell == "powershell":
             return [*args, "pwsh", "-NoLogo", "-NoProfile", "-Command", command]
         raise RuntimeError(f"暂不支持的 shell 类型: {shell}")
+
+    def _wrap_command_for_terminal(self, command: str) -> str:
+        quoted = shlex.quote(command)
+        return (
+            "if command -v script >/dev/null 2>&1; then "
+            f"script -q -e -f -c {quoted} /dev/null; "
+            f"else exec /bin/bash -lc {quoted}; fi"
+        )
 
     async def _inspect_container_state(self, container_name: str) -> str | None:
         if not container_name:
@@ -778,13 +803,7 @@ class SessionRuntimeService:
         )
         started_at = time.perf_counter()
         try:
-            process = await asyncio.create_subprocess_exec(
-                self._require_docker_binary(),
-                *self._build_exec_args(container_name, shell, command),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                **self._subprocess_kwargs(),
-            )
+            process = await self._create_exec_process(container_name, shell, command)
             if session is not None and run_id is not None:
                 session.set_tool_task(run_id, process)
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -941,6 +960,57 @@ class SessionRuntimeService:
         )
         await process.wait()
         return b"".join(stdout_chunks), b"".join(stderr_chunks)
+
+    async def _create_exec_process(
+        self,
+        container_name: str,
+        shell: str,
+        command: str,
+    ) -> asyncio.subprocess.Process:
+        docker_binary = self._require_docker_binary()
+        exec_args = self._build_exec_args(container_name, shell, command)
+        if os.name == "nt":
+            return await asyncio.create_subprocess_exec(
+                docker_binary,
+                *exec_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                **self._subprocess_kwargs(),
+            )
+
+        import pty
+
+        try:
+            master_fd, slave_fd = pty.openpty()
+        except OSError:
+            return await asyncio.create_subprocess_exec(
+                docker_binary,
+                *exec_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                **self._subprocess_kwargs(),
+            )
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                docker_binary,
+                *exec_args,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                **self._subprocess_kwargs(),
+            )
+        finally:
+            os.close(slave_fd)
+
+        loop = asyncio.get_running_loop()
+        pipe = os.fdopen(master_fd, "rb", buffering=0)
+        reader = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(reader)
+        await loop.connect_read_pipe(lambda: protocol, pipe)
+        process.stdout = reader  # type: ignore[attr-defined]
+        process.stderr = None  # type: ignore[attr-defined]
+        return process
 
     async def _terminate_process(
         self,
