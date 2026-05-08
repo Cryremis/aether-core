@@ -12,6 +12,7 @@ class AgentChatRequest(BaseModel):
     session_id: str | None = None
     allow_network: bool | None = None
     run_id: str | None = None
+    replace_last_user_message: bool = False
 
 
 class ElicitationResponseItem(BaseModel):

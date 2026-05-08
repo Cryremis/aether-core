@@ -6,9 +6,11 @@ import {
   bootstrapAdminSession,
   createPlatformRegistrationRequest,
   deleteUserLlmConfig,
+  editSessionTimeline,
   type ElicitationRequest,
   type ElicitationResponseItem,
   type ElicitationState,
+  forkSessionTimeline,
   getDownloadUrl,
   getUserLlmConfig,
   listMyPlatformRegistrationRequests,
@@ -16,6 +18,7 @@ import {
   getSessionSummary,
   listFiles,
   listSkills,
+  rerunSessionTimeline,
   streamElicitationResponse,
   streamChat,
   streamRunEvents,
@@ -1344,6 +1347,152 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     }
   };
 
+  const rerunFromTimeline = async (messageId: string, promptOverride?: string) => {
+    const effectiveSessionId = sessionId || localSessionId;
+    if (!effectiveSessionId || isStreamingRef.current) return;
+
+    setBusy(true);
+    setError("");
+    shouldStickToBottomRef.current = true;
+
+    try {
+      const rerunResult = promptOverride === undefined
+        ? await rerunSessionTimeline(effectiveSessionId, messageId)
+        : await editSessionTimeline(effectiveSessionId, messageId, promptOverride);
+
+      const summaryResult = await getSessionSummary(effectiveSessionId);
+      const summary = (summaryResult.data ?? {}) as {
+        transcript?: TranscriptChatMessage[];
+      };
+      setMessages(fromTranscriptMessages(summary.transcript ?? []));
+
+      const assistantId = `assistant-rerun-${Date.now()}`;
+      const roundStartTime = Date.now();
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+      isStreamingRef.current = true;
+
+      setMessages((current) => [
+        ...current,
+        { id: assistantId, role: "assistant", blocks: [], elapsedMs: null, streaming: true, startTime: roundStartTime },
+      ]);
+
+      let activeReasoningId = "";
+      let activeContentId = "";
+      let activeContentText = "";
+      let wasAborted = false;
+      let partialContent = "";
+      const eventRefs = {
+        activeReasoningId: {
+          get value() {
+            return activeReasoningId;
+          },
+          set value(value: string) {
+            activeReasoningId = value;
+          },
+        },
+        activeContentId: {
+          get value() {
+            return activeContentId;
+          },
+          set value(value: string) {
+            activeContentId = value;
+          },
+        },
+        activeContentText: {
+          get value() {
+            return activeContentText;
+          },
+          set value(value: string) {
+            activeContentText = value;
+          },
+        },
+        wasAborted: {
+          get value() {
+            return wasAborted;
+          },
+          set value(value: boolean) {
+            wasAborted = value;
+          },
+        },
+        partialContent: {
+          get value() {
+            return partialContent;
+          },
+          set value(value: string) {
+            partialContent = value;
+          },
+        },
+      };
+
+      try {
+        const handleEvent = buildEventProcessor(assistantId, effectiveSessionId, eventRefs);
+        await streamChat(
+          effectiveSessionId,
+          rerunResult.rerun_prompt,
+          allowNetwork,
+          handleEvent,
+          abortController.signal,
+          { replaceLastUserMessage: true },
+        );
+      } catch (chatError) {
+        if (chatError instanceof Error && chatError.name === "AbortError") {
+          wasAborted = true;
+        } else {
+          setError(chatError instanceof Error ? chatError.message : "重跑失败");
+        }
+      } finally {
+        const elapsedMs = Date.now() - roundStartTime;
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantId && item.role === "assistant"
+              ? { ...item, elapsedMs, streaming: false, startTime: undefined }
+              : item,
+          ),
+        );
+        isStreamingRef.current = false;
+        abortControllerRef.current = null;
+        if (wasAborted) {
+          setError("重跑已中断");
+        }
+        void onSessionRefresh?.();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重跑失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleForkFromMessage = async (messageId: string) => {
+    const effectiveSessionId = sessionId || localSessionId;
+    if (!effectiveSessionId || isStreamingRef.current) return;
+    try {
+      setBusy(true);
+      setError("");
+      const result = await forkSessionTimeline(effectiveSessionId, messageId);
+      onSessionCreated?.(result.session_id);
+      onSessionSelect?.(result.session_id);
+      void onSessionRefresh?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "分叉失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRerunFromMessage = async (messageId: string) => {
+    await rerunFromTimeline(messageId);
+  };
+
+const handleEditUserMessage = async (messageId: string, editedContent: string) => {
+    if (!editedContent.trim()) {
+      setError("消息不能为空");
+      return;
+    }
+    await rerunFromTimeline(messageId, editedContent);
+  };
+
   const handleStop = async () => {
     if (!abortControllerRef.current || !isStreamingRef.current) return;
     const effectiveSessionId = sessionId || localSessionId;
@@ -1529,7 +1678,15 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         {error ? <div className="error-toast anim-shake">{error}</div> : null}
 
         <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll}>
-          <ChatTimeline contentRef={historyContentRef} loading={loading} messages={messages} />
+          <ChatTimeline
+            contentRef={historyContentRef}
+            loading={loading}
+            messages={messages}
+            actionsDisabled={busy || loading}
+            onForkUserMessage={(messageId) => void handleForkFromMessage(messageId)}
+            onRerunFromMessage={(messageId) => void handleRerunFromMessage(messageId)}
+            onEditUserMessage={(messageId, content) => void handleEditUserMessage(messageId, content)}
+          />
         </div>
 
         <div className="runtime-panels">

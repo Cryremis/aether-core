@@ -235,17 +235,32 @@ class AgentEngine:
         message: str,
         *,
         run_id: str | None = None,
+        replace_last_user_message: bool = False,
     ) -> AsyncGenerator:
         started_at = time.perf_counter()
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         session.begin_run(run_id)
         request_turn_index = self._next_turn_index(session)
-        session.messages.append(
-            context_message_adapter.make_user_message(
-                message,
+        if replace_last_user_message:
+            replaced = self._replace_last_user_message(
+                session,
+                content=message,
                 turn_index=request_turn_index,
             )
-        )
+            if not replaced:
+                session.messages.append(
+                    context_message_adapter.make_user_message(
+                        message,
+                        turn_index=request_turn_index,
+                    )
+                )
+        else:
+            session.messages.append(
+                context_message_adapter.make_user_message(
+                    message,
+                    turn_index=request_turn_index,
+                )
+            )
         session.touch()
         session_service.persist(session)
         conversation = store_service.get_conversation_by_session(session.session_id)
@@ -919,6 +934,22 @@ class AgentEngine:
             )
             session.finish_run(run_id)
             return
+
+    def _replace_last_user_message(self, session: AgentSession, *, content: str, turn_index: int) -> bool:
+        for index in range(len(session.messages) - 1, -1, -1):
+            message = session.messages[index]
+            if str(message.get("role") or "") != "user":
+                continue
+            old_message_id = str(message.get("message_id") or "")
+            replacement = context_message_adapter.make_user_message(
+                content,
+                turn_index=turn_index,
+            )
+            if old_message_id:
+                replacement["message_id"] = old_message_id
+            session.messages[index] = replacement
+            return True
+        return False
 
     def _fingerprint_tool_calls(self, tool_calls: dict[int, dict[str, str]]) -> str:
         payload = [

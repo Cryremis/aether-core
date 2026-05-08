@@ -257,6 +257,22 @@ export type TranscriptChatMessage =
   | { id: string; role: "user"; content: string }
   | { id: string; role: "assistant"; blocks: TranscriptAssistantBlock[]; elapsedMs: number | null; streaming: boolean };
 
+export type TimelineRerunResponse = {
+  success: boolean;
+  rerun_prompt: string;
+  source_message_id: string;
+  anchor_message_id: string;
+  rerun_message_id: string;
+  truncated_count: number;
+};
+
+export type TimelineForkResponse = {
+  success: boolean;
+  session_id: string;
+  conversation_id: string;
+  source_message_id: string;
+};
+
 export type ActiveRunSummary = {
   run_id: string;
   session_id: string;
@@ -1102,12 +1118,49 @@ export async function abortSession(sessionId: string) {
   return response.json();
 }
 
+export async function forkSessionTimeline(sessionId: string, messageId: string) {
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/timeline/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_id: messageId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `分叉会话失败: ${response.status}`));
+  }
+  return (await response.json()) as TimelineForkResponse;
+}
+
+export async function rerunSessionTimeline(sessionId: string, messageId: string) {
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/timeline/rerun`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_id: messageId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `重新生成失败: ${response.status}`));
+  }
+  return (await response.json()) as TimelineRerunResponse;
+}
+
+export async function editSessionTimeline(sessionId: string, messageId: string, content: string) {
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/timeline/edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message_id: messageId, content }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `编辑并重生成失败: ${response.status}`));
+  }
+  return (await response.json()) as TimelineRerunResponse;
+}
+
 export async function streamChat(
   sessionId: string,
   message: string,
   allowNetwork: boolean,
   onEvent: (event: Record<string, unknown>) => void,
   abortSignal?: AbortSignal,
+  options?: { replaceLastUserMessage?: boolean },
 ) {
   return streamSse(
     "/agent/chat",
@@ -1115,6 +1168,7 @@ export async function streamChat(
       session_id: sessionId,
       message,
       allow_network: allowNetwork,
+      replace_last_user_message: Boolean(options?.replaceLastUserMessage),
     },
     onEvent,
     abortSignal,

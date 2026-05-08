@@ -11,6 +11,10 @@ type ChatTimelineProps = {
   contentRef?: RefObject<HTMLDivElement | null>;
   loading: boolean;
   messages: ChatMessage[];
+  onForkUserMessage?: (messageId: string) => void;
+  onRerunFromMessage?: (messageId: string) => void;
+  onEditUserMessage?: (messageId: string, content: string) => void;
+  actionsDisabled?: boolean;
 };
 
 type SummaryResult = {
@@ -776,7 +780,140 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status }: 
   );
 }
 
-export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProps) {
+function UserMessageBubble({
+  message,
+  actionsDisabled,
+  editingMessageId,
+  onStartEdit,
+  onForkUserMessage,
+  onRerunFromMessage,
+  onEditUserMessage,
+}: {
+  message: Extract<ChatMessage, { role: "user" }>;
+  actionsDisabled: boolean;
+  editingMessageId: string | null;
+  onStartEdit: (messageId: string, content: string) => void;
+  onForkUserMessage?: (messageId: string) => void;
+  onRerunFromMessage?: (messageId: string) => void;
+  onEditUserMessage?: (messageId: string, content: string) => void;
+}) {
+  const [localEditingContent, setLocalEditingContent] = useState(message.content);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (editingMessageId === message.id && textareaRef.current) {
+      setLocalEditingContent(message.content);
+      textareaRef.current.focus();
+      const length = textareaRef.current.value.length;
+      textareaRef.current.setSelectionRange(length, length);
+    }
+  }, [editingMessageId, message.id, message.content]);
+
+  const handleSaveEdit = () => {
+    const trimmed = localEditingContent.trim();
+    if (!trimmed) return;
+    onEditUserMessage?.(message.id, trimmed);
+    onStartEdit("", "");
+  };
+
+  const handleEditKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      handleSaveEdit();
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onStartEdit("", "");
+    }
+  };
+
+  const isEditing = editingMessageId === message.id;
+
+  return (
+    <div className="message-row user msg-anim">
+      <div className={`bubble user-bubble user-bubble--interactive${isEditing ? " user-bubble--editing" : ""}`}>
+        <div className="user-bubble__actions" aria-label="message actions">
+          <button
+            type="button"
+            className="user-bubble__action-btn"
+            title="Fork 新会话"
+            disabled={actionsDisabled || isEditing}
+            onClick={() => onForkUserMessage?.(message.id)}
+          >
+            <Icons.Fork />
+          </button>
+          <button
+            type="button"
+            className="user-bubble__action-btn"
+            title="从此重跑"
+            disabled={actionsDisabled || isEditing}
+            onClick={() => onRerunFromMessage?.(message.id)}
+          >
+            <Icons.Rerun />
+          </button>
+          <button
+            type="button"
+            className="user-bubble__action-btn"
+            title="编辑并重跑"
+            disabled={actionsDisabled || isEditing}
+            onClick={() => onStartEdit(message.id, message.content)}
+          >
+            <Icons.Pencil />
+          </button>
+        </div>
+        {isEditing ? (
+          <div className="user-bubble__edit-panel">
+            <textarea
+              ref={textareaRef}
+              className="user-bubble__edit-textarea"
+              value={localEditingContent}
+              onChange={(e) => setLocalEditingContent(e.target.value)}
+              onKeyDown={handleEditKeyDown}
+              rows={Math.min(8, Math.max(2, localEditingContent.split("\n").length + 1))}
+            />
+            <div className="user-bubble__edit-actions">
+              <button
+                type="button"
+                className="user-bubble__edit-cancel user-bubble__edit-icon-btn"
+                onClick={() => onStartEdit("", "")}
+                title="取消"
+              >
+                <Icons.Close />
+              </button>
+              <button
+                type="button"
+                className="user-bubble__edit-save user-bubble__edit-icon-btn"
+                disabled={!localEditingContent.trim()}
+                onClick={handleSaveEdit}
+                title="保存并重跑"
+              >
+                <Icons.Check />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <MemoizedMarkdown content={message.content} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ChatTimeline({
+  contentRef,
+  loading,
+  messages,
+  onForkUserMessage,
+  onRerunFromMessage,
+  onEditUserMessage,
+  actionsDisabled = false,
+}: ChatTimelineProps) {
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+
+  const handleStartEdit = (messageId: string, content: string) => {
+    setEditingMessageId(messageId || null);
+  };
+
   return (
     <div ref={contentRef} className="chat-container">
       {loading ? (
@@ -797,11 +934,16 @@ export function ChatTimeline({ contentRef, loading, messages }: ChatTimelineProp
 
       {messages.map((message) =>
         message.role === "user" ? (
-          <div key={message.id} className="message-row user msg-anim">
-            <div className="bubble user-bubble">
-              <MemoizedMarkdown content={message.content} />
-            </div>
-          </div>
+          <UserMessageBubble
+            key={message.id}
+            message={message}
+            actionsDisabled={actionsDisabled}
+            editingMessageId={editingMessageId}
+            onStartEdit={handleStartEdit}
+            onForkUserMessage={onForkUserMessage}
+            onRerunFromMessage={onRerunFromMessage}
+            onEditUserMessage={onEditUserMessage}
+          />
         ) : message.role === "system_event" ? (
           <div key={message.id} className="timeline-system-event msg-anim" aria-live="polite">
             <div className="timeline-system-event__line" />

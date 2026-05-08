@@ -39,7 +39,13 @@ class AgentRunService:
         self._session_runs: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
-    async def start_chat_run(self, session: AgentSession, message: str) -> str:
+    async def start_chat_run(
+        self,
+        session: AgentSession,
+        message: str,
+        *,
+        replace_last_user_message: bool = False,
+    ) -> str:
         async with self._lock:
             existing_run_id = self._session_runs.get(session.session_id)
             if existing_run_id and existing_run_id in self._runs:
@@ -63,7 +69,14 @@ class AgentRunService:
             }
             session_service.persist(session)
 
-            task = asyncio.create_task(self._drive_run(run_id, session, message))
+            task = asyncio.create_task(
+                self._drive_run(
+                    run_id,
+                    session,
+                    message,
+                    replace_last_user_message=replace_last_user_message,
+                )
+            )
             state = LiveRunState(run_id=run_id, session_id=session.session_id, task=task)
             self._runs[run_id] = state
             self._session_runs[session.session_id] = run_id
@@ -94,10 +107,22 @@ class AgentRunService:
     def get_session_run_id(self, session_id: str) -> str | None:
         return self._session_runs.get(session_id)
 
-    async def _drive_run(self, run_id: str, session: AgentSession, message: str) -> None:
+    async def _drive_run(
+        self,
+        run_id: str,
+        session: AgentSession,
+        message: str,
+        *,
+        replace_last_user_message: bool = False,
+    ) -> None:
         terminal_event_sent = False
         try:
-            async for event in agent_engine.stream_chat(session, message, run_id=run_id):
+            async for event in agent_engine.stream_chat(
+                session,
+                message,
+                run_id=run_id,
+                replace_last_user_message=replace_last_user_message,
+            ):
                 self._apply_event_to_active_view(session, event)
                 await self._publish(run_id, event)
                 if event.type == "completed":

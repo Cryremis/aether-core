@@ -7,10 +7,12 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import AuthContext, get_auth_context
 from app.runtime.engine import agent_engine
 from app.schemas.agent import AgentChatRequest, AgentElicitationResponseRequest, AgentEvent
+from app.schemas.session import TimelineEditRequest, TimelineForkRequest, TimelineRerunRequest
 from app.services.agent_run_service import agent_run_service
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.store import store_service
+from app.services.timeline_service import timeline_service
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
@@ -42,6 +44,11 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
     return session_service.get_or_create(session_id)
 
 
+def _ensure_session_mutable(session_id: str) -> None:
+    if agent_run_service.get_session_run_id(session_id):
+        raise HTTPException(status_code=409, detail="当前会话正在执行，请等待当前任务结束后再操作。")
+
+
 @router.post("/chat")
 async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_context)) -> StreamingResponse:
     """AetherCore 对话入口。"""
@@ -58,7 +65,11 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
             if request.run_id:
                 run_id = request.run_id
             else:
-                run_id = await agent_run_service.start_chat_run(session, request.message)
+                run_id = await agent_run_service.start_chat_run(
+                    session,
+                    request.message,
+                    replace_last_user_message=request.replace_last_user_message,
+                )
                 started_event = AgentEvent(
                     type="run_started",
                     session_id=session.session_id,
@@ -143,6 +154,85 @@ async def respond_to_elicitation(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+
+@router.post("/{session_id}/timeline/fork")
+def fork_session_timeline(
+    session_id: str,
+    request: TimelineForkRequest,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    _ensure_session_mutable(session_id)
+    session = _ensure_session_access(session_id, auth)
+    conversation = store_service.get_conversation_by_session(session_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    try:
+        result = timeline_service.fork_from_message(
+            source_session=session,
+            source_conversation=conversation,
+            source_message_id=request.message_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "success": True,
+        "session_id": result.session.session_id,
+        "conversation_id": result.session.conversation_id,
+        "source_message_id": result.source_message_id,
+    }
+
+
+@router.post("/{session_id}/timeline/rerun")
+def rerun_session_timeline(
+    session_id: str,
+    request: TimelineRerunRequest,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    _ensure_session_mutable(session_id)
+    session = _ensure_session_access(session_id, auth)
+    try:
+        result = timeline_service.rerun_from_message(
+            session=session,
+            source_message_id=request.message_id,
+            edited_content=None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "success": True,
+        "rerun_prompt": result.rerun_prompt,
+        "source_message_id": result.source_message_id,
+        "anchor_message_id": result.anchor_message_id,
+        "rerun_message_id": result.rerun_message_id,
+        "truncated_count": result.truncated_count,
+    }
+
+
+@router.post("/{session_id}/timeline/edit")
+def edit_session_timeline(
+    session_id: str,
+    request: TimelineEditRequest,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    _ensure_session_mutable(session_id)
+    session = _ensure_session_access(session_id, auth)
+    try:
+        result = timeline_service.rerun_from_message(
+            session=session,
+            source_message_id=request.message_id,
+            edited_content=request.content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "success": True,
+        "rerun_prompt": result.rerun_prompt,
+        "source_message_id": result.source_message_id,
+        "anchor_message_id": result.anchor_message_id,
+        "rerun_message_id": result.rerun_message_id,
+        "truncated_count": result.truncated_count,
+    }
 
 
 @router.get("/{session_id}/runs/{run_id}/events")

@@ -35,3 +35,16 @@ class WorkboardUpdateRequest(BaseModel):
     ops: list[dict[str, Any]] | None = None
     archive_completed: bool = False
     status: str | None = None
+
+
+class TimelineForkRequest(BaseModel):
+    message_id: str
+
+
+class TimelineRerunRequest(BaseModel):
+    message_id: str
+
+
+class TimelineEditRequest(BaseModel):
+    message_id: str
+    content: str

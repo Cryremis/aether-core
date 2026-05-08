@@ -28,3 +28,5 @@ backend/.pytest_cache/
 .tmp-check/
 frontend/.vite/
 frontend/dist/
+AGENTS.md
+CLAUDE.md
