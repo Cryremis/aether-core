@@ -37,6 +37,37 @@ export type PlatformIntegrationGuide = {
   display_name: string;
   bind_api_path: string;
   frontend_script_path: string;
+  frontend_script_url: string;
+  recommended_mode_id: string;
+  prerequisites: string[];
+  capabilities: string[];
+  placeholders: Array<{
+    key: string;
+    label: string;
+    value: string;
+    required: boolean;
+    description: string;
+  }>;
+  notes: string[];
+  modes: Array<{
+    mode_id: string;
+    title: string;
+    summary: string;
+    use_when: string;
+    recommended: boolean;
+    backend_requirement: string;
+    identity_requirement: string;
+    capabilities: string[];
+    steps: string[];
+    warnings: string[];
+    snippets: Array<{
+      snippet_id: string;
+      title: string;
+      language: string;
+      summary: string;
+      content: string;
+    }>;
+  }>;
   snippets: {
     frontend: string;
     backend_env: string;

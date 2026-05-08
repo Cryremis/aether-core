@@ -540,17 +540,19 @@ export function AdminPanel({ role }: AdminPanelProps) {
     await navigator.clipboard.writeText(value);
   };
 
-  const renderHighlightedSnippet = (snippet: string | undefined) =>
-    snippet ? snippet.split("{{YOUR_PLATFORM_BASE_URL}}").flatMap((part, index) =>
-      index === 0
-        ? [part]
-        :[
-            <span key={`placeholder-${index}`} className="guide-placeholder">
-              {"{{YOUR_PLATFORM_BASE_URL}}"}
-            </span>,
-            part,
-          ],
-    ) : null;
+  const renderHighlightedSnippet = (snippet: string | undefined) => {
+    if (!snippet) return null;
+    const parts = snippet.split(/(\{\{[A-Z0-9_]+\}\})/g);
+    return parts.map((part, index) =>
+      /^\{\{[A-Z0-9_]+\}\}$/.test(part) ? (
+        <span key={`placeholder-${index}`} className="guide-placeholder">
+          {part}
+        </span>
+      ) : (
+        part
+      ),
+    );
+  };
 
   // 面包屑解析
   const breadcrumbs = useMemo(() => {

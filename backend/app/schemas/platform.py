@@ -85,11 +85,48 @@ class PlatformIntegrationGuideSnippets(BaseModel):
     backend_fastapi: str
 
 
+class PlatformIntegrationPlaceholder(BaseModel):
+    key: str
+    label: str
+    value: str
+    required: bool = True
+    description: str = ""
+
+
+class PlatformIntegrationSnippet(BaseModel):
+    snippet_id: str
+    title: str
+    language: str
+    summary: str = ""
+    content: str
+
+
+class PlatformIntegrationMode(BaseModel):
+    mode_id: str
+    title: str
+    summary: str
+    use_when: str = ""
+    recommended: bool = False
+    backend_requirement: str = ""
+    identity_requirement: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    steps: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    snippets: list[PlatformIntegrationSnippet] = Field(default_factory=list)
+
+
 class PlatformIntegrationGuide(BaseModel):
     platform_key: str
     display_name: str
     bind_api_path: str
     frontend_script_path: str
+    frontend_script_url: str
+    recommended_mode_id: str = "standard_bind_hosted"
+    prerequisites: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+    placeholders: list[PlatformIntegrationPlaceholder] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    modes: list[PlatformIntegrationMode] = Field(default_factory=list)
     snippets: PlatformIntegrationGuideSnippets
 
 

@@ -1,6 +1,8 @@
 # backend/app/api/routes/host.py
 import traceback
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 
 from app.api.deps import require_platform_secret
 from app.core.config import settings
@@ -9,6 +11,15 @@ from app.schemas.common import ApiResponse
 from app.schemas.host import HostBindRequest
 
 router = APIRouter(prefix="/api/v1/host", tags=["host"])
+
+
+@router.get("/public/embed/aethercore-embed.js", include_in_schema=False)
+def get_public_embed_loader() -> FileResponse:
+    """公开返回官方 embed loader，供宿主直接通过 AetherCore 域名加载。"""
+    asset_path = settings.project_root / "host-adapters" / "universal" / "aethercore-embed.js"
+    if not asset_path.exists():
+        raise HTTPException(status_code=404, detail="官方 embed loader 不存在")
+    return FileResponse(path=Path(asset_path), media_type="application/javascript", filename="aethercore-embed.js")
 
 
 @router.post("/bind")

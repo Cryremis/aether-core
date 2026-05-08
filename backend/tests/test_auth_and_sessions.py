@@ -194,22 +194,39 @@ def test_platform_integration_guide_returns_expected_snippets(tmp_path):
     assert payload["platform_key"] == "guide-demo"
     assert payload["display_name"] == "Guide Demo"
     assert payload["bind_api_path"] == "/api/v1/aethercore/embed/bind"
-    assert payload["frontend_script_path"] == "/static/aethercore-embed.js"
+    assert payload["frontend_script_path"] == "/api/v1/host/public/embed/aethercore-embed.js"
+    assert payload["frontend_script_url"] == "https://ac-backend.example.com/api/v1/host/public/embed/aethercore-embed.js"
+    assert payload["recommended_mode_id"] == "standard_bind_hosted"
+    assert len(payload["modes"]) >= 2
+    assert any(item["mode_id"] == "standard_bind_hosted" for item in payload["modes"])
+    assert any(item["mode_id"] == "quick_guest" for item in payload["modes"])
+    assert any(item["key"] == "YOUR_PLATFORM_BASE_URL" for item in payload["placeholders"])
     assert 'platformKey: "guide-demo"' in payload["snippets"]["frontend"]
     assert 'workbenchUrl: "https://ac.example.com"' in payload["snippets"]["frontend"]
+    assert 'src="https://ac-backend.example.com/api/v1/host/public/embed/aethercore-embed.js"' in payload["snippets"]["frontend"]
     assert "AETHERCORE_API_BASE_URL=https://ac-backend.example.com" in payload["snippets"]["backend_env"]
-    assert "# AETHERCORE_WORKBENCH_URL=https://ac.example.com" in payload["snippets"]["backend_env"]
+    assert "AETHERCORE_WORKBENCH_URL=https://ac.example.com" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_PLATFORM_KEY=guide-demo" in payload["snippets"]["backend_env"]
     assert f"AETHERCORE_PLATFORM_SECRET={platform['host_secret']}" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_HOST_NAME=Guide Demo" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_HOST_CALLBACK_BASE_URL={{YOUR_PLATFORM_BASE_URL}}" in payload["snippets"]["backend_env"]
+    assert "{{YOUR_SETTINGS_IMPORT}}" in payload["snippets"]["backend_fastapi"]
+    assert "{{YOUR_USER_RESOLVER}}" in payload["snippets"]["backend_fastapi"]
     assert '@router.post("/api/v1/aethercore/embed/bind")' in payload["snippets"]["backend_fastapi"]
     assert "settings.AETHERCORE_PLATFORM_SECRET" in payload["snippets"]["backend_fastapi"]
-    assert 'getattr(settings, "AETHERCORE_WORKBENCH_URL", "") or settings.AETHERCORE_API_BASE_URL' in payload["snippets"]["backend_fastapi"]
-    assert "workbench_base_url" in payload["snippets"]["backend_fastapi"]
-    assert "settings.AETHERCORE_HOST_NAME" in payload["snippets"]["backend_fastapi"]
     assert "settings.AETHERCORE_HOST_CALLBACK_BASE_URL" in payload["snippets"]["backend_fastapi"]
-    assert '"workbench_url": workbench_url' in payload["snippets"]["backend_fastapi"]
+    assert '"workbench_url": data.get("workbench_url")' in payload["snippets"]["backend_fastapi"]
+
+
+def test_public_embed_loader_is_served_from_backend(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    client = TestClient(app)
+    response = client.get("/api/v1/host/public/embed/aethercore-embed.js")
+
+    assert response.status_code == 200
+    assert "window.mountAetherCore" in response.text
+    assert "application/javascript" in response.headers["content-type"]
 
 
 def test_platform_registration_approval_creates_platform_and_assigns_applicant(tmp_path):
