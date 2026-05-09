@@ -288,6 +288,14 @@ export type TranscriptAssistantBlock =
 
 export type TranscriptChatMessage =
   | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "elicitation_response";
+      request_id: string;
+      title: string;
+      summary: string;
+      answers: Array<{ id: string; header: string; value: string }>;
+    }
   | { id: string; role: "assistant"; blocks: TranscriptAssistantBlock[]; elapsedMs: number | null; streaming: boolean };
 
 export type TimelineRerunResponse = {
@@ -320,6 +328,17 @@ export type ActiveRunSummary = {
     streaming: boolean;
   };
 };
+
+export type CommittedChatMessage =
+  | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "elicitation_response";
+      request_id: string;
+      title: string;
+      summary: string;
+      answers: Array<{ id: string; header: string; value: string }>;
+    };
 
 export type AuditConversationDetail = {
   session_id: string;
@@ -1193,7 +1212,7 @@ export async function streamChat(
   allowNetwork: boolean,
   onEvent: (event: Record<string, unknown>) => void,
   abortSignal?: AbortSignal,
-  options?: { replaceLastUserMessage?: boolean },
+  options?: { replaceLastUserMessage?: boolean; clientMessageId?: string },
 ) {
   return streamSse(
     "/agent/chat",
@@ -1202,6 +1221,7 @@ export async function streamChat(
       message,
       allow_network: allowNetwork,
       replace_last_user_message: Boolean(options?.replaceLastUserMessage),
+      client_message_id: options?.clientMessageId ?? null,
     },
     onEvent,
     abortSignal,
@@ -1214,10 +1234,11 @@ export async function streamElicitationResponse(
   responses: ElicitationResponseItem[],
   onEvent: (event: Record<string, unknown>) => void,
   abortSignal?: AbortSignal,
+  options?: { clientMessageId?: string },
 ) {
   return streamSse(
     `/agent/${encodeURIComponent(sessionId)}/elicitation/${encodeURIComponent(requestId)}/respond`,
-    { responses },
+    { responses, client_message_id: options?.clientMessageId ?? null },
     onEvent,
     abortSignal,
   );

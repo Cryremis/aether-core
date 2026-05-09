@@ -236,33 +236,52 @@ class AgentEngine:
         *,
         run_id: str | None = None,
         replace_last_user_message: bool = False,
+        client_message_id: str | None = None,
+        persist_user_message: bool = True,
+        visible_user_message: bool = True,
+        user_message_kind: str = "user",
     ) -> AsyncGenerator:
         started_at = time.perf_counter()
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         session.begin_run(run_id)
         request_turn_index = self._next_turn_index(session)
-        if replace_last_user_message:
-            replaced = self._replace_last_user_message(
-                session,
-                content=message,
-                turn_index=request_turn_index,
-            )
-            if not replaced:
-                session.messages.append(
-                    context_message_adapter.make_user_message(
+        committed_user_message: dict[str, Any] | None = None
+        if persist_user_message:
+            if replace_last_user_message:
+                replaced = self._replace_last_user_message(
+                    session,
+                    content=message,
+                    turn_index=request_turn_index,
+                )
+                if not replaced:
+                    committed_user_message = context_message_adapter.make_user_message(
                         message,
                         turn_index=request_turn_index,
                     )
-                )
-        else:
-            session.messages.append(
-                context_message_adapter.make_user_message(
-                    message,
-                    turn_index=request_turn_index,
-                )
-            )
+                    session.messages.append(committed_user_message)
+                else:
+                    committed_user_message = session.messages[-1] if session.messages else None
+            else:
+                if visible_user_message:
+                    committed_user_message = context_message_adapter.make_user_message(
+                        message,
+                        turn_index=request_turn_index,
+                    )
+                else:
+                    committed_user_message = context_message_adapter.make_internal_user_message(
+                        message,
+                        turn_index=request_turn_index,
+                        kind=user_message_kind,
+                    )
+                session.messages.append(committed_user_message)
         session.touch()
         session_service.persist(session)
+        if persist_user_message and committed_user_message is None:
+            for index in range(len(session.messages) - 1, -1, -1):
+                candidate = session.messages[index]
+                if str(candidate.get("role") or "") == "user" and int(candidate.get("turn_index") or 0) == request_turn_index:
+                    committed_user_message = candidate
+                    break
         conversation = store_service.get_conversation_by_session(session.session_id)
         is_new_conversation = conversation is None or conversation.get("message_count", 0) == 0
         if conversation is None:
@@ -277,6 +296,18 @@ class AgentEngine:
             title=new_title,
             message_count=len(session.messages),
         )
+        if committed_user_message is not None and visible_user_message:
+            yield make_event(
+                session,
+                "message_committed",
+                message={
+                    "id": str(committed_user_message.get("message_id") or ""),
+                    "role": "user",
+                    "content": str(committed_user_message.get("content") or ""),
+                },
+                client_message_id=client_message_id,
+                replace_last_user_message=replace_last_user_message,
+            )
 
         llm_runtime = llm_config_service.resolve_for_conversation(conversation)
         tools = tool_service.list_tool_schemas(session)

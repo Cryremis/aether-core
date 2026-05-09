@@ -28,6 +28,29 @@ class TranscriptService:
                 )
                 continue
 
+            if role == "elicitation_response":
+                answers = message.get("answers")
+                answers_list = answers if isinstance(answers, list) else []
+                transcript.append(
+                    {
+                        "id": str(message.get("message_id") or f"elicitation-response-{index}"),
+                        "role": "elicitation_response",
+                        "request_id": str(message.get("request_id") or ""),
+                        "title": str(message.get("title") or "问题已回复"),
+                        "summary": str(message.get("summary") or ""),
+                        "answers": [
+                            {
+                                "id": str(item.get("id") or f"answer-{index}-{answer_index}"),
+                                "header": str(item.get("header") or "问题"),
+                                "value": str(item.get("value") or "未填写"),
+                            }
+                            for answer_index, item in enumerate(answers_list)
+                            if isinstance(item, dict)
+                        ],
+                    }
+                )
+                continue
+
             if role == "assistant":
                 assistant_item = self._assistant_from_message(message, index=index)
                 if assistant_item is None:

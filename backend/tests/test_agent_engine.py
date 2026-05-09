@@ -100,6 +100,45 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
     event_types = [item["type"] for item in events]
     assert "workboard_snapshot" in event_types
     assert "elicitation_snapshot" in event_types
+    committed = next(item for item in events if item["type"] == "message_committed")
+    assert committed["payload"]["message"]["role"] == "user"
+    assert committed["payload"]["message"]["content"] == "reply directly"
+
+
+def test_agent_engine_emits_committed_user_message_with_client_id(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = AgentSession(session_id="sess_engine_committed_user")
+
+    async def run_flow():
+        events: list[dict] = []
+        async for event in agent_engine.stream_chat(session, "hello world", client_message_id="client-user-1"):
+            events.append(event.model_dump(mode="json"))
+        return events
+
+    events = asyncio.run(run_flow())
+
+    committed = next(item for item in events if item["type"] == "message_committed")
+    assert committed["payload"]["client_message_id"] == "client-user-1"
+    assert committed["payload"]["message"]["role"] == "user"
+    assert committed["payload"]["message"]["id"] == session.messages[0]["message_id"]
+    assert committed["payload"]["message"]["content"] == "hello world"
 
 
 def test_agent_engine_injects_runtime_state_context(monkeypatch, tmp_path):

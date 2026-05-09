@@ -9,6 +9,7 @@ from app.runtime.engine import agent_engine
 from app.schemas.agent import AgentChatRequest, AgentElicitationResponseRequest, AgentEvent
 from app.schemas.session import TimelineEditRequest, TimelineForkRequest, TimelineRerunRequest
 from app.services.agent_run_service import agent_run_service
+from app.services.context.message_adapter import context_message_adapter
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.store import store_service
@@ -69,6 +70,7 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
                     session,
                     request.message,
                     replace_last_user_message=request.replace_last_user_message,
+                    client_message_id=request.client_message_id,
                 )
                 started_event = AgentEvent(
                     type="run_started",
@@ -122,9 +124,68 @@ async def respond_to_elicitation(
         request_id,
         [item.model_dump(mode="json") for item in request.responses],
     )
+    # 将用户对 request_user_input 的结构化回答持久化到会话消息，保证刷新后仍按同样样式渲染。
+    resolved_request = next((item for item in reversed(elicitation_state.history) if item.id == request_id), None)
+    if resolved_request is not None:
+        summary = (
+            "已提交给 AI，接下来会按你的回答继续执行"
+            if resolved_request.blocking
+            else "已提交给 AI，等待后续处理"
+        )
+        answers: list[dict[str, str]] = []
+        answer_by_question_id = {item.question_id: item for item in resolved_request.answers}
+        for question in resolved_request.questions:
+            answer = answer_by_question_id.get(question.id)
+            parts: list[str] = []
+            if answer is not None:
+                parts.extend([str(item) for item in answer.selected_options if str(item).strip()])
+                if answer.other_text:
+                    parts.append(str(answer.other_text))
+                if answer.notes:
+                    parts.append(f"说明：{answer.notes}")
+            answers.append(
+                {
+                    "id": question.id,
+                    "header": question.header,
+                    "value": "、".join(parts) if parts else "未填写",
+                }
+            )
+        turn_index = max(int(message.get("turn_index", 0)) for message in session.messages) if session.messages else 0
+        committed_message = context_message_adapter.make_elicitation_response_message(
+            request_id=request_id,
+            title=resolved_request.title,
+            summary=summary,
+            answers=answers,
+            turn_index=turn_index + 1,
+        )
+        session.messages.append(committed_message)
+        session.touch()
+        session_service.persist(session)
+    else:
+        committed_message = None
 
     async def event_stream():
         yield f"data: {AgentEvent(type='session_created', session_id=session.session_id).model_dump_json()}\n\n"
+        if committed_message is not None:
+            yield (
+                "data: "
+                + AgentEvent(
+                    type="message_committed",
+                    session_id=session.session_id,
+                    payload={
+                        "message": {
+                            "id": str(committed_message.get("message_id") or ""),
+                            "role": "elicitation_response",
+                            "request_id": str(committed_message.get("request_id") or ""),
+                            "title": str(committed_message.get("title") or ""),
+                            "summary": str(committed_message.get("summary") or ""),
+                            "answers": committed_message.get("answers") or [],
+                        },
+                        "client_message_id": request.client_message_id,
+                    },
+                ).model_dump_json()
+                + "\n\n"
+            )
         yield (
             "data: "
             + AgentEvent(
@@ -139,7 +200,13 @@ async def respond_to_elicitation(
             + "\n\n"
         )
         try:
-            async for event in agent_engine.stream_chat(session, resume_message):
+            async for event in agent_engine.stream_chat(
+                session,
+                resume_message,
+                persist_user_message=True,
+                visible_user_message=False,
+                user_message_kind="elicitation_resume",
+            ):
                 yield f"data: {event.model_dump_json()}\n\n"
         except Exception as exc:  # noqa: BLE001
             error_event = AgentEvent(

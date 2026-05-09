@@ -199,3 +199,61 @@ def test_transcript_service_preserves_runtime_notice_block():
     assert transcript[0]["role"] == "assistant"
     assert transcript[0]["blocks"][0]["kind"] == "runtime_notice"
     assert transcript[0]["blocks"][0]["eventType"] == "runtime_recreated"
+
+
+def test_transcript_service_preserves_elicitation_response_message():
+    messages = [
+        {
+            "role": "elicitation_response",
+            "message_id": "m_elicitation_1",
+            "request_id": "ask_123",
+            "title": "请选择部署策略",
+            "summary": "已提交给 AI，接下来会按你的回答继续执行",
+            "answers": [
+                {
+                    "id": "q_env",
+                    "header": "环境",
+                    "value": "生产环境",
+                },
+                {
+                    "id": "q_note",
+                    "header": "备注",
+                    "value": "灰度发布",
+                },
+            ],
+            "visible_in_transcript": True,
+        }
+    ]
+
+    transcript = transcript_service.build_chat_transcript(messages)
+    assert len(transcript) == 1
+    assert transcript[0]["role"] == "elicitation_response"
+    assert transcript[0]["id"] == "m_elicitation_1"
+    assert transcript[0]["request_id"] == "ask_123"
+    assert transcript[0]["title"] == "请选择部署策略"
+    assert transcript[0]["summary"] == "已提交给 AI，接下来会按你的回答继续执行"
+    assert transcript[0]["answers"][0]["header"] == "环境"
+    assert transcript[0]["answers"][0]["value"] == "生产环境"
+
+
+def test_transcript_service_keeps_committed_message_identity_stable():
+    messages = [
+        {
+            "role": "user",
+            "content": "first",
+            "message_id": "m_user_1",
+            "visible_in_transcript": True,
+        },
+        {
+            "role": "assistant",
+            "content": "done",
+            "message_id": "m_assistant_1",
+            "visible_in_transcript": True,
+        },
+    ]
+
+    transcript = transcript_service.build_chat_transcript(messages)
+
+    assert transcript[0]["id"] == "m_user_1"
+    assert transcript[0]["role"] == "user"
+    assert transcript[0]["content"] == "first"

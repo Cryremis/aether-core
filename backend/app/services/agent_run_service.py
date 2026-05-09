@@ -45,6 +45,7 @@ class AgentRunService:
         message: str,
         *,
         replace_last_user_message: bool = False,
+        client_message_id: str | None = None,
     ) -> str:
         async with self._lock:
             existing_run_id = self._session_runs.get(session.session_id)
@@ -75,6 +76,7 @@ class AgentRunService:
                     session,
                     message,
                     replace_last_user_message=replace_last_user_message,
+                    client_message_id=client_message_id,
                 )
             )
             state = LiveRunState(run_id=run_id, session_id=session.session_id, task=task)
@@ -114,6 +116,7 @@ class AgentRunService:
         message: str,
         *,
         replace_last_user_message: bool = False,
+        client_message_id: str | None = None,
     ) -> None:
         terminal_event_sent = False
         try:
@@ -122,6 +125,7 @@ class AgentRunService:
                 message,
                 run_id=run_id,
                 replace_last_user_message=replace_last_user_message,
+                client_message_id=client_message_id,
             ):
                 self._apply_event_to_active_view(session, event)
                 await self._publish(run_id, event)

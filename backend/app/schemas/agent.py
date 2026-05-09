@@ -13,6 +13,7 @@ class AgentChatRequest(BaseModel):
     allow_network: bool | None = None
     run_id: str | None = None
     replace_last_user_message: bool = False
+    client_message_id: str | None = None
 
 
 class ElicitationResponseItem(BaseModel):
@@ -24,6 +25,7 @@ class ElicitationResponseItem(BaseModel):
 
 class AgentElicitationResponseRequest(BaseModel):
     responses: list[ElicitationResponseItem] = Field(default_factory=list)
+    client_message_id: str | None = None
 
 class AgentEvent(BaseModel):
     """SSE 事件协议。"""
@@ -50,6 +52,7 @@ class AgentEvent(BaseModel):
         "ask_requested",
         "ask_resolved",
         "ask_cancelled",
+        "message_committed",
         "context_status",
         "context_warning",
         "context_compacted",

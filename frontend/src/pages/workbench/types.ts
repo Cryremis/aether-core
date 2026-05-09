@@ -39,7 +39,7 @@ export type AssistantSegment =
   | { id: string; kind: "bubble"; blocks: Array<Extract<AssistantBlock, { kind: "reasoning" | "content" | "runtime_notice" }>> }
   | { id: string; kind: "tool"; block: Extract<AssistantBlock, { kind: "tool" }> };
 
-export type ChatMessage =
+export type TranscriptMessage =
   | { id: string; role: "user"; content: string }
   | {
       id: string;
@@ -54,8 +54,22 @@ export type ChatMessage =
       title: string;
       summary: string;
       answers: Array<{ id: string; header: string; value: string }>;
+      request_id?: string;
     }
   | { id: string; role: "assistant"; blocks: AssistantBlock[]; elapsedMs: number | null; streaming: boolean; startTime?: number };
+
+export type PendingUserEcho =
+  | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "elicitation_response";
+      request_id?: string;
+      title: string;
+      summary: string;
+      answers: Array<{ id: string; header: string; value: string }>;
+    };
+
+export type ChatMessage = TranscriptMessage | PendingUserEcho;
 
 export type QueuedMessage = {
   id: string;
@@ -108,7 +122,7 @@ export type WorkbenchPageProps = {
   onDeleteSession?: (sessionId: string) => void;
   onRenameSession?: (sessionId: string, currentTitle: string) => void;
   onSessionCreated?: (sessionId: string) => void;
-  onSessionRefresh?: () => void;
+  onSessionRefresh?: (sessionId?: string) => void;
   onSessionSelect?: (sessionId: string) => void;
 };
 

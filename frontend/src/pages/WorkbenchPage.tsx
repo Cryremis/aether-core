@@ -23,6 +23,7 @@ import {
   streamChat,
   streamRunEvents,
   type ActiveRunSummary,
+  type CommittedChatMessage,
   type WorkboardState,
   updateSessionWorkboard,
   updateUserLlmConfig,
@@ -46,9 +47,11 @@ import type {
   ContextStatus,
   FileItem,
   LlmDialogState,
+  PendingUserEcho,
   QueuedMessage,
   SidebarView,
   SkillItem,
+  TranscriptMessage,
   WorkboardOperation,
   WorkbenchPageProps,
 } from "./workbench/types";
@@ -62,6 +65,10 @@ const RESULT_MESSAGES: Record<string, string> = {
   error_max_turns: "执行达到轮次上限",
   error_runtime_limit: "执行达到运行时限",
 };
+
+function randomIdSegment() {
+  return Math.random().toString(36).slice(2, 8);
+}
 
 function buildSystemEventMessage(
   eventType: Extract<ChatMessage, { role: "system_event" }>["eventType"],
@@ -86,7 +93,7 @@ function buildSystemEventMessage(
   };
 }
 
-function fromTranscriptMessages(items: TranscriptChatMessage[]): ChatMessage[] {
+function fromTranscriptMessages(items: TranscriptChatMessage[]): TranscriptMessage[] {
   return items.map((item, index) =>
     item.role === "assistant"
       ? {
@@ -98,12 +105,41 @@ function fromTranscriptMessages(items: TranscriptChatMessage[]): ChatMessage[] {
           elapsedMs: item.elapsedMs ?? null,
           streaming: false,
         }
-      : {
-          id: item.id || `history-user-${index}`,
-          role: "user",
-          content: item.content,
-        },
+      : item.role === "elicitation_response"
+        ? {
+            id: item.id || `history-elicitation-response-${index}`,
+            role: "elicitation_response",
+            request_id: item.request_id,
+            title: item.title,
+            summary: item.summary,
+            answers: item.answers,
+          }
+        : {
+            id: item.id || `history-user-${index}`,
+            role: "user",
+            content: item.content,
+          },
   );
+}
+
+function fromCommittedMessage(item: CommittedChatMessage): Extract<TranscriptMessage, { role: "user" | "elicitation_response" }> {
+  if (item.role === "elicitation_response") {
+    return {
+      id: item.id,
+      committedId: item.id,
+      request_id: item.request_id,
+      role: "elicitation_response",
+      title: item.title,
+      summary: item.summary,
+      answers: item.answers,
+    };
+  }
+  return {
+    id: item.id,
+    committedId: item.id,
+    role: "user",
+    content: item.content,
+  };
 }
 
 function buildRuntimeNoticeBlock(payload: Record<string, unknown>): AssistantBlock {
@@ -132,6 +168,39 @@ function getOpenWorkItemCount(workboard: WorkboardState | null): number {
   return workboard.items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
 }
 
+function appendTranscriptMessage(
+  current: TranscriptMessage[],
+  message: TranscriptMessage,
+): TranscriptMessage[] {
+  const existingIndex = current.findIndex((item) => item.id === message.id);
+  if (existingIndex >= 0) {
+    return current.map((item, index) => (index === existingIndex ? message : item));
+  }
+  return [...current, message];
+}
+
+function insertTranscriptMessageBeforeAssistant(
+  current: TranscriptMessage[],
+  message: Extract<TranscriptMessage, { role: "user" | "elicitation_response" }>,
+  assistantId: string | null,
+): TranscriptMessage[] {
+  const existingIndex = current.findIndex((item) => item.id === message.id);
+  const withoutExisting =
+    existingIndex >= 0 ? current.filter((item, index) => index !== existingIndex) : current;
+  if (!assistantId) {
+    return [...withoutExisting, message];
+  }
+  const assistantIndex = withoutExisting.findIndex((item) => item.role === "assistant" && item.id === assistantId);
+  if (assistantIndex < 0) {
+    return [...withoutExisting, message];
+  }
+  return [
+    ...withoutExisting.slice(0, assistantIndex),
+    message,
+    ...withoutExisting.slice(assistantIndex),
+  ];
+}
+
 
 export function WorkbenchPage({
   conversations,
@@ -148,7 +217,8 @@ export function WorkbenchPage({
   onSessionRefresh,
   onSessionSelect,
 }: WorkbenchPageProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>([]);
+  const [pendingUserEcho, setPendingUserEcho] = useState<PendingUserEcho | null>(null);
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [busy, setBusy] = useState(false);
@@ -186,6 +256,8 @@ export function WorkbenchPage({
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
+  const pendingUserEchoRef = useRef<PendingUserEcho | null>(null);
+  const pendingAssistantIdRef = useRef<string | null>(null);
   const isStreamingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const liveRunRef = useRef<{ runId: string; assistantId: string } | null>(null);
@@ -207,6 +279,22 @@ export function WorkbenchPage({
   const activeSessionId = sessionId || localSessionId || "";
   const displayedWorkboard = workboard?.session_id === activeSessionId ? workboard : null;
   const workboardVisible = activeSessionId ? (workboardVisibilityBySession[activeSessionId] ?? false) : false;
+  const messages: ChatMessage[] = (() => {
+    if (!pendingUserEcho) return transcriptMessages;
+    const anchorAssistantId = pendingAssistantIdRef.current || liveRunRef.current?.assistantId;
+    if (!anchorAssistantId) return [...transcriptMessages, pendingUserEcho];
+    const assistantIndex = transcriptMessages.findIndex((item) => item.role === "assistant" && item.id === anchorAssistantId);
+    if (assistantIndex < 0) return [...transcriptMessages, pendingUserEcho];
+    return [
+      ...transcriptMessages.slice(0, assistantIndex),
+      pendingUserEcho,
+      ...transcriptMessages.slice(assistantIndex),
+    ];
+  })();
+
+  useEffect(() => {
+    pendingUserEchoRef.current = pendingUserEcho;
+  }, [pendingUserEcho]);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -594,6 +682,17 @@ window.addEventListener("resize", handleResize);
     setFiles((fileResult.items ?? []) as FileItem[]);
   };
 
+  const syncTranscriptFromServer = async (targetSessionId: string) => {
+    const summaryResult = await getSessionSummary(targetSessionId);
+    const summary = (summaryResult.data ?? {}) as {
+      transcript?: TranscriptChatMessage[];
+      elicitation?: ElicitationState;
+    };
+    setTranscriptMessages(fromTranscriptMessages(summary.transcript ?? []));
+    setPendingUserEcho(null);
+    setElicitation(summary.elicitation ?? null);
+  };
+
   const loadSession = async (nextSessionId: string) => {
     const summaryResult = await getSessionSummary(nextSessionId);
     const summary = (summaryResult.data ?? {}) as {
@@ -616,7 +715,8 @@ window.addEventListener("resize", handleResize);
       active_run?: ActiveRunSummary | null;
     };
     const transcriptMessages = fromTranscriptMessages(summary.transcript ?? []);
-    setMessages(transcriptMessages);
+    setTranscriptMessages(transcriptMessages);
+    setPendingUserEcho(null);
     setAllowNetwork(summary.allow_network ?? true);
     setSkills(summary.skills ?? []);
     setFiles(summary.files ?? []);
@@ -669,7 +769,8 @@ window.addEventListener("resize", handleResize);
     if (isNewSession && !hasBootstrappedLocalSession && !isStreamingRef.current) {
       setLocalSessionId(null);
       newlyCreatedSessionRef.current = null;
-      setMessages([]);
+      setTranscriptMessages([]);
+      setPendingUserEcho(null);
       setSkills([]);
       setFiles([]);
       setWorkboard(null);
@@ -728,7 +829,8 @@ window.addEventListener("resize", handleResize);
       })
       .catch((loadError) => {
         setError(loadError instanceof Error ? loadError.message : "初始化失败");
-        setMessages([]);
+        setTranscriptMessages([]);
+        setPendingUserEcho(null);
         setSkills([]);
         setFiles([]);
         setWorkboard(null);
@@ -740,17 +842,17 @@ window.addEventListener("resize", handleResize);
 const composerDisabled = !(sessionId || localSessionId || isNewSession);
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
-    setMessages((current) =>
+    setTranscriptMessages((current) =>
       current.map((item) => (item.id === messageId && item.role === "assistant" ? { ...item, blocks: [...item.blocks, block] } : item)),
     );
   };
 
-  const appendSystemEvent = (eventType: Extract<ChatMessage, { role: "system_event" }>["eventType"], payload: Record<string, unknown>) => {
-    setMessages((current) => [...current, buildSystemEventMessage(eventType, payload)]);
+  const appendSystemEvent = (eventType: Extract<TranscriptMessage, { role: "system_event" }>["eventType"], payload: Record<string, unknown>) => {
+    setTranscriptMessages((current) => [...current, buildSystemEventMessage(eventType, payload)]);
   };
 
   const appendAssistantRuntimeNotice = (messageId: string, payload: Record<string, unknown>) => {
-    setMessages((current) =>
+    setTranscriptMessages((current) =>
       current.map((item) =>
         item.id === messageId && item.role === "assistant"
           ? { ...item, blocks: [...item.blocks, buildRuntimeNoticeBlock(payload)] }
@@ -760,7 +862,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
   };
 
   const updateAssistantBlock = (messageId: string, blockId: string, updater: (block: AssistantBlock) => AssistantBlock) => {
-    setMessages((current) =>
+    setTranscriptMessages((current) =>
       current.map((item) =>
         item.id === messageId && item.role === "assistant"
           ? { ...item, blocks: item.blocks.map((block) => (block.id === blockId ? updater(block) : block)) }
@@ -770,7 +872,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
   };
 
   const upsertAssistantBlock = (messageId: string, blockId: string, createBlock: () => AssistantBlock, updater: (block: AssistantBlock) => AssistantBlock) => {
-    setMessages((current) =>
+    setTranscriptMessages((current) =>
       current.map((item) => {
         if (item.id !== messageId || item.role !== "assistant") return item;
         let found = false;
@@ -789,9 +891,9 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
 
   const upsertAssistantMessage = (
     messageId: string,
-    updater: (message: Extract<ChatMessage, { role: "assistant" }> | null) => Extract<ChatMessage, { role: "assistant" }>,
+    updater: (message: Extract<TranscriptMessage, { role: "assistant" }> | null) => Extract<TranscriptMessage, { role: "assistant" }>,
   ) => {
-    setMessages((current) => {
+    setTranscriptMessages((current) => {
       let found = false;
       const next = current.map((item) => {
         if (item.id === messageId && item.role === "assistant") {
@@ -805,6 +907,19 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       }
       return [...next, updater(null)];
     });
+  };
+
+  const commitPendingMessage = (clientMessageId: string | null, committedMessage: CommittedChatMessage) => {
+    const normalized = fromCommittedMessage(committedMessage);
+    const anchorAssistantId = pendingAssistantIdRef.current || liveRunRef.current?.assistantId || null;
+    if (normalized.role === "user" || normalized.role === "elicitation_response") {
+      setTranscriptMessages((current) => insertTranscriptMessageBeforeAssistant(current, normalized, anchorAssistantId));
+    } else {
+      setTranscriptMessages((current) => appendTranscriptMessage(current, normalized));
+    }
+    if (clientMessageId && pendingUserEchoRef.current?.id === clientMessageId) {
+      setPendingUserEcho(null);
+    }
   };
 
   const restoreActiveRunAssistant = (activeRun: ActiveRunSummary, fallbackStartTime: number) => {
@@ -823,7 +938,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
   };
 
   const settleAssistantBlocksAborted = (messageId: string, partialContent?: string) => {
-    setMessages((current) =>
+    setTranscriptMessages((current) =>
       current.map((item) => {
         if (item.id !== messageId || item.role !== "assistant") return item;
         return {
@@ -869,6 +984,18 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         const runId = String(payload.run_id ?? "");
         if (runId) {
           liveRunRef.current = { runId, assistantId };
+        }
+        return;
+      }
+
+      if (eventType === "message_committed") {
+        const message = payload.message as CommittedChatMessage | undefined;
+        const clientMessageId =
+          typeof payload.client_message_id === "string" && payload.client_message_id.trim().length > 0
+            ? payload.client_message_id
+            : null;
+        if (message && (message.role === "user" || message.role === "elicitation_response")) {
+          commitPendingMessage(clientMessageId, message);
         }
         return;
       }
@@ -1189,7 +1316,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
 
       if (eventType === "completed") {
         const elapsedMs = Number(payload.elapsed_ms ?? 0);
-        setMessages((current) =>
+        setTranscriptMessages((current) =>
           current.map((item) =>
             item.id === assistantId && item.role === "assistant"
               ? {
@@ -1223,9 +1350,11 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
   const buildElicitationResponseMessage = (
     request: ElicitationRequest,
     responses: ElicitationResponseItem[],
-  ): Extract<ChatMessage, { role: "elicitation_response" }> => ({
-    id: `elicitation-response-${Date.now()}`,
+    clientMessageId?: string,
+  ): PendingUserEcho => ({
+    id: clientMessageId || `elicitation-response-${Date.now()}`,
     role: "elicitation_response",
+    request_id: request.id,
     title: request.title,
     summary: request.blocking ? "已提交给 AI，接下来会按你的回答继续执行" : "已提交给 AI，等待后续处理",
     answers: request.questions.map((question) => {
@@ -1243,7 +1372,11 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     }),
   });
 
-  const handleSend = async (userText: string, skipAddUserBubble = false, userBubblesToAdd?: { id: string; content: string }[]) => {
+  const handleSend = async (
+    userText: string,
+    skipAddUserBubble = false,
+    pendingUserBubble?: { id: string; content: string },
+  ) => {
     if (!userText) return;
     
     if (!skipAddUserBubble && isStreamingRef.current) {
@@ -1253,7 +1386,9 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       return;
     }
     
-    const assistantId = `assistant-${Date.now()}`;
+    const roundStartTime = Date.now();
+    const assistantId = `assistant-${roundStartTime}`;
+    const primaryClientMessageId = `client-user-${roundStartTime}-${randomIdSegment()}`;
 
     let effectiveSessionId = sessionId || localSessionId;
     const wasNewSession = isNewSession && !effectiveSessionId;
@@ -1269,28 +1404,35 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       }
     }
 
-    const roundStartTime = Date.now();
-
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    pendingAssistantIdRef.current = assistantId;
     isStreamingRef.current = true;
     shouldStickToBottomRef.current = true;
     setBusy(true);
     setError("");
+    setPendingUserEcho(
+      skipAddUserBubble && pendingUserBubble
+        ? {
+            id: pendingUserBubble.id,
+            role: "user",
+            content: pendingUserBubble.content,
+          }
+        : {
+            id: primaryClientMessageId,
+            role: "user",
+            content: userText,
+          },
+    );
 
-    if (skipAddUserBubble && userBubblesToAdd && userBubblesToAdd.length > 0) {
-      setMessages((current) => [
-        ...current,
-        ...userBubblesToAdd.map((b) => ({ id: b.id, role: "user" as const, content: b.content })),
-        { id: assistantId, role: "assistant", blocks: [], elapsedMs: null, streaming: true, startTime: roundStartTime },
-      ]);
-    } else {
-      setMessages((current) => [
-        ...current,
-        { id: `user-${roundStartTime}`, role: "user", content: userText },
-        { id: assistantId, role: "assistant", blocks: [], elapsedMs: null, streaming: true, startTime: roundStartTime },
-      ]);
-    }
+    upsertAssistantMessage(assistantId, () => ({
+      id: assistantId,
+      role: "assistant",
+      blocks: [],
+      elapsedMs: null,
+      streaming: true,
+      startTime: roundStartTime,
+    }));
 
     let activeReasoningId = "";
     let activeContentId = "";
@@ -1346,7 +1488,11 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         return;
       }
       const handleEvent = buildEventProcessor(assistantId, effectiveSessionId, eventRefs);
-      await streamChat(effectiveSessionId, userText, allowNetwork, handleEvent, abortController.signal);
+      await streamChat(effectiveSessionId, userText, allowNetwork, handleEvent, abortController.signal, {
+        clientMessageId: skipAddUserBubble && pendingUserBubble
+          ? pendingUserBubble.id
+          : primaryClientMessageId,
+      });
     } catch (chatError) {
       if (chatError instanceof Error && chatError.name === "AbortError") {
         wasAborted = true;
@@ -1355,29 +1501,35 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       }
     } finally {
       const elapsedMs = Date.now() - roundStartTime;
-      setMessages((current) =>
+      setTranscriptMessages((current) =>
         current.map((item) =>
           item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false, startTime: undefined } : item,
         ),
       );
       isStreamingRef.current = false;
       abortControllerRef.current = null;
+      pendingAssistantIdRef.current = null;
       setBusy(false);
+      setPendingUserEcho((current) => {
+        if (!current) return null;
+        const expectedId = skipAddUserBubble && pendingUserBubble ? pendingUserBubble.id : primaryClientMessageId;
+        return current.id === expectedId ? null : current;
+      });
       if (wasNewSession && effectiveSessionId) {
         onSessionCreated?.(effectiveSessionId);
       }
-      void onSessionRefresh?.();
+      void onSessionRefresh?.(effectiveSessionId || undefined);
       
       const currentQueue = queuedMessagesRef.current;
       if (currentQueue.length > 0) {
-        const userBubbles = currentQueue.map((msg, index) => ({
-          id: `user-queued-${Date.now() + index}`,
-          content: msg.content,
-        }));
         const mergedContent = currentQueue.map((msg) => msg.content).join("\n\n");
+        const mergedBubble = {
+          id: `client-user-queued-${Date.now()}-${randomIdSegment()}`,
+          content: mergedContent,
+        };
         queuedMessagesRef.current = [];
         setQueuedMessages([]);
-        void handleSend(mergedContent, true, userBubbles);
+        void handleSend(mergedContent, true, mergedBubble);
       }
     }
   };
@@ -1399,18 +1551,24 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       const summary = (summaryResult.data ?? {}) as {
         transcript?: TranscriptChatMessage[];
       };
-      setMessages(fromTranscriptMessages(summary.transcript ?? []));
+      setTranscriptMessages(fromTranscriptMessages(summary.transcript ?? []));
+      setPendingUserEcho(null);
 
       const assistantId = `assistant-rerun-${Date.now()}`;
       const roundStartTime = Date.now();
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
+      pendingAssistantIdRef.current = assistantId;
       isStreamingRef.current = true;
 
-      setMessages((current) => [
-        ...current,
-        { id: assistantId, role: "assistant", blocks: [], elapsedMs: null, streaming: true, startTime: roundStartTime },
-      ]);
+      upsertAssistantMessage(assistantId, () => ({
+        id: assistantId,
+        role: "assistant",
+        blocks: [],
+        elapsedMs: null,
+        streaming: true,
+        startTime: roundStartTime,
+      }));
 
       let activeReasoningId = "";
       let activeContentId = "";
@@ -1478,7 +1636,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         }
       } finally {
         const elapsedMs = Date.now() - roundStartTime;
-        setMessages((current) =>
+        setTranscriptMessages((current) =>
           current.map((item) =>
             item.id === assistantId && item.role === "assistant"
               ? { ...item, elapsedMs, streaming: false, startTime: undefined }
@@ -1487,10 +1645,11 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         );
         isStreamingRef.current = false;
         abortControllerRef.current = null;
+        pendingAssistantIdRef.current = null;
         if (wasAborted) {
           setError("重跑已中断");
         }
-        void onSessionRefresh?.();
+        void onSessionRefresh?.(effectiveSessionId);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "重跑失败");
@@ -1508,7 +1667,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       const result = await forkSessionTimeline(effectiveSessionId, messageId);
       onSessionCreated?.(result.session_id);
       onSessionSelect?.(result.session_id);
-      void onSessionRefresh?.();
+      void onSessionRefresh?.(result.session_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "分叉失败");
     } finally {
@@ -1550,17 +1709,33 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     const roundStartTime = Date.now();
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    pendingAssistantIdRef.current = assistantId;
     isStreamingRef.current = true;
     shouldStickToBottomRef.current = true;
     setBusy(true);
     setElicitationBusy(true);
     setError("");
+    const clientMessageId = `client-elicitation-${Date.now()}-${randomIdSegment()}`;
+    setPendingUserEcho(buildElicitationResponseMessage(pendingRequest, responses, clientMessageId));
 
-    setMessages((current) => [
-      ...current,
-      buildElicitationResponseMessage(pendingRequest, responses),
-      { id: assistantId, role: "assistant", blocks: [], elapsedMs: null, streaming: true, startTime: roundStartTime },
-    ]);
+    upsertAssistantMessage(assistantId, () => ({
+      id: assistantId,
+      role: "assistant",
+      blocks: [],
+      elapsedMs: null,
+      streaming: true,
+      startTime: roundStartTime,
+    }));
+    setElicitation((current) =>
+      current
+        ? {
+            ...current,
+            revision: current.revision + 1,
+            pending: null,
+            updated_at: new Date().toISOString(),
+          }
+        : current,
+    );
 
     let activeReasoningId = "";
     let activeContentId = "";
@@ -1594,23 +1769,32 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
 
     try {
       const handleEvent = buildEventProcessor(assistantId, effectiveSessionId, eventRefs);
-      await streamElicitationResponse(effectiveSessionId, pendingRequest.id, responses, handleEvent, abortController.signal);
+      await streamElicitationResponse(
+        effectiveSessionId,
+        pendingRequest.id,
+        responses,
+        handleEvent,
+        abortController.signal,
+        { clientMessageId },
+      );
     } catch (err) {
       if (!(err instanceof Error && err.name === "AbortError")) {
         setError(err instanceof Error ? err.message : "鎻愪氦鍥炵瓟澶辫触");
       }
     } finally {
       const elapsedMs = Date.now() - roundStartTime;
-      setMessages((current) =>
+      setTranscriptMessages((current) =>
         current.map((item) =>
           item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false, startTime: undefined } : item,
         ),
       );
       isStreamingRef.current = false;
       abortControllerRef.current = null;
+      pendingAssistantIdRef.current = null;
       setBusy(false);
       setElicitationBusy(false);
-      void onSessionRefresh?.();
+      setPendingUserEcho((current) => (current?.id === clientMessageId ? null : current));
+      void onSessionRefresh?.(effectiveSessionId);
     }
   };
 
@@ -1625,7 +1809,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
       setError("");
       await uploadFile(sessionId, file);
       await refreshResources(sessionId);
-      void onSessionRefresh?.();
+      void onSessionRefresh?.(sessionId);
       setSidebarView("files");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "文件上传失败");
@@ -1638,7 +1822,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
       setError("");
       await uploadSkill(sessionId, file);
       await refreshResources(sessionId);
-      void onSessionRefresh?.();
+      void onSessionRefresh?.(sessionId);
       setSidebarView("skills");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "技能上传失败");

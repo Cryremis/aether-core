@@ -92,6 +92,44 @@ class ContextMessageAdapter:
         )
         return message
 
+    def make_elicitation_response_message(
+        self,
+        *,
+        request_id: str,
+        title: str,
+        summary: str,
+        answers: list[dict[str, str]],
+        turn_index: int,
+    ) -> dict[str, Any]:
+        return self.ensure_runtime_metadata(
+            {
+                "role": "elicitation_response",
+                "request_id": request_id,
+                "title": title,
+                "summary": summary,
+                "answers": answers,
+            },
+            turn_index=turn_index,
+            kind="elicitation_response",
+        )
+
+    def make_internal_user_message(
+        self,
+        content: str,
+        *,
+        turn_index: int,
+        kind: str = "internal_user",
+    ) -> dict[str, Any]:
+        return self.ensure_runtime_metadata(
+            {
+                "role": "user",
+                "content": content,
+                "visible_in_transcript": False,
+            },
+            turn_index=turn_index,
+            kind=kind,
+        )
+
     def make_boundary_message(
         self,
         *,
@@ -166,7 +204,16 @@ class ContextMessageAdapter:
         return api_message
 
     def to_api_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [self.strip_runtime_metadata(message) for message in messages if not message.get("ephemeral")]
+        allowed_roles = {"system", "user", "assistant", "tool"}
+        result: list[dict[str, Any]] = []
+        for message in messages:
+            if message.get("ephemeral"):
+                continue
+            role = str(message.get("role") or "")
+            if role not in allowed_roles:
+                continue
+            result.append(self.strip_runtime_metadata(message))
+        return result
 
     def estimate_text_for_summary(self, message: dict[str, Any], max_chars: int = 800) -> str:
         role = message.get("role", "unknown")
