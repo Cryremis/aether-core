@@ -43,6 +43,7 @@ class AgentEvent(BaseModel):
         "tool_progress",
         "tool_finished",
         "run_started",
+        "assistant_visible_started",
         "artifact_created",
         "runtime_created",
         "runtime_recreated",

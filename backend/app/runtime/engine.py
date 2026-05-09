@@ -242,6 +242,8 @@ class AgentEngine:
         user_message_kind: str = "user",
     ) -> AsyncGenerator:
         started_at = time.perf_counter()
+        response_started_at: float | None = None
+        visible_started_emitted = False
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         session.begin_run(run_id)
         request_turn_index = self._next_turn_index(session)
@@ -327,6 +329,18 @@ class AgentEngine:
             "elicitation_snapshot",
             snapshot=runtime_state_service.get_elicitation(session).model_dump(mode="json"),
         )
+
+        def maybe_emit_visible_started() -> dict[str, Any] | None:
+            nonlocal response_started_at, visible_started_emitted
+            if visible_started_emitted:
+                return None
+            visible_started_emitted = True
+            response_started_at = time.perf_counter()
+            return make_event(session, "assistant_visible_started")
+
+        def current_response_elapsed_ms() -> int:
+            baseline = response_started_at if response_started_at is not None else started_at
+            return int((time.perf_counter() - baseline) * 1000)
 
         while True:
             turn_count += 1
@@ -482,6 +496,9 @@ class AgentEngine:
 
                     reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning") or ""
                     if reasoning_delta:
+                        visible_started_event = maybe_emit_visible_started()
+                        if visible_started_event is not None:
+                            yield visible_started_event
                         if not active_reasoning_block_id:
                             active_reasoning_block_id = f"reasoning_{uuid.uuid4().hex}"
                             self._append_assistant_block(
@@ -501,6 +518,9 @@ class AgentEngine:
 
                     content_delta = delta.get("content") or ""
                     if content_delta:
+                        visible_started_event = maybe_emit_visible_started()
+                        if visible_started_event is not None:
+                            yield visible_started_event
                         assistant_content += content_delta
                         session.set_partial_content(run_id, assistant_content)
                         if not active_content_block_id:
@@ -675,6 +695,9 @@ class AgentEngine:
                         tool_display=tool_display,
                         input=tool_input,
                     )
+                    visible_started_event = maybe_emit_visible_started()
+                    if visible_started_event is not None:
+                        yield visible_started_event
                     tool_started_at = time.perf_counter()
                     tool_output_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
                     execution_task = self._start_tool_execution(
@@ -916,7 +939,10 @@ class AgentEngine:
             context_pipeline.reset_reactive_retry(session)
             final_answer = assistant_content.strip()
             if final_answer:
-                final_elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                visible_started_event = maybe_emit_visible_started()
+                if visible_started_event is not None:
+                    yield visible_started_event
+                final_elapsed_ms = current_response_elapsed_ms()
                 self._ensure_elapsed_block(persisted_assistant_blocks, final_elapsed_ms)
                 self._persist_assistant_round(
                     session,

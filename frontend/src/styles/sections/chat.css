@@ -216,6 +216,65 @@
   color: var(--text-secondary);
 }
 
+.assistant-sidecar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+  min-height: 24px;
+}
+
+.assistant-status-badge {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  min-height: 22px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  opacity: 0.72;
+  overflow: hidden;
+}
+
+.assistant-status-badge::after {
+  content: "";
+  position: absolute;
+  inset: -20% -35%;
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.08) 38%,
+    rgba(255, 255, 255, 0.72) 50%,
+    rgba(255, 255, 255, 0.08) 62%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: translateX(-165%);
+  animation: assistant-status-sheen 1.9s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.assistant-status-badge:hover {
+  opacity: 1;
+  color: var(--text-secondary);
+}
+
+@keyframes assistant-status-sheen {
+  0% {
+    transform: translateX(-165%);
+  }
+  55% {
+    transform: translateX(165%);
+  }
+  100% {
+    transform: translateX(165%);
+  }
+}
+
 .bubble { max-width: 85%; padding: 14px 20px; border-radius: var(--radius-lg); font-size: 15px; line-height: 1.6; }
 .user-bubble { 
   background: #ffffff; 

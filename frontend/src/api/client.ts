@@ -296,7 +296,14 @@ export type TranscriptChatMessage =
       summary: string;
       answers: Array<{ id: string; header: string; value: string }>;
     }
-  | { id: string; role: "assistant"; blocks: TranscriptAssistantBlock[]; elapsedMs: number | null; streaming: boolean };
+  | {
+      id: string;
+      role: "assistant";
+      blocks: TranscriptAssistantBlock[];
+      elapsedMs: number | null;
+      streaming: boolean;
+      responseStartedAt?: string | null;
+    };
 
 export type TimelineRerunResponse = {
   success: boolean;
@@ -326,6 +333,7 @@ export type ActiveRunSummary = {
     blocks: TranscriptAssistantBlock[];
     elapsedMs: number | null;
     streaming: boolean;
+    response_started_at?: string | null;
   };
 };
 

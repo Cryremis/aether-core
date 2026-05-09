@@ -104,6 +104,7 @@ function fromTranscriptMessages(items: TranscriptChatMessage[]): TranscriptMessa
             : [{ id: `history-content-${index}`, kind: "content", content: "", status: "done" }],
           elapsedMs: item.elapsedMs ?? null,
           streaming: false,
+          responseStartedAt: item.responseStartedAt ? Date.parse(item.responseStartedAt) : undefined,
         }
       : item.role === "elicitation_response"
         ? {
@@ -126,7 +127,6 @@ function fromCommittedMessage(item: CommittedChatMessage): Extract<TranscriptMes
   if (item.role === "elicitation_response") {
     return {
       id: item.id,
-      committedId: item.id,
       request_id: item.request_id,
       role: "elicitation_response",
       title: item.title,
@@ -136,7 +136,6 @@ function fromCommittedMessage(item: CommittedChatMessage): Extract<TranscriptMes
   }
   return {
     id: item.id,
-    committedId: item.id,
     role: "user",
     content: item.content,
   };
@@ -738,7 +737,7 @@ window.addEventListener("resize", handleResize);
     }
     liveRunRef.current = null;
     if (summary.active_run?.status === "running") {
-      restoreActiveRunAssistant(summary.active_run, Date.now());
+      restoreActiveRunAssistant(summary.active_run);
       return summary.active_run;
     }
     return null;
@@ -922,18 +921,18 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     }
   };
 
-  const restoreActiveRunAssistant = (activeRun: ActiveRunSummary, fallbackStartTime: number) => {
+  const restoreActiveRunAssistant = (activeRun: ActiveRunSummary) => {
     const assistantId = activeRun.assistant.id || `live-${activeRun.run_id}`;
     liveRunRef.current = { runId: activeRun.run_id, assistantId };
-    const startTime = Date.parse(activeRun.started_at);
-    const normalizedStartTime = Number.isFinite(startTime) ? startTime : fallbackStartTime;
+    const responseStartedAt = Date.parse(activeRun.assistant.response_started_at ?? "");
+    const normalizedResponseStartedAt = Number.isFinite(responseStartedAt) ? responseStartedAt : undefined;
     upsertAssistantMessage(assistantId, () => ({
       id: assistantId,
       role: "assistant",
       blocks: (activeRun.assistant.blocks ?? []) as AssistantBlock[],
       elapsedMs: activeRun.assistant.elapsedMs ?? null,
       streaming: activeRun.assistant.streaming,
-      startTime: activeRun.assistant.streaming ? normalizedStartTime : undefined,
+      responseStartedAt: activeRun.assistant.streaming ? normalizedResponseStartedAt : undefined,
     }));
   };
 
@@ -985,6 +984,17 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         if (runId) {
           liveRunRef.current = { runId, assistantId };
         }
+        return;
+      }
+
+      if (eventType === "assistant_visible_started") {
+        setTranscriptMessages((current) =>
+          current.map((item) =>
+            item.id === assistantId && item.role === "assistant" && item.streaming && !item.responseStartedAt
+              ? { ...item, responseStartedAt: Date.now() }
+              : item,
+          ),
+        );
         return;
       }
 
@@ -1323,7 +1333,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
                   ...item,
                   elapsedMs: elapsedMs > 0 ? elapsedMs : item.elapsedMs,
                   streaming: false,
-                  startTime: undefined,
+                  responseStartedAt: item.responseStartedAt,
                 }
               : item,
           ),
@@ -1431,7 +1441,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
       blocks: [],
       elapsedMs: null,
       streaming: true,
-      startTime: roundStartTime,
+      responseStartedAt: undefined,
     }));
 
     let activeReasoningId = "";
@@ -1500,10 +1510,11 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         setError(chatError instanceof Error ? chatError.message : "对话执行失败");
       }
     } finally {
-      const elapsedMs = Date.now() - roundStartTime;
       setTranscriptMessages((current) =>
         current.map((item) =>
-          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false, startTime: undefined } : item,
+          item.id === assistantId && item.role === "assistant"
+            ? { ...item, streaming: false, responseStartedAt: item.responseStartedAt }
+            : item,
         ),
       );
       isStreamingRef.current = false;
@@ -1567,7 +1578,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         blocks: [],
         elapsedMs: null,
         streaming: true,
-        startTime: roundStartTime,
+        responseStartedAt: undefined,
       }));
 
       let activeReasoningId = "";
@@ -1635,11 +1646,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
           setError(chatError instanceof Error ? chatError.message : "重跑失败");
         }
       } finally {
-        const elapsedMs = Date.now() - roundStartTime;
         setTranscriptMessages((current) =>
           current.map((item) =>
             item.id === assistantId && item.role === "assistant"
-              ? { ...item, elapsedMs, streaming: false, startTime: undefined }
+              ? { ...item, streaming: false, responseStartedAt: item.responseStartedAt }
               : item,
           ),
         );
@@ -1724,7 +1734,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
       blocks: [],
       elapsedMs: null,
       streaming: true,
-      startTime: roundStartTime,
+      responseStartedAt: undefined,
     }));
     setElicitation((current) =>
       current
@@ -1782,10 +1792,11 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         setError(err instanceof Error ? err.message : "鎻愪氦鍥炵瓟澶辫触");
       }
     } finally {
-      const elapsedMs = Date.now() - roundStartTime;
       setTranscriptMessages((current) =>
         current.map((item) =>
-          item.id === assistantId && item.role === "assistant" ? { ...item, elapsedMs, streaming: false, startTime: undefined } : item,
+          item.id === assistantId && item.role === "assistant"
+            ? { ...item, streaming: false, responseStartedAt: item.responseStartedAt }
+            : item,
         ),
       );
       isStreamingRef.current = false;

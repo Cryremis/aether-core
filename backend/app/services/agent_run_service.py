@@ -66,6 +66,7 @@ class AgentRunService:
                     "blocks": [],
                     "elapsedMs": None,
                     "streaming": True,
+                    "response_started_at": None,
                 },
             }
             session_service.persist(session)
@@ -188,7 +189,10 @@ class AgentRunService:
 
     def _active_elapsed_ms(self, session: AgentSession) -> int:
         active_view = session.active_run_view or {}
-        started_at = active_view.get("started_at")
+        assistant = active_view.get("assistant")
+        started_at = assistant.get("response_started_at") if isinstance(assistant, dict) else None
+        if not started_at:
+            started_at = active_view.get("started_at")
         if not started_at:
             return 0
         try:
@@ -213,7 +217,9 @@ class AgentRunService:
         if not isinstance(blocks, list):
             return
 
-        if event.type == "reasoning_delta":
+        if event.type == "assistant_visible_started":
+            assistant["response_started_at"] = active_view.get("updated_at")
+        elif event.type == "reasoning_delta":
             block = self._find_or_create_block(blocks, kind="reasoning", prefix="live-reasoning")
             block["content"] = f"{block.get('content', '')}{str(payload.get('delta') or '')}"
         elif event.type == "content_delta":

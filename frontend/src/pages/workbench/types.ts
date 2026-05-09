@@ -56,7 +56,14 @@ export type TranscriptMessage =
       answers: Array<{ id: string; header: string; value: string }>;
       request_id?: string;
     }
-  | { id: string; role: "assistant"; blocks: AssistantBlock[]; elapsedMs: number | null; streaming: boolean; startTime?: number };
+  | {
+      id: string;
+      role: "assistant";
+      blocks: AssistantBlock[];
+      elapsedMs: number | null;
+      streaming: boolean;
+      responseStartedAt?: number;
+    };
 
 export type PendingUserEcho =
   | { id: string; role: "user"; content: string }

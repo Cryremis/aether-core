@@ -70,6 +70,56 @@ function LiveElapsedBadge({ startTime }: { startTime: number }) {
   return <div className="elapsed-badge">{formatElapsedMs(elapsed)}</div>;
 }
 
+function getAssistantStreamingStatus(message: Extract<ChatMessage, { role: "assistant" }>) {
+  if (!message.streaming) return null;
+  if (!message.responseStartedAt) {
+    return {
+      label: "Waiting ...",
+      detail: "等待模型开始响应",
+    };
+  }
+
+  const hasRunningTool = message.blocks.some((block) => block.kind === "tool" && block.status === "running");
+  if (hasRunningTool) {
+    return {
+      label: "Running tool ...",
+      detail: "正在执行工具",
+    };
+  }
+
+  const hasStreamingContent = message.blocks.some((block) => block.kind === "content" && block.status === "streaming");
+  if (hasStreamingContent) {
+    return {
+      label: "Responding ...",
+      detail: "正在输出回复",
+    };
+  }
+
+  const hasReasoning = message.blocks.some((block) => block.kind === "reasoning" && block.content.trim().length > 0);
+  if (hasReasoning) {
+    return {
+      label: "Thinking ...",
+      detail: "正在思考",
+    };
+  }
+
+  return {
+    label: "Thinking ...",
+    detail: "正在准备回复",
+  };
+}
+
+function AssistantStatusBadge({ message }: { message: Extract<ChatMessage, { role: "assistant" }> }) {
+  const status = getAssistantStreamingStatus(message);
+  if (!status) return null;
+
+  return (
+    <div className="assistant-status-badge" title={status.detail}>
+      <span>{status.label}</span>
+    </div>
+  );
+}
+
 function RuntimeNotice({ title, detail }: { title: string; detail?: string }) {
   return (
     <div className="runtime-notice" aria-live="polite">
@@ -1001,11 +1051,14 @@ export function ChatTimeline({
                 ),
               )}
             </div>
-            {message.streaming && message.startTime ? (
-              <LiveElapsedBadge startTime={message.startTime} />
-            ) : message.elapsedMs !== null && message.elapsedMs >= 0 ? (
-              <div className="elapsed-badge">{formatElapsedMs(message.elapsedMs)}</div>
-            ) : null}
+            <div className="assistant-sidecar">
+              <AssistantStatusBadge message={message} />
+              {message.streaming && message.responseStartedAt ? (
+                <LiveElapsedBadge startTime={message.responseStartedAt} />
+              ) : message.elapsedMs !== null && message.elapsedMs >= 0 ? (
+                <div className="elapsed-badge">{formatElapsedMs(message.elapsedMs)}</div>
+              ) : null}
+            </div>
           </div>
         ),
       )}
