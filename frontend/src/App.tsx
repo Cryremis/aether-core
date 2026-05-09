@@ -35,6 +35,25 @@ export default function App() {
   const [isEmbedMode, setIsEmbedMode] = useState(false);
   const [isNewSession, setIsNewSession] = useState(false);
 
+  const updateWorkbenchQuery = (nextSessionId: string, nextIsNewSession: boolean) => {
+    const params = new URLSearchParams(new URL(window.location.href).searchParams);
+    if (nextIsNewSession || !nextSessionId) {
+      params.delete("session_id");
+      params.set("new", "1");
+    } else {
+      params.set("session_id", nextSessionId);
+      params.delete("new");
+    }
+    const query = params.toString();
+    navigate(
+      {
+        pathname: "/workbench",
+        search: query ? `?${query}` : "",
+      },
+      { replace: true },
+    );
+  };
+
   const refreshConversations = async (preferredSessionId?: string) => {
     const result = await listConversations();
     const items = ((result.data ?? []) as ConversationItem[]) || [];
@@ -43,12 +62,34 @@ export default function App() {
     if (preferredSessionId) {
       setSessionId(preferredSessionId);
       setIsNewSession(false);
+      updateWorkbenchQuery(preferredSessionId, false);
       return items;
     }
 
-    if (!sessionId && items.length > 0) {
+    const url = new URL(window.location.href);
+    const requestedSessionId = (url.searchParams.get("session_id") || "").trim();
+    const requestedNewSession = url.searchParams.get("new") === "1";
+
+    if (requestedNewSession) {
+      setSessionId("");
+      setIsNewSession(true);
+      return items;
+    }
+
+    if (requestedSessionId && items.some((item) => item.session_id === requestedSessionId)) {
+      setSessionId(requestedSessionId);
+      setIsNewSession(false);
+      return items;
+    }
+
+    if (items.length > 0) {
       setSessionId(items[0].session_id);
       setIsNewSession(false);
+      updateWorkbenchQuery(items[0].session_id, false);
+    } else {
+      setSessionId("");
+      setIsNewSession(true);
+      updateWorkbenchQuery("", true);
     }
     return items;
   };
@@ -64,6 +105,7 @@ export default function App() {
         setAuthed(true);
         setIsEmbedMode(true);
         setSessionId(embedSessionId);
+        setIsNewSession(false);
         await refreshConversations(embedSessionId);
         setReady(true);
         return;
@@ -114,6 +156,7 @@ export default function App() {
   const handleNewConversation = () => {
     setSessionId("");
     setIsNewSession(true);
+    updateWorkbenchQuery("", true);
   };
 
   const handleDeleteSession = async (targetSessionId: string) => {
@@ -143,6 +186,7 @@ export default function App() {
   const handleCreateSessionAndSelect = (newSessionId: string) => {
     setIsNewSession(false);
     setSessionId(newSessionId);
+    updateWorkbenchQuery(newSessionId, false);
     void refreshConversations(newSessionId);
   };
 
@@ -208,10 +252,11 @@ export default function App() {
                     onDeleteSession={(id) => void handleDeleteSession(id)}
                     onRenameSession={(id, title) => void handleRenameSession(id, title)}
                     onSessionCreated={handleCreateSessionAndSelect}
-                    onSessionRefresh={() => void refreshConversations(sessionId)}
+                    onSessionRefresh={(id) => void refreshConversations(id || sessionId)}
                     onSessionSelect={(id) => {
                       setSessionId(id);
                       setIsNewSession(false);
+                      updateWorkbenchQuery(id, false);
                     }}
                   />
                 ) : null
