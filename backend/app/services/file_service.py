@@ -93,11 +93,22 @@ class FileService:
         file_id: str | None = None,
         relative_path: str | None = None,
     ) -> str:
-        return self.read(
-            session,
-            file_id=file_id,
-            file_path=relative_path,
-        ).content
+        assert session.workspace is not None
+        if file_id and relative_path:
+            raise ValueError("file_id 与 relative_path 不能同时提供。")
+
+        target_path: Path | None = None
+        if file_id:
+            target_path = self.resolve_file_path(session, file_id)
+        elif relative_path:
+            target_path = workspace_path_service.resolve_path(session, relative_path).host_path
+
+        if not target_path or not target_path.exists():
+            raise FileNotFoundError("目标文件不存在。")
+        if target_path.is_dir():
+            raise IsADirectoryError("目标路径是目录，请改用 list 工具。")
+
+        return target_path.read_text(encoding="utf-8", errors="replace")
 
     def read(
         self,

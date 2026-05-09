@@ -556,7 +556,6 @@ class SessionRuntimeService:
     def _build_exec_args(self, container_name: str, shell: str, command: str) -> list[str]:
         args = [
             "exec",
-            "-i",
             "--user",
             settings.sandbox_docker_user.strip() or f"{self._sandbox_uid()}:{self._sandbox_gid()}",
             "--workdir",
@@ -602,7 +601,7 @@ class SessionRuntimeService:
             container_name,
         ]
         if shell == "bash":
-            return [*args, "/bin/bash", "-lc", self._wrap_command_for_terminal(command)]
+            return [*args, "/bin/bash", "-lc", command]
         if shell == "powershell":
             return [*args, "pwsh", "-NoLogo", "-NoProfile", "-Command", command]
         raise RuntimeError(f"暂不支持的 shell 类型: {shell}")
@@ -986,7 +985,8 @@ class SessionRuntimeService:
         command: str,
     ) -> asyncio.subprocess.Process:
         docker_binary = self._require_docker_binary()
-        exec_args = self._build_exec_args(container_name, shell, command)
+        exec_command = self._wrap_command_for_terminal(command) if shell == "bash" else command
+        exec_args = ["exec", "-i", *self._build_exec_args(container_name, shell, exec_command)[1:]]
 
         if os.name == "nt" or not hasattr(os, "fork"):
             return await asyncio.create_subprocess_exec(

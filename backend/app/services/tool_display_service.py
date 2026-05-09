@@ -12,9 +12,11 @@ class ToolDisplayService:
         payload = tool_input if isinstance(tool_input, dict) else {}
 
         if canonical_name == "sandbox_shell":
+            raw_command = str(payload.get("command") or "").strip()
+            first_token = raw_command.split()[0] if raw_command else ""
             return {
-                "title": "运行命令",
-                "meta": "",
+                "title": first_token or "shell",
+                "meta": str(payload.get("shell") or "powershell"),
             }
 
         return {

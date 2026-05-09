@@ -454,21 +454,23 @@ class ToolService:
     ) -> dict[str, Any]:
         if session.workspace is None:
             raise RuntimeError("会话沙箱尚未初始化。")
-        if not tool_call_id:
-            raise RuntimeError("sandbox_shell requires tool_call_id for streaming execution tracking.")
         runner_kwargs: dict[str, Any] = {
             "workspace": session.workspace,
             "command": str(arguments["command"]),
             "shell": arguments.get("shell"),
             "timeout_seconds": self._parse_int(arguments.get("timeout_seconds")),
         }
-        tool_execution_service.begin_execution(
-            session,
-            tool_call_id=tool_call_id,
-            tool_name="sandbox_shell",
-        )
+        streaming_enabled = bool(tool_call_id)
+        if streaming_enabled:
+            tool_execution_service.begin_execution(
+                session,
+                tool_call_id=tool_call_id,
+                tool_name="sandbox_shell",
+            )
 
         async def output_callback(stream_name: str, text: str) -> None:
+            if not streaming_enabled or tool_call_id is None:
+                return
             event = await tool_execution_service.append_output(
                 session,
                 tool_call_id=tool_call_id,
@@ -488,22 +490,24 @@ class ToolService:
                 runner_kwargs["session"] = session
             if run_id is not None and "run_id" in signature.parameters:
                 runner_kwargs["run_id"] = run_id
-            if "output_callback" in signature.parameters:
+            if streaming_enabled and "output_callback" in signature.parameters:
                 runner_kwargs["output_callback"] = output_callback
         try:
             result = await sandbox_runner.run_shell(**runner_kwargs)
         except asyncio.CancelledError:
-            tool_execution_service.abort_execution(
-                session,
-                tool_call_id=tool_call_id,
-            )
+            if streaming_enabled and tool_call_id is not None:
+                tool_execution_service.abort_execution(
+                    session,
+                    tool_call_id=tool_call_id,
+                )
             raise
         except RuntimeBusyError as exc:
-            tool_execution_service.fail_execution(
-                session,
-                tool_call_id=tool_call_id,
-                error=exc.summary,
-            )
+            if streaming_enabled and tool_call_id is not None:
+                tool_execution_service.fail_execution(
+                    session,
+                    tool_call_id=tool_call_id,
+                    error=exc.summary,
+                )
             return {
                 "summary": exc.summary,
                 "error_code": "runtime_busy",
@@ -539,13 +543,14 @@ class ToolService:
                     "payload": runtime_metadata,
                 }
             ]
-        tool_execution_service.finish_execution(
-            session,
-            tool_call_id=tool_call_id,
-            exit_code=result.exit_code,
-            final_output=response,
-            status="completed" if result.exit_code == 0 else "failed",
-        )
+        if streaming_enabled and tool_call_id is not None:
+            tool_execution_service.finish_execution(
+                session,
+                tool_call_id=tool_call_id,
+                exit_code=result.exit_code,
+                final_output=response,
+                status="completed" if result.exit_code == 0 else "failed",
+            )
         return response
 
     def list_tool_schemas(self, session: AgentSession) -> list[dict[str, Any]]:
