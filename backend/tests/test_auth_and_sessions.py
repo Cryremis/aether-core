@@ -196,14 +196,19 @@ def test_platform_integration_guide_returns_expected_snippets(tmp_path):
     assert payload["bind_api_path"] == "/api/v1/aethercore/embed/bind"
     assert payload["frontend_script_path"] == "/api/v1/host/public/embed/aethercore-embed.js"
     assert payload["frontend_script_url"] == "https://ac-backend.example.com/api/v1/host/public/embed/aethercore-embed.js"
-    assert payload["recommended_mode_id"] == "standard_bind_hosted"
-    assert len(payload["modes"]) >= 2
-    assert any(item["mode_id"] == "standard_bind_hosted" for item in payload["modes"])
-    assert any(item["mode_id"] == "quick_guest" for item in payload["modes"])
+    assert payload["recommended_mode_id"] == "production_authenticated"
+    assert len(payload["modes"]) == 2
+    assert any(item["mode_id"] == "production_browser_guest" for item in payload["modes"])
+    assert any(item["mode_id"] == "production_authenticated" for item in payload["modes"])
+    assert any(item["access_stage"] == "production" and item["identity_scenario"] == "browser_guest" for item in payload["modes"])
+    assert any(item["access_stage"] == "production" and item["identity_scenario"] == "authenticated_user" for item in payload["modes"])
+    assert all(item["access_stage"] == "production" for item in payload["modes"])
     assert any(item["key"] == "YOUR_PLATFORM_BASE_URL" for item in payload["placeholders"])
+    assert any(item["key"] == "YOUR_GUEST_ID_KEY" for item in payload["placeholders"])
     assert 'platformKey: "guide-demo"' in payload["snippets"]["frontend"]
     assert 'workbenchUrl: "https://ac.example.com"' in payload["snippets"]["frontend"]
     assert 'src="https://ac-backend.example.com/api/v1/host/public/embed/aethercore-embed.js"' in payload["snippets"]["frontend"]
+    assert "{{YOUR_USER_ID_RESOLVER}}" in payload["snippets"]["frontend"]
     assert "AETHERCORE_API_BASE_URL=https://ac-backend.example.com" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_WORKBENCH_URL=https://ac.example.com" in payload["snippets"]["backend_env"]
     assert "AETHERCORE_PLATFORM_KEY=guide-demo" in payload["snippets"]["backend_env"]

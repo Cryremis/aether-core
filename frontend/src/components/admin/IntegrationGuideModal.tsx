@@ -11,16 +11,11 @@ type IntegrationGuideModalProps = {
   onClose: () => void;
 };
 
-type GuidePathCard = {
-  id: "quick_frontend" | "production";
-  title: string;
-  badge: string;
-  summary: string;
-  visuals: string[];
-  modeIds: string[];
-};
-
 type GuideMode = NonNullable<PlatformIntegrationGuide["modes"]>[number];
+type AccessStage = "quick" | "production";
+type IdentityScenario = "authenticated_user" | "browser_guest" | "ephemeral";
+
+const VISIBLE_IDENTITIES: IdentityScenario[] = ["authenticated_user", "browser_guest"];
 
 function SnippetCard({
   title,
@@ -55,42 +50,43 @@ function SnippetCard({
   );
 }
 
-function buildPathCards(integrationGuide: PlatformIntegrationGuide | null): GuidePathCard[] {
-  const modes = integrationGuide?.modes ?? [];
-  const quickModeIds = modes
-    .filter((item) => item.mode_id.includes("quick") || item.mode_id.includes("guest") || item.mode_id.includes("demo"))
-    .map((item) => item.mode_id);
-  const productionModeIds = modes
-    .filter((item) => !quickModeIds.includes(item.mode_id))
-    .map((item) => item.mode_id);
+const STAGE_OPTIONS: Array<{
+  id: AccessStage;
+  title: string;
+  badge: string;
+  summary: string;
+}> = [
+  {
+    id: "production",
+    title: "生产接入",
+    badge: "Production",
+    summary: "宿主后端保管密钥并代理 bind，适合正式上线和后续能力扩展。",
+  },
+];
 
-  return [
-    {
-      id: "quick_frontend",
-      title: "纯前端快速接入验证",
-      badge: "PoC",
-      summary: "最快验证浮球、抽屉和对话工作台，适合先看体验，不急着补后端代理。",
-      visuals: ["无宿主后端", "最快跑通", "仅用于验证"],
-      modeIds: quickModeIds,
-    },
-    {
-      id: "production",
-      title: "前后端生产场景接入",
-      badge: "Production",
-      summary: "宿主后端保管密钥并代理 bind，适合真实用户、稳定会话和后续能力扩展。",
-      visuals: ["后端代理", "安全上线", "可扩展 tools"],
-      modeIds: productionModeIds,
-    },
-  ].filter((item) => item.modeIds.length > 0);
-}
+const IDENTITY_META: Record<IdentityScenario, { title: string; visuals: string[]; description: string }> = {
+  authenticated_user: {
+    title: "登录用户",
+    visuals: ["有登录体系", "稳定用户 ID", "更完整权限控制"],
+    description: "适合已有用户系统的平台，强调稳定历史和更完整的宿主能力扩展。",
+  },
+  browser_guest: {
+    title: "匿名访客",
+    visuals: ["无登录也可用", "浏览器级续接", "限制高权限"],
+    description: "适合没有登录体系但有宿主后端的平台，同一浏览器可复用匿名访客会话。",
+  },
+  ephemeral: {
+    title: "临时访客",
+    visuals: ["无身份依赖", "临时会话", "只做验证"],
+    description: "适合最快体验验证，不承诺跨会话连续性。",
+  },
+};
 
-function getPreferredMode(modes: GuideMode[], guide: PlatformIntegrationGuide | null): GuideMode | null {
-  if (!modes.length) return null;
-  return (
-    modes.find((item) => item.mode_id === guide?.recommended_mode_id)
-    ?? modes.find((item) => item.recommended)
-    ?? modes[0]
+function getAvailableIdentities(modes: GuideMode[], stage: AccessStage): IdentityScenario[] {
+  const existing = new Set(
+    modes.filter((item) => item.access_stage === stage).map((item) => item.identity_scenario as IdentityScenario),
   );
+  return VISIBLE_IDENTITIES.filter((item) => existing.has(item));
 }
 
 export function IntegrationGuideModal({
@@ -102,44 +98,66 @@ export function IntegrationGuideModal({
   onCopy,
   onClose,
 }: IntegrationGuideModalProps) {
-  const pathCards = useMemo(() => buildPathCards(integrationGuide), [integrationGuide]);
-  const [selectedPathId, setSelectedPathId] = useState<GuidePathCard["id"] | "">("");
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const modes = integrationGuide?.modes ?? [];
+  const [selectedStage, setSelectedStage] = useState<AccessStage>("production");
+  const [selectedIdentity, setSelectedIdentity] = useState<IdentityScenario>("authenticated_user");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
 
-  useEffect(() => {
-    setSelectedPathId(pathCards[0]?.id ?? "");
-  }, [pathCards]);
-
-  const selectedPath = useMemo(
-    () => pathCards.find((item) => item.id === selectedPathId) ?? pathCards[0] ?? null,
-    [pathCards, selectedPathId],
+  const availableStages = useMemo(
+    () => STAGE_OPTIONS.filter((item) => modes.some((mode) => mode.access_stage === item.id)),
+    [modes],
   );
 
-  const pathModes = useMemo(() => {
-    if (!integrationGuide || !selectedPath) return [];
-    return integrationGuide.modes.filter((item) => selectedPath.modeIds.includes(item.mode_id));
-  }, [integrationGuide, selectedPath]);
+  useEffect(() => {
+    setSelectedStage((prev) => {
+      if (availableStages.some((item) => item.id === prev)) return prev;
+      return availableStages[0]?.id ?? "quick";
+    });
+  }, [availableStages]);
+
+  const availableIdentities = useMemo(
+    () => getAvailableIdentities(modes, selectedStage),
+    [modes, selectedStage],
+  );
+
+  useEffect(() => {
+    setSelectedIdentity((prev) => {
+      if (availableIdentities.includes(prev)) return prev;
+      return availableIdentities[0] ?? "authenticated_user";
+    });
+  }, [availableIdentities]);
 
   const activeMode = useMemo(
-    () => getPreferredMode(pathModes, integrationGuide),
-    [pathModes, integrationGuide],
+    () =>
+      modes.find(
+        (item) =>
+          item.access_stage === selectedStage &&
+          item.identity_scenario === selectedIdentity,
+      ) ?? null,
+    [modes, selectedIdentity, selectedStage],
   );
 
-  const frontendSnippet = activeMode?.snippets.find((item) => item.snippet_id.includes("frontend")) ?? activeMode?.snippets[0] ?? null;
-  const backendSnippets = (activeMode?.snippets ?? []).filter((item) => !item.snippet_id.includes("frontend"));
+  const frontendSnippet =
+    activeMode?.snippets.find((item) => item.snippet_id.includes("frontend")) ?? activeMode?.snippets[0] ?? null;
+  const envSnippet =
+    (activeMode?.snippets ?? []).find((item) => item.snippet_id === "backend_env") ?? null;
+  const backendCodeSnippets = (activeMode?.snippets ?? []).filter(
+    (item) => !item.snippet_id.includes("frontend") && item.snippet_id !== "backend_env",
+  );
 
   useEffect(() => {
-    if (!backendSnippets.length) {
+    if (!backendCodeSnippets.length) {
       setSelectedTemplateId("");
       return;
     }
     setSelectedTemplateId((prev) => {
-      if (prev && backendSnippets.some((item) => item.snippet_id === prev)) return prev;
-      return backendSnippets[0]?.snippet_id ?? "";
+      if (prev && backendCodeSnippets.some((item) => item.snippet_id === prev)) return prev;
+      return backendCodeSnippets[0]?.snippet_id ?? "";
     });
-  }, [backendSnippets]);
+  }, [backendCodeSnippets]);
 
-  const selectedBackendSnippet = backendSnippets.find((item) => item.snippet_id === selectedTemplateId) ?? backendSnippets[0] ?? null;
+  const selectedBackendSnippet =
+    backendCodeSnippets.find((item) => item.snippet_id === selectedTemplateId) ?? backendCodeSnippets[0] ?? null;
 
   const fallbackSnippets = integrationGuide
     ? [
@@ -159,7 +177,7 @@ export function IntegrationGuideModal({
             <h4>接入方案</h4>
             <p>
               {integrationGuidePlatformName || integrationGuide?.display_name || "平台接入说明"}
-              ：只选一种路径，快速验证就走纯前端，正式上线就走前后端生产接入。
+              ：当前仅保留生产接入，支持登录用户和匿名访客两种正式场景，只展示当前组合对应的接入内容。
             </p>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="关闭接入教程">
@@ -172,38 +190,59 @@ export function IntegrationGuideModal({
 
         {integrationGuide ? (
           <div className="guide-modal__body">
-            {pathCards.length ? (
-              <section className="guide-path-grid">
-                {pathCards.map((card) => (
+            {availableStages.length ? (
+              <section className="guide-stage-grid">
+                {availableStages.map((stage) => (
                   <button
-                    key={card.id}
+                    key={stage.id}
                     type="button"
-                    className={`guide-path-card${card.id === selectedPath?.id ? " is-active" : ""}`}
-                    onClick={() => setSelectedPathId(card.id)}
+                    className={`guide-stage-card${selectedStage === stage.id ? " is-active" : ""}`}
+                    onClick={() => setSelectedStage(stage.id)}
                   >
-                    <div className="guide-path-card__top">
-                      <span className="guide-path-card__badge">{card.badge}</span>
-                      <strong>{card.title}</strong>
-                    </div>
-                    <p>{card.summary}</p>
-                    <div className="guide-path-card__visuals">
-                      {card.visuals.map((item) => (
-                        <span key={item} className="guide-path-pill">{item}</span>
-                      ))}
-                    </div>
+                    <span className="guide-path-card__badge">{stage.badge}</span>
+                    <strong>{stage.title}</strong>
+                    <p>{stage.summary}</p>
                   </button>
                 ))}
+              </section>
+            ) : null}
+
+            {availableIdentities.length ? (
+              <section className="guide-path-grid">
+                {availableIdentities.map((identity) => {
+                  const meta = IDENTITY_META[identity];
+                  return (
+                    <button
+                      key={identity}
+                      type="button"
+                      className={`guide-path-card${selectedIdentity === identity ? " is-active" : ""}`}
+                      onClick={() => setSelectedIdentity(identity)}
+                    >
+                      <div className="guide-path-card__top">
+                        <strong>{meta.title}</strong>
+                      </div>
+                      <p>{meta.description}</p>
+                      <div className="guide-path-card__visuals">
+                        {meta.visuals.map((item) => (
+                          <span key={item} className="guide-path-pill">{item}</span>
+                        ))}
+                      </div>
+                    </button>
+                  );
+                })}
               </section>
             ) : null}
 
             <section className="guide-split-layout">
               <div className="guide-split-layout__code">
                 {activeMode ? (
-                  <section className={`guide-mode-card${selectedPath?.id === "production" ? " guide-mode-card--recommended" : ""}`}>
+                  <section className={`guide-mode-card${selectedStage === "production" ? " guide-mode-card--recommended" : ""}`}>
                     <div className="guide-mode-card__header">
                       <div>
-                        <div className="guide-mode-card__eyebrow">{selectedPath?.badge ?? "Guide"}</div>
-                        <h5>{selectedPath?.title ?? activeMode.title}</h5>
+                        <div className="guide-mode-card__eyebrow">
+                          {selectedStage === "production" ? "Production" : "Quick"}
+                        </div>
+                        <h5>{activeMode.title}</h5>
                         <p>{activeMode.summary}</p>
                       </div>
                     </div>
@@ -211,7 +250,7 @@ export function IntegrationGuideModal({
                     <div className="guide-kv-grid">
                       <div className="guide-note-item">
                         <strong>适用场景</strong>
-                        <span>{activeMode.use_when || "适合当前接入路径。"}</span>
+                        <span>{activeMode.use_when || "适合当前接入组合。"}</span>
                       </div>
                       <div className="guide-note-item">
                         <strong>后端要求</strong>
@@ -219,7 +258,7 @@ export function IntegrationGuideModal({
                       </div>
                       <div className="guide-note-item">
                         <strong>身份要求</strong>
-                        <span>{activeMode.identity_requirement || "按当前模式决定是否需要稳定用户身份。"}</span>
+                        <span>{activeMode.identity_requirement || "按当前模式决定身份来源。"}</span>
                       </div>
                     </div>
 
@@ -264,16 +303,27 @@ export function IntegrationGuideModal({
                       />
                     ) : null}
 
-                    {selectedPath?.id === "production" && backendSnippets.length ? (
+                    {selectedStage === "production" && envSnippet ? (
+                      <SnippetCard
+                        title={envSnippet.title}
+                        summary={envSnippet.summary}
+                        content={envSnippet.content}
+                        language={envSnippet.language}
+                        renderHighlightedSnippet={renderHighlightedSnippet}
+                        onCopy={onCopy}
+                      />
+                    ) : null}
+
+                    {selectedStage === "production" && backendCodeSnippets.length ? (
                       <div className="guide-section">
                         <div className="guide-section__head">
                           <div>
                             <h5>后端模板</h5>
-                            <span className="guide-section__label">只展示你当前选中的后端模板，不再全部堆出来。</span>
+                            <span className="guide-section__label">环境变量与后端实现已拆开展示，这里只保留后端代码模板。</span>
                           </div>
                         </div>
                         <div className="guide-template-switcher">
-                          {backendSnippets.map((snippet) => (
+                          {backendCodeSnippets.map((snippet) => (
                             <button
                               key={snippet.snippet_id}
                               type="button"

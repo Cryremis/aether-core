@@ -105,6 +105,8 @@ class PlatformIntegrationMode(BaseModel):
     mode_id: str
     title: str
     summary: str
+    access_stage: Literal["quick", "production"] = "production"
+    identity_scenario: Literal["authenticated_user", "browser_guest", "ephemeral"] = "authenticated_user"
     use_when: str = ""
     recommended: bool = False
     backend_requirement: str = ""

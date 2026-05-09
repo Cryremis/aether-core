@@ -53,6 +53,8 @@ export type PlatformIntegrationGuide = {
     mode_id: string;
     title: string;
     summary: string;
+    access_stage: "quick" | "production";
+    identity_scenario: "authenticated_user" | "browser_guest" | "ephemeral";
     use_when: string;
     recommended: boolean;
     backend_requirement: string;

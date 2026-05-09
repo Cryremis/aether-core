@@ -24,7 +24,11 @@ class PlatformIntegrationService:
         host_secret = str(platform["host_secret"])
         script_url = self._build_frontend_script_url()
 
-        frontend_hosted = self._build_frontend_hosted_snippet(
+        frontend_authenticated = self._build_frontend_authenticated_snippet(
+            platform_key=platform_key,
+            script_url=script_url,
+        )
+        frontend_browser_guest = self._build_frontend_browser_guest_snippet(
             platform_key=platform_key,
             script_url=script_url,
         )
@@ -33,9 +37,10 @@ class PlatformIntegrationService:
             host_secret=host_secret,
             display_name=display_name,
         )
-        backend_fastapi = self._build_backend_fastapi_snippet(display_name=display_name)
-        backend_express = self._build_backend_express_snippet(display_name=display_name)
-        guest_frontend = self._build_guest_frontend_snippet(platform_key=platform_key, script_url=script_url)
+        backend_fastapi_authenticated = self._build_backend_fastapi_authenticated_snippet(display_name=display_name)
+        backend_fastapi_guest = self._build_backend_fastapi_guest_snippet(display_name=display_name)
+        backend_express_authenticated = self._build_backend_express_authenticated_snippet(display_name=display_name)
+        backend_express_guest = self._build_backend_express_guest_snippet(display_name=display_name)
 
         return PlatformIntegrationGuide(
             platform_key=platform_key,
@@ -43,17 +48,18 @@ class PlatformIntegrationService:
             bind_api_path=self.bind_api_path,
             frontend_script_path=self.frontend_script_path,
             frontend_script_url=script_url,
-            recommended_mode_id="standard_bind_hosted",
+            recommended_mode_id="production_authenticated",
             prerequisites=[
                 "先在 AetherCore 注册平台，并保管 host_secret。",
-                "生产环境推荐宿主后端提供 bind 代理，不要把 host_secret 放到浏览器。",
-                "优先先接通最小对话能力，再逐步开启 tools、skills、files 和回调。",
+                "宿主后端需要提供 bind 代理，不要把 host_secret 放到浏览器。",
+                "先确认你们是否有稳定用户体系；没有也可以直接走匿名访客生产模式。",
             ],
             capabilities=[
                 "官方托管前端加载器",
-                "标准 bind 代理",
+                "生产级登录用户接入",
+                "生产级匿名访客接入",
                 "多后端模板",
-                "最小匿名 / guest 验证路径",
+                "浏览器级匿名访客会话",
                 "渐进式启用宿主工具与回调",
             ],
             placeholders=[
@@ -73,32 +79,95 @@ class PlatformIntegrationService:
                     key="YOUR_USER_RESOLVER",
                     label="宿主当前用户获取逻辑",
                     value="{{YOUR_USER_RESOLVER}}",
-                    description="替换成你们当前框架下的用户身份解析逻辑。",
+                    description="替换成你们当前框架下的用户身份解析逻辑；仅登录用户模式需要。",
+                ),
+                PlatformIntegrationPlaceholder(
+                    key="YOUR_GUEST_ID_KEY",
+                    label="浏览器访客 ID 存储键名",
+                    value="{{YOUR_GUEST_ID_KEY}}",
+                    description="例如 aethercore_guest_id，用于同一浏览器复用匿名访客会话。",
                 ),
             ],
             notes=[
-                "如果宿主没有统一用户系统，可以先用 guest 模式完成体验验证，按需补 bind 代理和鉴权。",
+                "不要使用浏览器指纹做用户识别，匿名访客模式应使用前端随机生成并本地持久化的 guest_id。",
+                "无用户系统不等于不能接入；匿名访客生产模式即可覆盖正式上线场景。",
                 "workbench_url 优先使用后端 bind 返回值，便于后续切换前台域名、CDN 或网关。",
             ],
             modes=[
                 PlatformIntegrationMode(
-                    mode_id="standard_bind_hosted",
-                    title="标准接入",
-                    summary="推荐给绝大多数生产宿主。前端加载官方脚本，后端提供一个 bind 代理。",
-                    use_when="有任意后端服务，但不希望被绑定到某个框架实现。",
-                    recommended=True,
-                    backend_requirement="需要一个能发 HTTP 请求的后端接口。",
-                    identity_requirement="推荐有稳定用户 ID；没有用户系统也可以先用匿名 ID。",
+                    mode_id="production_browser_guest",
+                    title="匿名访客生产接入",
+                    summary="宿主没有登录体系，但有后端。使用浏览器级 guest_id 区分访客，同一浏览器可复用会话。",
+                    access_stage="production",
+                    identity_scenario="browser_guest",
+                    use_when="站点不要求登录，但希望同一浏览器能持续使用 agent，比如自然语言填表、页面辅助操作。",
+                    recommended=False,
+                    backend_requirement="需要宿主后端提供 bind 代理并保管 host_secret。",
+                    identity_requirement="前端生成并持久化 guest_id，不依赖登录用户。",
                     capabilities=[
-                        "聊天工作台",
-                        "会话复用",
-                        "后续可扩展 tools / files / skills / host callback",
+                        "浏览器级会话续接",
+                        "生产环境安全 bind",
+                        "可限制性启用宿主工具",
                     ],
                     steps=[
-                        "在宿主全局布局中加载官方托管的 embed loader。",
-                        "宿主后端实现 bind 代理，安全保存 host_secret。",
-                        "先只返回 token、session_id、workbench_url，确认对话可用。",
-                        "后续按需补充 tools、skills、apis 和 host auth。",
+                        "前端首次生成 guest_id，写入 localStorage 或 cookie。",
+                        "宿主后端按 guest_id 作为匿名 external_user_id 调用 bind。",
+                        "先只开放低风险宿主能力，再按需扩展。",
+                    ],
+                    warnings=[
+                        "不要用浏览器指纹替代 guest_id。",
+                        "默认不建议开放高权限、强账户归属的宿主工具。",
+                    ],
+                    snippets=[
+                        PlatformIntegrationSnippet(
+                            snippet_id="frontend_browser_guest",
+                            title="前端嵌入代码（匿名访客）",
+                            language="html",
+                            summary="前端自动生成并持久化 guest_id，适合无登录体系的正式接入。",
+                            content=frontend_browser_guest,
+                        ),
+                        PlatformIntegrationSnippet(
+                            snippet_id="backend_env",
+                            title="后端环境变量示例",
+                            language="dotenv",
+                            summary="匿名访客生产接入与登录用户生产接入共用这组环境变量。",
+                            content=backend_env,
+                        ),
+                        PlatformIntegrationSnippet(
+                            snippet_id="backend_fastapi_guest",
+                            title="后端 Bind 示例（FastAPI，匿名访客）",
+                            language="python",
+                            summary="无登录体系时的 FastAPI 模板。",
+                            content=backend_fastapi_guest,
+                        ),
+                        PlatformIntegrationSnippet(
+                            snippet_id="backend_express_guest",
+                            title="后端 Bind 示例（Express，匿名访客）",
+                            language="javascript",
+                            summary="无登录体系时的 Express 模板。",
+                            content=backend_express_guest,
+                        ),
+                    ],
+                ),
+                PlatformIntegrationMode(
+                    mode_id="production_authenticated",
+                    title="登录用户生产接入",
+                    summary="宿主有稳定用户体系，后端保管密钥并代理 bind，适合真实生产环境和完整能力扩展。",
+                    access_stage="production",
+                    identity_scenario="authenticated_user",
+                    use_when="有用户系统、需要稳定历史、后续可能接入高权限宿主工具和个性化会话。",
+                    recommended=True,
+                    backend_requirement="需要宿主后端提供 bind 代理并保管 host_secret。",
+                    identity_requirement="需要宿主提供稳定 external_user_id。",
+                    capabilities=[
+                        "稳定用户会话",
+                        "跨会话复用",
+                        "更完整的宿主能力扩展",
+                    ],
+                    steps=[
+                        "前端从宿主用户体系读取稳定 userId。",
+                        "宿主后端按用户身份调用 bind，并返回 workbench_url。",
+                        "确认基础对话可用后，再逐步开放 files、tools、skills 和 host callback。",
                     ],
                     warnings=[
                         "不要把 host_secret 暴露给浏览器。",
@@ -106,79 +175,47 @@ class PlatformIntegrationService:
                     ],
                     snippets=[
                         PlatformIntegrationSnippet(
-                            snippet_id="frontend_hosted",
-                            title="前端嵌入代码",
+                            snippet_id="frontend_authenticated",
+                            title="前端嵌入代码（登录用户）",
                             language="html",
-                            summary="放到全局布局或登录后主布局，直接加载官方托管脚本。",
-                            content=frontend_hosted,
+                            summary="宿主已有用户体系时的标准前端初始化方式。",
+                            content=frontend_authenticated,
                         ),
                         PlatformIntegrationSnippet(
                             snippet_id="backend_env",
                             title="后端环境变量示例",
                             language="dotenv",
-                            summary="适用于任意后端，只要能读取环境变量即可。",
+                            summary="登录用户生产接入与匿名访客生产接入共用这组环境变量。",
                             content=backend_env,
                         ),
                         PlatformIntegrationSnippet(
-                            snippet_id="backend_fastapi",
-                            title="后端 Bind 示例（FastAPI）",
+                            snippet_id="backend_fastapi_authenticated",
+                            title="后端 Bind 示例（FastAPI，登录用户）",
                             language="python",
-                            summary="如果你们后端是 FastAPI，可以直接从这里改起。",
-                            content=backend_fastapi,
+                            summary="有登录体系时的 FastAPI 模板。",
+                            content=backend_fastapi_authenticated,
                         ),
                         PlatformIntegrationSnippet(
-                            snippet_id="backend_express",
-                            title="后端 Bind 示例（Express）",
+                            snippet_id="backend_express_authenticated",
+                            title="后端 Bind 示例（Express，登录用户）",
                             language="javascript",
-                            summary="Node / Express 场景的最小生产接入模板。",
-                            content=backend_express,
-                        ),
-                    ],
-                ),
-                PlatformIntegrationMode(
-                    mode_id="quick_guest",
-                    title="最小验证",
-                    summary="适合先验证嵌入体验，不依赖宿主后端，不调用宿主工具。",
-                    use_when="宿主暂时没有后端、没有用户体系，或者只想先看对话工作台效果。",
-                    recommended=False,
-                    backend_requirement="无需宿主后端。",
-                    identity_requirement="可以使用 guest 用户 ID。",
-                    capabilities=[
-                        "快速嵌入验证",
-                        "基础对话能力",
-                        "零宿主回调依赖",
-                    ],
-                    steps=[
-                        "直接加载官方托管脚本。",
-                        "传入固定 platformKey 和 guest userId。",
-                        "只做前端侧体验验证，后续再切换到标准 bind 模式。",
-                    ],
-                    warnings=[
-                        "仅适合 PoC / Demo，不适合生产。",
-                        "该模式不支持安全地注入宿主工具和敏感身份。",
-                    ],
-                    snippets=[
-                        PlatformIntegrationSnippet(
-                            snippet_id="frontend_guest",
-                            title="最小 Guest 嵌入代码",
-                            language="html",
-                            summary="最快速的体验验证入口，适合先看 UI 和对话工作流。",
-                            content=guest_frontend,
+                            summary="有登录体系时的 Express 模板。",
+                            content=backend_express_authenticated,
                         ),
                     ],
                 ),
             ],
             snippets=PlatformIntegrationGuideSnippets(
-                frontend=frontend_hosted,
+                frontend=frontend_authenticated,
                 backend_env=backend_env,
-                backend_fastapi=backend_fastapi,
+                backend_fastapi=backend_fastapi_authenticated,
             ),
         )
 
     def _build_frontend_script_url(self) -> str:
         return f"{settings.resolved_app_public_base_url}{self.frontend_script_path}"
 
-    def _build_frontend_hosted_snippet(self, *, platform_key: str, script_url: str) -> str:
+    def _build_frontend_authenticated_snippet(self, *, platform_key: str, script_url: str) -> str:
         return dedent(
             f"""\
             <script src="{script_url}" defer></script>
@@ -190,53 +227,123 @@ class PlatformIntegrationService:
                 title: "AetherCore",
                 subtitle: "嵌入式工作台",
                 getUserId: function () {{
-                  return (
-                    window.__AETHERCORE_USER_ID__ ||
-                    window.__USER_IDENTIFIER__ ||
-                    window.__USER_ID__ ||
-                    "anonymous"
-                  );
+                  return {{{{YOUR_USER_ID_RESOLVER}}}};
                 }}
               }});
             </script>
             """
         ).strip()
 
-    def _build_guest_frontend_snippet(self, *, platform_key: str, script_url: str) -> str:
+    def _build_frontend_browser_guest_snippet(self, *, platform_key: str, script_url: str) -> str:
         return dedent(
             f"""\
             <script src="{script_url}" defer></script>
             <script>
+              (function () {{
+                var guestKey = "{{{{YOUR_GUEST_ID_KEY}}}}";
+                var guestId = window.localStorage.getItem(guestKey);
+                if (!guestId) {{
+                  guestId =
+                    (window.crypto && typeof window.crypto.randomUUID === "function"
+                      ? window.crypto.randomUUID()
+                      : "guest-" + Math.random().toString(36).slice(2));
+                  window.localStorage.setItem(guestKey, guestId);
+                }}
+
+                window.mountAetherCore({{
+                  platformKey: "{platform_key}",
+                  bindUrl: "{self.bind_api_path}",
+                  workbenchUrl: "{settings.resolved_manage_frontend_public_base_url}",
+                  title: "AetherCore",
+                  subtitle: "匿名访客工作台",
+                  getUserId: function () {{
+                    return guestId;
+                  }}
+                }});
+              }})();
+            </script>
+            """
+        ).strip()
+
+    def _build_frontend_authenticated_quick_snippet(self, *, platform_key: str, script_url: str) -> str:
+        return dedent(
+            f"""\
+            <script src="{script_url}" defer></script>
+            <script>
+              var currentUserId = {{{{YOUR_USER_ID_RESOLVER}}}};
               window.mountAetherCore({{
                 platformKey: "{platform_key}",
                 workbenchUrl: "{settings.resolved_manage_frontend_public_base_url}",
-                autoOpen: false,
+                title: "AetherCore",
+                subtitle: "登录用户快速验证",
                 getUserId: function () {{
-                  return "guest-demo-user";
+                  return currentUserId;
                 }},
                 getBindRequest: function () {{
-                  return {{
-                    url: "{settings.resolved_app_public_base_url}/api/v1/host/bind",
-                    method: "POST",
-                    headers: {{
-                      "X-Aether-Platform-Secret": "{{{{DO_NOT_USE_IN_PRODUCTION}}}}"
-                    }},
-                    body: {{
-                      platform_key: "{platform_key}",
-                      host_name: "{platform_key}",
-                      conversation_key: "guest-demo-conversation",
-                      context: {{
-                        user: {{ id: "guest-demo-user", name: "Guest Demo User" }},
-                        page: {{}},
-                        extras: {{}}
-                      }},
-                      tools: [],
-                      skills: [],
-                      apis: []
-                    }}
-                  }};
+                  throw new Error("当前是登录用户快速验证模式；正式上线请切换到生产 bind 模式。");
                 }}
               }});
+            </script>
+            """
+        ).strip()
+
+    def _build_frontend_browser_guest_quick_snippet(self, *, platform_key: str, script_url: str) -> str:
+        return dedent(
+            f"""\
+            <script src="{script_url}" defer></script>
+            <script>
+              (function () {{
+                var guestKey = "{{{{YOUR_GUEST_ID_KEY}}}}";
+                var guestId = window.localStorage.getItem(guestKey);
+                if (!guestId) {{
+                  guestId =
+                    (window.crypto && typeof window.crypto.randomUUID === "function"
+                      ? window.crypto.randomUUID()
+                      : "guest-" + Math.random().toString(36).slice(2));
+                  window.localStorage.setItem(guestKey, guestId);
+                }}
+
+                window.mountAetherCore({{
+                  platformKey: "{platform_key}",
+                  workbenchUrl: "{settings.resolved_manage_frontend_public_base_url}",
+                  title: "AetherCore",
+                  subtitle: "匿名访客快速验证",
+                  getUserId: function () {{
+                    return guestId;
+                  }},
+                  getBindRequest: function () {{
+                    throw new Error("当前是匿名访客快速验证模式；正式上线请切换到生产 bind 模式。");
+                  }}
+                }});
+              }})();
+            </script>
+            """
+        ).strip()
+
+    def _build_frontend_ephemeral_snippet(self, *, platform_key: str, script_url: str) -> str:
+        return dedent(
+            f"""\
+            <script src="{script_url}" defer></script>
+            <script>
+              (function () {{
+                var sessionGuestId =
+                  (window.crypto && typeof window.crypto.randomUUID === "function"
+                    ? "ephemeral-" + window.crypto.randomUUID()
+                    : "ephemeral-" + Math.random().toString(36).slice(2));
+
+                window.mountAetherCore({{
+                  platformKey: "{platform_key}",
+                  workbenchUrl: "{settings.resolved_manage_frontend_public_base_url}",
+                  title: "AetherCore",
+                  subtitle: "临时验证模式",
+                  getUserId: function () {{
+                    return sessionGuestId;
+                  }},
+                  getBindRequest: function () {{
+                    throw new Error("临时快速验证模式仅用于 UI 接入演示，正式接入请切换到后端 bind 模式。");
+                  }}
+                }});
+              }})();
             </script>
             """
         ).strip()
@@ -253,7 +360,7 @@ class PlatformIntegrationService:
             """
         ).strip()
 
-    def _build_backend_fastapi_snippet(self, *, display_name: str) -> str:
+    def _build_backend_fastapi_authenticated_snippet(self, *, display_name: str) -> str:
         return dedent(
             f"""\
             from fastapi import APIRouter, HTTPException, Request
@@ -271,7 +378,6 @@ class PlatformIntegrationService:
 
             @router.post("{self.bind_api_path}")
             async def bind_aethercore(payload: AetherCoreBindRequest, request: Request):
-                # 用你们自己的登录体系替换这里。
                 user = {{{{YOUR_USER_RESOLVER}}}}
                 if user is None:
                     raise HTTPException(status_code=401, detail="用户未登录")
@@ -283,7 +389,7 @@ class PlatformIntegrationService:
                     "conversation_id": payload.conversation_id,
                     "context": {{
                         "user": {{
-                            "id": str(getattr(user, "id", None) or getattr(user, "user_id", None) or "anonymous"),
+                            "id": str(getattr(user, "id", None) or getattr(user, "user_id", None)),
                             "name": getattr(user, "name", None) or getattr(user, "username", None) or "anonymous",
                         }},
                         "page": {{}},
@@ -318,7 +424,72 @@ class PlatformIntegrationService:
             """
         ).strip()
 
-    def _build_backend_express_snippet(self, *, display_name: str) -> str:
+    def _build_backend_fastapi_guest_snippet(self, *, display_name: str) -> str:
+        return dedent(
+            f"""\
+            from fastapi import APIRouter, HTTPException
+            from pydantic import BaseModel
+            import httpx
+            {{{{YOUR_SETTINGS_IMPORT}}}}
+
+            router = APIRouter()
+
+
+            class AetherCoreBindRequest(BaseModel):
+                guest_id: str
+                conversation_key: str | None = None
+                conversation_id: str | None = None
+
+
+            @router.post("{self.bind_api_path}")
+            async def bind_aethercore(payload: AetherCoreBindRequest):
+                if not payload.guest_id:
+                    raise HTTPException(status_code=400, detail="缺少 guest_id")
+
+                body = {{
+                    "platform_key": settings.AETHERCORE_PLATFORM_KEY,
+                    "host_name": settings.AETHERCORE_HOST_NAME or "{display_name}",
+                    "conversation_key": payload.conversation_key or f"guest-{{payload.guest_id}}",
+                    "conversation_id": payload.conversation_id,
+                    "context": {{
+                        "user": {{
+                            "id": payload.guest_id,
+                            "name": "Guest Visitor",
+                        }},
+                        "page": {{}},
+                        "extras": {{
+                            "host_callback_base_url": settings.AETHERCORE_HOST_CALLBACK_BASE_URL,
+                            "identity_mode": "browser_guest",
+                        }},
+                    }},
+                    "tools": [],
+                    "skills": [],
+                    "apis": [],
+                }}
+
+                async with httpx.AsyncClient(timeout=30, verify=getattr(settings, "http_client_ssl_verify", True)) as client:
+                    response = await client.post(
+                        f"{{settings.AETHERCORE_API_BASE_URL.rstrip('/')}}/api/v1/host/bind",
+                        headers={{"X-Aether-Platform-Secret": settings.AETHERCORE_PLATFORM_SECRET}},
+                        json=body,
+                    )
+
+                if response.status_code >= 400:
+                    raise HTTPException(status_code=response.status_code, detail=response.text)
+
+                data = response.json()["data"]
+                return {{
+                    "data": {{
+                        "token": data["token"],
+                        "session_id": data["session_id"],
+                        "conversation_id": data.get("conversation_id"),
+                        "workbench_url": data.get("workbench_url"),
+                    }}
+                }}
+            """
+        ).strip()
+
+    def _build_backend_express_authenticated_snippet(self, *, display_name: str) -> str:
         return dedent(
             f"""\
             import express from "express";
@@ -348,12 +519,73 @@ class PlatformIntegrationService:
                     conversation_id: req.body?.conversation_id ?? null,
                     context: {{
                       user: {{
-                        id: String(user.id ?? user.userId ?? "anonymous"),
+                        id: String(user.id ?? user.userId),
                         name: user.name ?? user.username ?? "anonymous",
                       }},
                       page: {{}},
                       extras: {{
                         host_callback_base_url: settings.AETHERCORE_HOST_CALLBACK_BASE_URL,
+                      }},
+                    }},
+                    tools: [],
+                    skills: [],
+                    apis: [],
+                  }}),
+                }},
+              );
+
+              const data = await upstream.json();
+              return res.status(upstream.status).json({{
+                data: {{
+                  token: data?.data?.token,
+                  session_id: data?.data?.session_id,
+                  conversation_id: data?.data?.conversation_id,
+                  workbench_url: data?.data?.workbench_url,
+                }},
+              }});
+            }});
+
+            export default router;
+            """
+        ).strip()
+
+    def _build_backend_express_guest_snippet(self, *, display_name: str) -> str:
+        return dedent(
+            f"""\
+            import express from "express";
+            import fetch from "node-fetch";
+            import {{ settings }} from "{{{{YOUR_SETTINGS_IMPORT}}}}";
+
+            const router = express.Router();
+
+            router.post("{self.bind_api_path}", async (req, res) => {{
+              const guestId = String(req.body?.guest_id || "");
+              if (!guestId) {{
+                return res.status(400).json({{ detail: "缺少 guest_id" }});
+              }}
+
+              const upstream = await fetch(
+                `${{settings.AETHERCORE_API_BASE_URL.replace(/\\/$/, "")}}/api/v1/host/bind`,
+                {{
+                  method: "POST",
+                  headers: {{
+                    "Content-Type": "application/json",
+                    "X-Aether-Platform-Secret": settings.AETHERCORE_PLATFORM_SECRET,
+                  }},
+                  body: JSON.stringify({{
+                    platform_key: settings.AETHERCORE_PLATFORM_KEY,
+                    host_name: settings.AETHERCORE_HOST_NAME || "{display_name}",
+                    conversation_key: req.body?.conversation_key || `guest-${{guestId}}`,
+                    conversation_id: req.body?.conversation_id ?? null,
+                    context: {{
+                      user: {{
+                        id: guestId,
+                        name: "Guest Visitor",
+                      }},
+                      page: {{}},
+                      extras: {{
+                        host_callback_base_url: settings.AETHERCORE_HOST_CALLBACK_BASE_URL,
+                        identity_mode: "browser_guest",
                       }},
                     }},
                     tools: [],
