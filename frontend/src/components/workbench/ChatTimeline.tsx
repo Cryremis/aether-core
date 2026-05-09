@@ -732,9 +732,8 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status }: 
   const runText = liveOutputText ?? "";
 
   useEffect(() => {
-    if (status === "running") {
-      setExpanded(true);
-    }
+    // Tool cards follow runtime state by default: open while running, collapse once settled.
+    setExpanded(status === "running");
   }, [status]);
 
   return (
