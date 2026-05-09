@@ -194,6 +194,8 @@ export function WorkbenchPage({
   const scrollFrameRef = useRef<number | null>(null);
   const bottomAnchorFrameRef = useRef<number | null>(null);
   const bottomAnchorUntilRef = useRef(0);
+  const autoScrollingRef = useRef(false);
+  const previousScrollTopRef = useRef(0);
   const loadScrollSettleUntilRef = useRef(0);
   const detailsToggleShouldStickRef = useRef(false);
   const pendingSessionBottomScrollRef = useRef(false);
@@ -236,12 +238,26 @@ export function WorkbenchPage({
     shouldStickToBottomRef.current = isNearBottom(node);
   };
 
+  const stopKeepBottom = () => {
+    shouldStickToBottomRef.current = false;
+    bottomAnchorUntilRef.current = 0;
+    if (bottomAnchorFrameRef.current !== null) {
+      window.cancelAnimationFrame(bottomAnchorFrameRef.current);
+      bottomAnchorFrameRef.current = null;
+    }
+  };
+
   const scrollHistoryToBottom = (behavior: ScrollBehavior = "auto") => {
     const node = historyRef.current;
     if (!node) return;
     if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
     scrollFrameRef.current = window.requestAnimationFrame(() => {
+      autoScrollingRef.current = true;
       node.scrollTo({ top: node.scrollHeight, behavior });
+      previousScrollTopRef.current = node.scrollTop;
+      window.setTimeout(() => {
+        autoScrollingRef.current = false;
+      }, 0);
       scrollFrameRef.current = null;
     });
   };
@@ -261,7 +277,12 @@ export function WorkbenchPage({
       }
 
       if (shouldStickToBottomRef.current) {
+        autoScrollingRef.current = true;
         current.scrollTop = current.scrollHeight;
+        previousScrollTopRef.current = current.scrollTop;
+        window.setTimeout(() => {
+          autoScrollingRef.current = false;
+        }, 0);
       }
 
       if (performance.now() < bottomAnchorUntilRef.current && shouldStickToBottomRef.current) {
@@ -283,7 +304,20 @@ export function WorkbenchPage({
   const handleHistoryScroll = () => {
     const node = historyRef.current;
     if (!node) return;
+    const currentTop = node.scrollTop;
+    const movedUp = currentTop < previousScrollTopRef.current - 2;
+    previousScrollTopRef.current = currentTop;
+    if (movedUp && !autoScrollingRef.current && !isNearBottom(node)) {
+      stopKeepBottom();
+      return;
+    }
     updateStickToBottom(node);
+  };
+
+  const handleHistoryWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (event.deltaY < 0) {
+      stopKeepBottom();
+    }
   };
 
   const handleSidebarResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -662,6 +696,7 @@ window.addEventListener("resize", handleResize);
     shouldStickToBottomRef.current = true;
     pendingSessionBottomScrollRef.current = true;
     loadScrollSettleUntilRef.current = performance.now() + 1200;
+    previousScrollTopRef.current = 0;
     setLoading(true);
     setError("");
     void loadSession(targetSessionId)
@@ -1677,7 +1712,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
 
         {error ? <div className="error-toast anim-shake">{error}</div> : null}
 
-        <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll}>
+        <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll} onWheel={handleHistoryWheel}>
           <ChatTimeline
             contentRef={historyContentRef}
             loading={loading}
