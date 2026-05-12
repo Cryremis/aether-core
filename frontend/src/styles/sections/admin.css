@@ -935,6 +935,50 @@
   gap: 14px;
 }
 
+.guide-snippet-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.guide-snippet-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  background: #f8fafc;
+}
+
+.guide-snippet-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.guide-snippet-card__meta strong {
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.guide-snippet-card__meta span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.guide-snippet-card__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guide-code-shell {
+  position: relative;
+}
+
 .guide-section h5 {
   font-size: 14px;
   font-weight: 600;
@@ -1079,6 +1123,22 @@
   word-break: break-word;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0, 0, 0, 0.15);
   font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+}
+
+.guide-code-block:not(.is-expanded) {
+  max-height: calc(1.8em * 8 + 36px);
+  overflow: hidden;
+}
+
+.guide-code-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 72px;
+  pointer-events: none;
+  border-radius: 0 0 14px 14px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0) 0%, rgba(15, 23, 42, 0.92) 78%, rgba(15, 23, 42, 1) 100%);
 }
 
 .guide-code-block::-webkit-scrollbar {
@@ -1240,6 +1300,11 @@
 .guide-template-switcher {
   display: flex;
   flex-wrap: wrap;
+  gap: 10px;
+}
+
+.guide-deploy-switcher {
+  display: inline-flex;
   gap: 10px;
 }
 
@@ -1867,6 +1932,22 @@
   gap: 12px;
 }
 
+.management-console__audit-timeline-wrapper {
+  flex: 1;
+  min-height: 400px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.6) 0%, rgba(255, 255, 255, 0.8) 100%);
+  border-radius: 16px;
+  border: 1px solid rgba(226, 232, 240, 0.7);
+  margin-top: 16px;
+}
+
+.management-console__audit-timeline-wrapper .chat-container {
+  max-width: 100%;
+  padding: 24px 20px 32px;
+}
+
 .management-console__audit-message {
   padding: 14px 16px;
   border-radius: 14px;
@@ -1895,6 +1976,185 @@
   line-height: 1.7;
   color: #334155;
   font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+}
+
+/* --- 审计平台卡片网格 --- */
+.management-console__audit-platform-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.management-console__audit-platform-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  text-align: left;
+}
+
+.management-console__audit-platform-card:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(148, 163, 184, 0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px -8px rgba(15, 23, 42, 0.12);
+}
+
+.management-console__audit-platform-card.is-active {
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
+  border-color: rgba(37, 99, 235, 0.4);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12), 0 12px 24px -12px rgba(37, 99, 235, 0.2);
+}
+
+.management-console__audit-platform-card strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.management-console__audit-platform-card .platform-key {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+/* --- 审计会话列表优化 --- */
+.management-console__audit-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.management-console__audit-list-header span {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.management-console__audit-list-header .action-button.small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.management-console__audit-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.management-console__audit-card-meta .audit-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.management-console__audit-card-meta .audit-meta-item svg {
+  color: var(--text-tertiary);
+}
+
+.management-console__audit-card-session {
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: rgba(241, 245, 249, 0.6);
+  border-radius: 8px;
+}
+
+.management-console__audit-card-session code {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+/* --- 审计详情头部 --- */
+.management-console__audit-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.management-console__audit-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.management-console__audit-detail-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.management-console__audit-detail-meta .runtime-status {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.runtime-status--approved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.runtime-status--rejected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.runtime-status--returned {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.runtime-status--none {
+  background: #f8fafc;
+  color: var(--text-tertiary);
+}
+
+/* --- 审计空状态 --- */
+.management-console__audit-empty-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 320px;
+  text-align: center;
+}
+
+.management-console__audit-empty-detail .audit-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(241, 245, 249, 0.9) 0%, rgba(248, 250, 252, 0.95) 100%);
+  color: var(--text-tertiary);
+}
+
+.management-console__audit-empty-detail p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  max-width: 280px;
 }
 
 /* --- 状态徽章 --- */

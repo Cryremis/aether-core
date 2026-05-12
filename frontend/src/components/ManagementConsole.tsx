@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 
 import type {
   AuditConversationDetail,
@@ -6,6 +6,7 @@ import type {
   CurrentUserProfile,
   PlatformRegistrationRequestSummary,
   SessionRuntimeSummary,
+  TranscriptAssistantBlock,
   TranscriptChatMessage,
   UserSummary,
 } from "../api/client";
@@ -27,6 +28,8 @@ import {
   updateUserRole,
 } from "../api/client";
 import { AdminPanel } from "./AdminPanel";
+import { ChatTimeline } from "./workbench/ChatTimeline";
+import type { ChatMessage, AssistantBlock } from "../pages/workbench/types";
 
 type ManagementConsoleProps = {
   currentUser: CurrentUserProfile;
@@ -86,21 +89,141 @@ function getRuntimeStatusClass(status: string) {
   return "returned";
 }
 
-function renderAuditMessageContent(detail: AuditConversationDetail | null, index: number) {
-  const message = detail?.messages?.[index];
-  if (!message) return "";
-  if (message.content?.trim()) return message.content;
-  if (Array.isArray(message.blocks) && message.blocks.length > 0) {
-    return JSON.stringify(message.blocks, null, 2);
+function convertAuditDetailToChatMessages(detail: AuditConversationDetail | null): ChatMessage[] {
+  if (!detail) return [];
+  
+  const transcript = detail.transcript;
+  if (transcript && transcript.length > 0) {
+    return transcript.map((msg, index): ChatMessage => {
+      if (msg.role === "user") {
+        return {
+          id: `audit-${detail.session_id}-t-${index}`,
+          role: "user",
+          content: msg.content || "",
+        };
+      }
+      
+      if (msg.role === "elicitation_response") {
+        return {
+          id: `audit-${detail.session_id}-t-${index}`,
+          role: "elicitation_response",
+          title: msg.title,
+          summary: msg.summary,
+          answers: msg.answers,
+        };
+      }
+      
+      const msgBlocks = (msg as Extract<TranscriptChatMessage, { role: "assistant" }>).blocks ?? [];
+      const blocks: AssistantBlock[] = msgBlocks.map((block, blockIndex): AssistantBlock => {
+        if (block.kind === "reasoning") {
+          return {
+            id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
+            kind: "reasoning",
+            content: block.content || "",
+          };
+        }
+        if (block.kind === "content") {
+          return {
+            id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
+            kind: "content",
+            content: block.content || "",
+            status: "done",
+          };
+        }
+        if (block.kind === "tool") {
+          const toolBlock = block as Extract<TranscriptAssistantBlock, { kind: "tool" }>;
+          return {
+            id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
+            kind: "tool",
+            title: toolBlock.title || "Tool",
+            meta: toolBlock.meta || "",
+            argumentsText: toolBlock.argumentsText || "",
+            outputText: toolBlock.outputText || "",
+            status: "done",
+          };
+        }
+        if (block.kind === "runtime_notice") {
+          return {
+            id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
+            kind: "runtime_notice",
+            eventType: "runtime_recreated",
+            title: block.title || "",
+            detail: block.detail,
+          };
+        }
+        return {
+          id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
+          kind: "content",
+          content: "",
+          status: "done",
+        };
+      });
+      
+      return {
+        id: `audit-${detail.session_id}-t-${index}`,
+        role: "assistant",
+        blocks,
+        elapsedMs: null,
+        streaming: false,
+      };
+    });
   }
-  return "";
-}
-
-function renderAuditTranscriptContent(message: TranscriptChatMessage) {
-  if (message.role === "user") return message.content;
-  const blocks = message.blocks ?? [];
-  if (blocks.length === 0) return "";
-  return JSON.stringify(blocks, null, 2);
+  
+  const messages = detail.messages ?? [];
+  return messages.map((msg, index): ChatMessage => {
+    if (msg.role === "user") {
+      return {
+        id: `audit-${detail.session_id}-m-${index}`,
+        role: "user",
+        content: msg.content || "",
+      };
+    }
+    
+    const blocks: AssistantBlock[] = [];
+    if (msg.content?.trim()) {
+      blocks.push({
+        id: `audit-${detail.session_id}-m-${index}-c`,
+        kind: "content",
+        content: msg.content,
+        status: "done",
+      });
+    }
+    if (Array.isArray(msg.blocks) && msg.blocks.length > 0) {
+      msg.blocks.forEach((block: Record<string, unknown>, blockIndex: number) => {
+        const kind = block.kind as string;
+        const content = typeof block.content === "string" ? block.content : "";
+        if (kind === "reasoning") {
+          blocks.push({
+            id: `audit-${detail.session_id}-m-${index}-b-${blockIndex}`,
+            kind: "reasoning",
+            content,
+          });
+        } else if (kind === "content") {
+          blocks.push({
+            id: `audit-${detail.session_id}-m-${index}-b-${blockIndex}`,
+            kind: "content",
+            content,
+            status: "done",
+          });
+        } else {
+          blocks.push({
+            id: `audit-${detail.session_id}-m-${index}-b-${blockIndex}`,
+            kind: "content",
+            content: JSON.stringify(block, null, 2),
+            status: "done",
+          });
+        }
+      });
+    }
+    
+    return {
+      id: `audit-${detail.session_id}-m-${index}`,
+      role: "assistant",
+      blocks,
+      elapsedMs: null,
+      streaming: false,
+    };
+  });
 }
 
 export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
@@ -646,23 +769,36 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
               </div>
               <span className="management-console__metric">{auditConversations.length} 会话</span>
             </div>
-            <div className="management-console__toolbar">
-              <select
-                value={selectedAuditPlatformId ?? ""}
-                onChange={(event) => setSelectedAuditPlatformId(Number(event.target.value) || null)}
-              >
-                {platforms.map((platform) => (
-                  <option key={platform.platform_id} value={platform.platform_id}>
-                    {platform.display_name} · {platform.platform_key}
-                  </option>
-                ))}
-              </select>
-              <button type="button" className="action-button action-button--ghost" disabled={auditBusy} onClick={() => void loadAuditSessions(selectedAuditPlatformId)}>
-                {auditBusy ? "刷新中..." : "刷新会话"}
-              </button>
+            <div className="management-console__audit-platform-grid">
+              {platforms.length === 0 ? (
+                <div className="admin-panel__empty">当前没有可管理的平台。</div>
+              ) : (
+                platforms.map((platform) => (
+                  <button
+                    key={platform.platform_id}
+                    type="button"
+                    className={`management-console__audit-platform-card ${selectedAuditPlatformId === platform.platform_id ? "is-active" : ""}`}
+                    onClick={() => setSelectedAuditPlatformId(platform.platform_id)}
+                  >
+                    <strong>{platform.display_name}</strong>
+                    <p className="platform-key">{platform.platform_key}</p>
+                  </button>
+                ))
+              )}
             </div>
             <div className="management-console__audit-layout">
               <div className="management-console__audit-list">
+                <div className="management-console__audit-list-header">
+                  <span>历史会话</span>
+                  <button
+                    type="button"
+                    className="action-button action-button--ghost small"
+                    disabled={auditBusy}
+                    onClick={() => void loadAuditSessions(selectedAuditPlatformId)}
+                  >
+                    {auditBusy ? "刷新中..." : "刷新"}
+                  </button>
+                </div>
                 {auditConversations.length === 0 ? (
                   <div className="admin-panel__empty">当前平台还没有可审计会话。</div>
                 ) : (
@@ -680,9 +816,19 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
                         </div>
                         <span className="request-status request-status--returned">{item.message_count} 条</span>
                       </div>
-                      <p>用户：{item.owner_user_name || item.external_user_name || item.external_user_id || "未知"}</p>
-                      <p>Session：{item.session_id}</p>
-                      <p>最后更新：{formatTime(item.updated_at || item.last_message_at)}</p>
+                      <div className="management-console__audit-card-meta">
+                        <span className="audit-meta-item">
+                          <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                          {item.owner_user_name || item.external_user_name || item.external_user_id || "未知"}
+                        </span>
+                        <span className="audit-meta-item">
+                          <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                          {formatTime(item.updated_at || item.last_message_at)}
+                        </span>
+                      </div>
+                      <div className="management-console__audit-card-session">
+                        <code>{item.session_id.slice(0, 12)}...</code>
+                      </div>
                     </button>
                   ))
                 )}
@@ -690,45 +836,45 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
               <div className="management-console__audit-detail">
                 {selectedAuditDetail ? (
                   <>
-                    <div className="management-console__card-head">
-                      <div>
-                        <strong>{selectedAuditDetail.audit.title || "新对话"}</strong>
-                        <p>{selectedAuditDetail.audit.platform_display_name || selectedAuditDetail.host_name}</p>
+                    <div className="management-console__audit-detail-header">
+                      <div className="management-console__card-head">
+                        <div>
+                          <strong>{selectedAuditDetail.audit.title || "新对话"}</strong>
+                          <p>{selectedAuditDetail.audit.platform_display_name || selectedAuditDetail.host_name}</p>
+                        </div>
+                        <span className="request-status request-status--approved">{selectedAuditDetail.message_count} 条消息</span>
                       </div>
-                      <span className="request-status request-status--approved">{selectedAuditDetail.message_count} 条消息</span>
+                      <div className="management-console__audit-detail-meta">
+                        <span>用户：{selectedAuditDetail.audit.owner_user_name || selectedAuditDetail.audit.external_user_name || selectedAuditDetail.audit.external_user_id || "未知"}</span>
+                        <span>Session：{selectedAuditDetail.session_id}</span>
+                        <span>创建：{formatTime(selectedAuditDetail.created_at)}</span>
+                        <span>更新：{formatTime(selectedAuditDetail.audit.updated_at)}</span>
+                        {selectedAuditDetail.runtime ? (
+                          <span className={`runtime-status runtime-status--${getRuntimeStatusClass(selectedAuditDetail.runtime.status)}`}>
+                            Runtime：{getRuntimeStatusLabel(selectedAuditDetail.runtime.status)}
+                          </span>
+                        ) : (
+                          <span className="runtime-status runtime-status--none">Runtime：尚未创建</span>
+                        )}
+                      </div>
                     </div>
-                    <p>用户：{selectedAuditDetail.audit.owner_user_name || selectedAuditDetail.audit.external_user_name || selectedAuditDetail.audit.external_user_id || "未知"}</p>
-                    <p>Session：{selectedAuditDetail.session_id}</p>
-                    <p>创建时间：{formatTime(selectedAuditDetail.created_at)} · 最后更新时间：{formatTime(selectedAuditDetail.audit.updated_at)}</p>
-                    <p>当前 runtime：{selectedAuditDetail.runtime ? getRuntimeStatusLabel(selectedAuditDetail.runtime.status) : "尚未创建"}</p>
-                    <div className="management-console__audit-timeline">
-                      {(selectedAuditDetail.transcript && selectedAuditDetail.transcript.length > 0
-                        ? selectedAuditDetail.transcript.map((message, index) => (
-                            <article key={`${selectedAuditDetail.session_id}-t-${index}`} className="management-console__audit-message">
-                              <div className="management-console__audit-message-head">
-                                <span className={`request-status request-status--${message.role === "assistant" ? "approved" : "pending"}`}>
-                                  {message.role}
-                                </span>
-                                <span>#{index + 1}</span>
-                              </div>
-                              <pre>{renderAuditTranscriptContent(message)}</pre>
-                            </article>
-                          ))
-                        : selectedAuditDetail.messages.map((message, index) => (
-                        <article key={`${selectedAuditDetail.session_id}-${index}`} className="management-console__audit-message">
-                          <div className="management-console__audit-message-head">
-                            <span className={`request-status request-status--${message.role === "assistant" ? "approved" : message.role === "tool" ? "returned" : "pending"}`}>
-                              {message.role}
-                            </span>
-                            <span>#{index + 1}</span>
-                          </div>
-                          <pre>{renderAuditMessageContent(selectedAuditDetail, index)}</pre>
-                        </article>
-                      )))}
+                    <div className="management-console__audit-timeline-wrapper">
+                      <ChatTimeline
+                        loading={auditBusy}
+                        messages={convertAuditDetailToChatMessages(selectedAuditDetail)}
+                        actionsDisabled={true}
+                      />
                     </div>
                   </>
                 ) : (
-                  <div className="admin-panel__empty">选择左侧会话后，可在这里查看完整审计详情。</div>
+                  <div className="admin-panel__empty management-console__audit-empty-detail">
+                    <div className="audit-empty-icon">
+                      <svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                      </svg>
+                    </div>
+                    <p>选择左侧会话后，可在这里查看完整审计详情</p>
+                  </div>
                 )}
               </div>
             </div>

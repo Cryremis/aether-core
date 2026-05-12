@@ -203,24 +203,26 @@ def test_platform_integration_guide_returns_expected_snippets(tmp_path):
     assert any(item["access_stage"] == "production" and item["identity_scenario"] == "browser_guest" for item in payload["modes"])
     assert any(item["access_stage"] == "production" and item["identity_scenario"] == "authenticated_user" for item in payload["modes"])
     assert all(item["access_stage"] == "production" for item in payload["modes"])
-    assert any(item["key"] == "YOUR_PLATFORM_BASE_URL" for item in payload["placeholders"])
-    assert any(item["key"] == "YOUR_GUEST_ID_KEY" for item in payload["placeholders"])
+    assert any(item["key"] == "YOUR_API_BASE_URL" for item in payload["placeholders"])
     assert 'platformKey: "guide-demo"' in payload["snippets"]["frontend"]
     assert 'workbenchUrl: "https://ac.example.com"' in payload["snippets"]["frontend"]
     assert 'src="https://ac-backend.example.com/api/v1/host/public/embed/aethercore-embed.js"' in payload["snippets"]["frontend"]
+    assert 'bindUrl: "/api/v1/aethercore/embed/bind"' in payload["snippets"]["frontend"]
     assert "{{YOUR_USER_ID_RESOLVER}}" in payload["snippets"]["frontend"]
-    assert "AETHERCORE_API_BASE_URL=https://ac-backend.example.com" in payload["snippets"]["backend_env"]
-    assert "AETHERCORE_WORKBENCH_URL=https://ac.example.com" in payload["snippets"]["backend_env"]
-    assert "AETHERCORE_PLATFORM_KEY=guide-demo" in payload["snippets"]["backend_env"]
-    assert f"AETHERCORE_PLATFORM_SECRET={platform['host_secret']}" in payload["snippets"]["backend_env"]
-    assert "AETHERCORE_HOST_NAME=Guide Demo" in payload["snippets"]["backend_env"]
-    assert "AETHERCORE_HOST_CALLBACK_BASE_URL={{YOUR_PLATFORM_BASE_URL}}" in payload["snippets"]["backend_env"]
-    assert "{{YOUR_SETTINGS_IMPORT}}" in payload["snippets"]["backend_fastapi"]
+    assert payload["snippets"]["backend_env"] == ""
+    assert 'AETHERCORE_PLATFORM_KEY = "guide-demo"' in payload["snippets"]["backend_fastapi"]
+    assert f'AETHERCORE_PLATFORM_SECRET = "{platform["host_secret"]}"' in payload["snippets"]["backend_fastapi"]
     assert "{{YOUR_USER_RESOLVER}}" in payload["snippets"]["backend_fastapi"]
     assert '@router.post("/api/v1/aethercore/embed/bind")' in payload["snippets"]["backend_fastapi"]
-    assert "settings.AETHERCORE_PLATFORM_SECRET" in payload["snippets"]["backend_fastapi"]
-    assert "settings.AETHERCORE_HOST_CALLBACK_BASE_URL" in payload["snippets"]["backend_fastapi"]
+    assert "X-Aether-Platform-Secret" in payload["snippets"]["backend_fastapi"]
+    assert "AETHERCORE_HOST_CALLBACK_BASE_URL" in payload["snippets"]["backend_fastapi"]
     assert '"workbench_url": data.get("workbench_url")' in payload["snippets"]["backend_fastapi"]
+    auth_mode = next(item for item in payload["modes"] if item["mode_id"] == "production_authenticated")
+    assert any(s["snippet_id"] == "frontend_authenticated_same_origin" for s in auth_mode["snippets"])
+    assert any(s["snippet_id"] == "frontend_authenticated_cross_origin" for s in auth_mode["snippets"])
+    guest_mode = next(item for item in payload["modes"] if item["mode_id"] == "production_browser_guest")
+    assert any(s["snippet_id"] == "frontend_browser_guest_same_origin" for s in guest_mode["snippets"])
+    assert any(s["snippet_id"] == "frontend_browser_guest_cross_origin" for s in guest_mode["snippets"])
 
 
 def test_public_embed_loader_is_served_from_backend(tmp_path):

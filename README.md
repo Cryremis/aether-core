@@ -140,7 +140,7 @@ Host backend usually only needs one AetherCore base URL:
 Minimal example:
 
 ```html
-<script src="/static/aethercore-embed.js"></script>
+<script src="/api/v1/host/public/embed/aethercore-embed.js"></script>
 <script>
   window.mountAetherCore({
     platformKey: "your-platform-key",

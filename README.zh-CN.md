@@ -140,7 +140,7 @@ python run_dev.py build frontend
 最小示例：
 
 ```html
-<script src="/static/aethercore-embed.js"></script>
+<script src="/api/v1/host/public/embed/aethercore-embed.js"></script>
 <script>
   window.mountAetherCore({
     platformKey: "your-platform-key",
