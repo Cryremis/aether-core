@@ -1,22 +1,21 @@
-# AetherCore 通用接入规范
+# AetherCore 嵌入接入（可直接复制）
 
-目标：宿主平台只需要在 AetherCore 注册拿到 `platform_key` 和 `host_secret`，然后复制一段前端脚本和一个后端 bind 代理，即可获得与 POC 接近的浮球、右侧抽屉、加载动画和 iframe 工作台体验。
+这份文档只讲一件事：让你把 AetherCore 嵌入到已有系统里，并且尽量做到复制即用。
 
-## 推荐接入形态
+## 你需要准备什么
 
-统一为两段代码：
+- 你已经在 AetherCore 里注册了平台，拿到了：
+  - `platform_key`
+  - `host_secret`
+- 你的宿主后端可以新增一个 bind API（示例用 `/api/v1/aethercore/embed/bind`）。
+- 你有一个稳定的用户 ID（已有登录体系时直接用现有用户 ID）。
 
-1. 前端嵌入壳：负责浮球、抽屉、动画、iframe、会话 key 持久化。复制 `host-adapters/universal/aethercore-embed.js` 到宿主静态资源目录。
-2. 后端 bind 代理：负责保存平台密钥，读取当前登录用户，调用 AetherCore `/api/v1/host/bind`，把 `token` 和 `session_id` 返回给前端。
+## 第 1 步：前端粘贴这段
 
-不要在浏览器里直接保存或发送 `host_secret`。密钥只允许存在宿主后端。
-
-## 前端复制代码
-
-在宿主平台的全局布局页、公共模板页或 `</body>` 前加入：
+放在全局 Layout、公共模板页，或 `</body>` 前：
 
 ```html
-<script src="/static/aethercore-embed.js"></script>
+<script src="/api/v1/host/public/embed/aethercore-embed.js"></script>
 <script>
   window.mountAetherCore({
     platformKey: "your-platform-key",
@@ -31,41 +30,20 @@
 </script>
 ```
 
-如果宿主是 Vue/React/SPA，放在主布局组件挂载后执行即可；如果是传统多页应用，放到公共脚本里即可。
+## 第 2 步：后端加 bind 代理
 
-## 后端 bind 代理契约
-
-前端只调用宿主自己的接口：
+前端只调用你自己的后端：
 
 ```http
 POST /api/v1/aethercore/embed/bind
 Content-Type: application/json
 
 {
-  "conversation_key": "your-platform-user-stable-conversation-key"
+  "conversation_key": "stable-key-from-frontend"
 }
 ```
 
-宿主后端推荐至少配置这些环境变量：
-
-```dotenv
-AETHERCORE_API_BASE_URL=https://ac-backend.example.com
-AETHERCORE_PLATFORM_KEY=your-platform-key
-AETHERCORE_PLATFORM_SECRET=your-platform-secret
-AETHERCORE_HOST_NAME=Your Platform
-AETHERCORE_HOST_CALLBACK_BASE_URL=https://your-platform.example.com
-
-# Optional: only set this when the browser-facing workbench URL differs
-# from AETHERCORE_API_BASE_URL.
-# AETHERCORE_WORKBENCH_URL=https://ac.example.com
-```
-
-其中：
-
-- `AETHERCORE_API_BASE_URL` 用于宿主后端调用 AetherCore 后端接口。
-- `AETHERCORE_WORKBENCH_URL` 是可选覆盖项，仅当浏览器访问工作台的地址和 `AETHERCORE_API_BASE_URL` 不一致时才需要配置。
-
-宿主后端调用 AetherCore：
+你的后端再去调用 AetherCore：
 
 ```http
 POST {AETHERCORE_API_BASE_URL}/api/v1/host/bind
@@ -97,21 +75,104 @@ Content-Type: application/json
 }
 ```
 
-宿主后端返回给前端：
+返回给前端：
 
 ```json
 {
   "data": {
-    "token": "embed-token-from-aethercore",
-    "session_id": "session-id-from-aethercore",
+    "token": "embed-token",
+    "session_id": "session-id",
     "workbench_url": "https://ac.example.com/?embed_token=...&session_id=..."
   }
 }
 ```
 
-`aethercore-embed.js` 同时兼容 `{ token, session_id }`、`{ data: { token, session_id } }` 和带 `workbench_url` 的返回。
+## 第 3 步：环境变量
 
-## FastAPI 后端示例
+```dotenv
+AETHERCORE_API_BASE_URL=https://ac-backend.example.com
+AETHERCORE_PLATFORM_KEY=your-platform-key
+AETHERCORE_PLATFORM_SECRET=your-platform-secret
+AETHERCORE_HOST_NAME=Your Platform
+AETHERCORE_HOST_CALLBACK_BASE_URL=https://your-platform.example.com
+
+# 浏览器里 iframe 打开的工作台地址（可选；不配时默认用 AETHERCORE_API_BASE_URL）
+# AETHERCORE_WORKBENCH_URL=https://ac.example.com
+```
+
+## 同域 / 跨域怎么写（人话版）
+
+同域（页面和后端同一个域名）时：
+
+- script 用相对路径：`/api/v1/host/public/embed/aethercore-embed.js`
+- bind 用相对路径：`/api/v1/aethercore/embed/bind`
+
+跨域（页面域名和后端域名不一样）时：
+
+- script 用绝对地址：`https://api.example.com/api/v1/host/public/embed/aethercore-embed.js`
+- bind 用绝对地址：`https://api.example.com/api/v1/aethercore/embed/bind`
+
+跨域还需要你们后端正确配置 CORS 和认证策略。
+
+## Cookie 模式 vs Bearer 模式
+
+### Cookie 模式（常见于同域）
+
+前端不手动塞 token，浏览器自动带登录 Cookie。
+
+```js
+window.mountAetherCore({
+  platformKey: "your-platform-key",
+  bindUrl: "/api/v1/aethercore/embed/bind",
+  workbenchUrl: "https://ac.example.com",
+  credentials: "include",
+  getUserId: function () { return window.currentUser.id; }
+});
+```
+
+### Bearer 模式（常见于前后端分离）
+
+前端在 bind 请求里手动带 `Authorization`：
+
+```js
+window.mountAetherCore({
+  platformKey: "your-platform-key",
+  bindUrl: "https://api.example.com/api/v1/aethercore/embed/bind",
+  workbenchUrl: "https://ac.example.com",
+  credentials: "omit",
+  getUserId: function () { return window.currentUser.id; },
+  getBindRequest: async function (state, config) {
+    return {
+      url: config.bindUrl,
+      method: "POST",
+      credentials: "omit",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + localStorage.getItem("access_token")
+      },
+      body: {
+        conversation_key: state.conversationKey
+      }
+    };
+  }
+});
+```
+
+## SPA（Vue/React）放在哪里
+
+- 只在登录后全局 Layout 里初始化一次。
+- 如果已存在实例，不要重复 `mountAetherCore`。
+- 在登出或壳组件卸载时清理实例。
+
+简单判断示例：
+
+```js
+if (!window.__AETHERCORE_EMBED_INSTANCE__) {
+  window.__AETHERCORE_EMBED_INSTANCE__ = window.mountAetherCore({...});
+}
+```
+
+## FastAPI bind 代理示例
 
 ```python
 from fastapi import APIRouter, HTTPException, Request
@@ -154,51 +215,24 @@ async def bind_aethercore(payload: AetherCoreBindRequest, request: Request):
     workbench_base_url = (
         getattr(settings, "AETHERCORE_WORKBENCH_URL", "") or settings.AETHERCORE_API_BASE_URL
     ).rstrip("/")
-    workbench_url = f"{workbench_base_url}?embed_token={data['token']}&session_id={data['session_id']}"
     return {
         "data": {
             "token": data["token"],
             "session_id": data["session_id"],
-            "workbench_url": workbench_url,
+            "workbench_url": f"{workbench_base_url}?embed_token={data['token']}&session_id={data['session_id']}",
         }
     }
 ```
 
-## 工具注入规范
+## 常见报错
 
-宿主如果希望 AetherCore 调宿主工具，在 `tools` 里声明工具：
+### `failed to load aethercore embed script`
 
-```json
-{
-  "name": "search_projects",
-  "description": "搜索当前用户可见项目",
-  "endpoint": "/api/v1/agent/tools/search_projects/invoke",
-  "method": "POST",
-  "input_schema": {
-    "type": "object",
-    "properties": { "query": { "type": "string" } },
-    "required": ["query"]
-  },
-  "requires_auth": true,
-  "auth_inject": true
-}
-```
+优先检查：
 
-推荐先只接入空工具列表，确认浮球和会话工作正常后，再逐个接入工具。工具 endpoint 使用相对路径时，AetherCore 会结合 `context.extras.host_callback_base_url` 调回宿主。
+1. 浏览器访问 `/api/v1/host/public/embed/aethercore-embed.js` 是否返回 200。
+2. 你的网关/Nginx 是否把这个路径正确转发到了后端。
+3. 跨域时 `script src` 是否写成了正确的绝对地址。
+4. HTTPS 页面里是否错误引用了 HTTP 脚本地址。
+5. 后端是否有鉴权拦截了这个公开脚本路径。
 
-## POC 和 Dash 当前差异
-
-POC 当前实现是 Vue 组件，UI 更接近目标形态：浮球、右侧抽屉、可拖拽宽度、iframe 加载渐显。Dash 当前实现是原生 JS 组件，初始化链路更适合传统多页应用，但配置写死较多。
-
-统一后的标准做法：
-
-- UI 由 `aethercore-embed.js` 负责，宿主不再重复写抽屉、动画、iframe、resize 逻辑。
-- 宿主只保留 `bindUrl`、`workbenchUrl`、`platformKey`、`getUserId` 这些参数。
-- 后端只保留一个 bind 代理，平台密钥不进入前端。
-- POC、Dash 和新平台都返回同样的 `{ data: { token, session_id } }`。
-
-## 推荐落点
-
-- Vue/React SPA：在 App 主布局或登录后的全局 Layout 初始化。
-- 传统多页应用：在公共 `common.js` 或公共 HTML 模板底部初始化。
-- 管理后台类平台：建议所有登录后页面都挂载，未登录页面不要挂载。
