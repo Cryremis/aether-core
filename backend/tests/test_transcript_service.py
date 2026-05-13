@@ -257,3 +257,58 @@ def test_transcript_service_keeps_committed_message_identity_stable():
     assert transcript[0]["id"] == "m_user_1"
     assert transcript[0]["role"] == "user"
     assert transcript[0]["content"] == "first"
+
+
+def test_transcript_service_builds_assistant_item_from_blocks():
+    item = transcript_service.assistant_item_from_blocks(
+        message_id="assistant_live_1",
+        blocks=[
+            {"id": "reasoning_1", "kind": "reasoning", "content": "thinking"},
+            {"id": "content_1", "kind": "content", "content": "done", "status": "done"},
+            {
+                "id": "tool_1",
+                "kind": "tool",
+                "title": "echo",
+                "meta": "bash",
+                "argumentsText": '{"command":"echo hi"}',
+                "outputText": '{"stdout":"hi"}',
+                "status": "done",
+            },
+            {"id": "elapsed_1", "kind": "elapsed", "elapsed_ms": 123},
+        ],
+        elapsed_ms=None,
+        streaming=False,
+    )
+
+    assert item["id"] == "assistant_live_1"
+    assert item["role"] == "assistant"
+    assert item["elapsedMs"] == 123
+    assert item["blocks"][0]["kind"] == "reasoning"
+    assert item["blocks"][1]["kind"] == "content"
+    assert item["blocks"][2]["kind"] == "tool"
+
+
+def test_transcript_service_filters_message_bound_items_by_message_id():
+    transcript = [
+        {
+            "role": "user",
+            "message_id": "m_user_1",
+            "id": "m_user_1",
+        },
+        {
+            "role": "assistant",
+            "id": "m_assistant_1",
+        },
+        {
+            "role": "system_event",
+            "id": "system-1",
+        },
+        {
+            "role": "assistant",
+            "id": "m_assistant_2",
+        },
+    ]
+
+    filtered = transcript_service.filter_message_bound_items(transcript, {"m_user_1", "m_assistant_2"})
+
+    assert [item["id"] for item in filtered] == ["m_user_1", "m_assistant_2"]

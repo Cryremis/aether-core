@@ -25,10 +25,18 @@ def make_runtime_config(*, extra_body: dict | None = None) -> RuntimeLlmConfig:
 
 
 class FakeResponse:
-    def __init__(self, *, status_code: int = 200, json_data: dict | None = None, lines: list[str] | None = None):
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        json_data: dict | None = None,
+        lines: list[str] | None = None,
+        line_error: Exception | None = None,
+    ):
         self.status_code = status_code
         self._json_data = json_data or {}
         self._lines = lines or []
+        self._line_error = line_error
         self.request = httpx.Request("POST", "http://example.com/v1/chat/completions")
 
     @property
@@ -52,6 +60,8 @@ class FakeResponse:
     async def aiter_lines(self):
         for line in self._lines:
             yield line
+        if self._line_error is not None:
+            raise self._line_error
 
 
 class FakeStreamContext:
@@ -174,3 +184,32 @@ def test_create_chat_completion_retries_without_tools_on_gateway_timeout(monkeyp
     assert len(FakeAsyncClient.post_payloads) == 2
     assert "tools" in FakeAsyncClient.post_payloads[0]
     assert "tools" not in FakeAsyncClient.post_payloads[1]
+
+
+def test_stream_chat_completion_retries_once_when_stream_breaks_before_any_chunk(monkeypatch):
+    FakeAsyncClient.reset()
+    transport_error = httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+    FakeAsyncClient.stream_responses = [
+        FakeResponse(line_error=transport_error),
+        FakeResponse(
+            lines=[
+                'data: {"choices":[{"delta":{"content":"hello"}}]}',
+                "data: [DONE]",
+            ]
+        ),
+    ]
+    monkeypatch.setattr("app.services.llm_client.httpx.AsyncClient", FakeAsyncClient)
+
+    client = LlmClient()
+    config = make_runtime_config()
+
+    async def collect() -> list[dict]:
+        items: list[dict] = []
+        async for chunk in client.stream_chat_completion(config, [{"role": "user", "content": "hi"}], []):
+            items.append(chunk)
+        return items
+
+    chunks = asyncio.run(collect())
+
+    assert chunks == [{"choices": [{"delta": {"content": "hello"}}]}]
+    assert len(FakeAsyncClient.stream_payloads) == 2

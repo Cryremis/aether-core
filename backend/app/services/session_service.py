@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.sandbox.manager import sandbox_manager
 from app.services.context.bootstrap import configure_context_runtime
 from app.services.session_types import AgentSession
+from app.services.transcript_service import transcript_service
 
 
 class SessionService:
@@ -108,6 +109,7 @@ class SessionService:
             host_name=payload.get("host_name", ""),
             baseline_root=payload.get("baseline_root", ""),
             messages=payload.get("messages", []),
+            transcript=payload.get("transcript", transcript_service.build_persisted_transcript(payload.get("messages", []))),
             host_context=payload.get("host_context", {}),
             platform_files=payload.get("platform_files", []),
             platform_skills=payload.get("platform_skills", []),
@@ -140,6 +142,7 @@ class SessionService:
             "host_name": session.host_name,
             "baseline_root": session.baseline_root,
             "messages": session.messages,
+            "transcript": session.transcript,
             "host_context": session.host_context,
             "platform_files": session.platform_files,
             "platform_skills": session.platform_skills,

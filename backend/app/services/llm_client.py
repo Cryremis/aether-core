@@ -14,6 +14,7 @@ class LlmClient:
     """OpenAI 兼容协议客户端。"""
 
     _TOOL_RETRY_STATUS_CODES = {400, 404, 422, 500, 502, 503, 504}
+    _STREAM_PRELUDE_RETRY_LIMIT = 1
 
     def _endpoint(self, config: RuntimeLlmConfig) -> str:
         if not config.api_key:
@@ -85,22 +86,33 @@ class LlmClient:
         config: RuntimeLlmConfig,
         payload: dict[str, Any],
     ) -> AsyncGenerator[dict[str, Any], None]:
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
-            async with client.stream("POST", self._endpoint(config), headers=self._headers(config), json=payload) as response:
-                if response.is_error:
-                    await response.aread()
-                    response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data or data == "[DONE]":
-                        continue
-                    try:
-                        parsed = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    yield parsed
+        prelude_retry_count = 0
+        while True:
+            streamed_any_chunk = False
+            try:
+                async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
+                    async with client.stream("POST", self._endpoint(config), headers=self._headers(config), json=payload) as response:
+                        if response.is_error:
+                            await response.aread()
+                            response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line or not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if not data or data == "[DONE]":
+                                continue
+                            try:
+                                parsed = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            streamed_any_chunk = True
+                            yield parsed
+                return
+            except httpx.TransportError:
+                # 仅在还未收到任何 chunk 时重试，避免重放已生成内容导致重复输出。
+                if streamed_any_chunk or prelude_retry_count >= self._STREAM_PRELUDE_RETRY_LIMIT:
+                    raise
+                prelude_retry_count += 1
 
     async def create_chat_completion(
         self,

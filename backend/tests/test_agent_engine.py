@@ -96,7 +96,8 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
     assert result_events[0]["payload"]["subtype"] == "success"
     assert result_events[0]["payload"]["result"] == "this is the real model answer"
     assert session.messages[-1]["content"] == "this is the real model answer"
-    assert session.messages[-1]["blocks"][-1]["kind"] == "content"
+    assert session.transcript[-1]["role"] == "assistant"
+    assert session.transcript[-1]["blocks"][-1]["kind"] == "content"
     event_types = [item["type"] for item in events]
     assert "workboard_snapshot" in event_types
     assert "elicitation_snapshot" in event_types
@@ -381,7 +382,7 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
     assert result_events[0]["payload"]["subtype"] == "success"
     assert result_events[0]["payload"]["result"] == "finished after repeated tool calls"
     assert all(item["payload"].get("subtype") != "error_stalled" for item in result_events)
-    assert any(block["kind"] == "tool" for block in session.messages[-1]["blocks"])
+    assert any(block["kind"] == "tool" for block in session.transcript[-1]["blocks"])
     assert any(message.get("tool_calls") for message in session.messages if message.get("role") == "assistant")
     assert any(message.get("role") == "tool" for message in session.messages)
 
@@ -533,7 +534,7 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
     assert event_types.index("runtime_recreated") < event_types.index("tool_finished")
     assert any(
         block.get("kind") == "runtime_notice" and block.get("eventType") == "runtime_recreated"
-        for block in session.messages[-1]["blocks"]
+        for block in session.transcript[-1]["blocks"]
     )
 
 
@@ -765,7 +766,7 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
     assert all(item["type"] != "aborted" for item in second_events)
 
 
-def test_agent_engine_persists_blocks_when_tool_requests_user_input(monkeypatch, tmp_path):
+def test_agent_engine_persists_transcript_when_tool_requests_user_input(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     rounds = {"value": 0}
 
@@ -824,15 +825,11 @@ def test_agent_engine_persists_blocks_when_tool_requests_user_input(monkeypatch,
 
     completed = [item for item in events if item["type"] == "completed"]
     assert completed and completed[-1]["payload"]["subtype"] == "awaiting_user_input"
-    visible_assistant = [
-        item
-        for item in session.messages
-        if item.get("role") == "assistant" and item.get("visible_in_transcript", True) is True and item.get("blocks")
-    ]
-    assert visible_assistant
-    last_blocks = visible_assistant[-1]["blocks"]
+    assert session.transcript
+    last_blocks = session.transcript[-1]["blocks"]
     assert any(block.get("kind") == "tool" for block in last_blocks)
-    assert any(block.get("kind") == "elapsed" for block in last_blocks)
+    assert session.messages[-1].get("role") == "assistant"
+    assert session.messages[-1].get("visible_in_transcript", True) is True
 
 
 def test_agent_engine_returns_partial_answer_when_stream_interrupted_after_content(monkeypatch, tmp_path):

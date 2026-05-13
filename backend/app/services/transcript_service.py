@@ -5,10 +5,21 @@ from typing import Any
 
 from app.services.tool_display_service import tool_display_service
 
+
 class TranscriptService:
-    """Build a stable, UI-oriented transcript from raw session messages."""
+    """Manage persisted UI transcript projections."""
+
+    _SYSTEM_EVENT_TITLES: dict[str, str] = {
+        "context_compacted": "上下文已压缩",
+        "context_recovered": "上下文已恢复",
+        "context_warning": "上下文接近上限",
+        "context_blocked": "上下文已阻塞",
+        "runtime_created": "沙箱已创建",
+        "runtime_recreated": "沙箱已重建",
+    }
 
     def build_chat_transcript(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Legacy transcript projection used only for old sessions migration."""
         transcript: list[dict[str, Any]] = []
         open_tool_blocks: dict[str, tuple[int, int]] = {}
         pending_tool_results: dict[str, dict[str, Any]] = {}
@@ -29,26 +40,7 @@ class TranscriptService:
                 continue
 
             if role == "elicitation_response":
-                answers = message.get("answers")
-                answers_list = answers if isinstance(answers, list) else []
-                transcript.append(
-                    {
-                        "id": str(message.get("message_id") or f"elicitation-response-{index}"),
-                        "role": "elicitation_response",
-                        "request_id": str(message.get("request_id") or ""),
-                        "title": str(message.get("title") or "问题已回复"),
-                        "summary": str(message.get("summary") or ""),
-                        "answers": [
-                            {
-                                "id": str(item.get("id") or f"answer-{index}-{answer_index}"),
-                                "header": str(item.get("header") or "问题"),
-                                "value": str(item.get("value") or "未填写"),
-                            }
-                            for answer_index, item in enumerate(answers_list)
-                            if isinstance(item, dict)
-                        ],
-                    }
-                )
+                transcript.append(self.transcript_item_from_committed_message(message, index=index))
                 continue
 
             if role == "assistant":
@@ -89,7 +81,6 @@ class TranscriptService:
                     }
                     continue
 
-                # Orphan tool result: still keep it visible by converting to a standalone assistant tool card.
                 orphan_display = tool_display_service.resolve(str(message.get("tool_name") or "tool"), {})
                 transcript.append(
                     {
@@ -111,10 +102,166 @@ class TranscriptService:
                     }
                 )
 
-        # Any still-pending tool results are dropped from UI transcript when no matching assistant tool block exists.
-        # This avoids dangling shell cards rendered far away from their reasoning/content context.
-
         return transcript
+
+    def build_persisted_transcript(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        transcript: list[dict[str, Any]] = []
+        for index, message in enumerate(messages):
+            if not self._is_visible(message):
+                continue
+            role = str(message.get("role") or "")
+            if role == "user":
+                transcript.append(self.transcript_item_from_committed_message(message, index=index))
+                continue
+            if role == "elicitation_response":
+                transcript.append(self.transcript_item_from_committed_message(message, index=index))
+                continue
+            if role == "assistant":
+                assistant_item = self._assistant_from_message(message, index=index)
+                if assistant_item is not None:
+                    transcript.append(assistant_item)
+        return transcript
+
+    def transcript_item_from_committed_message(self, message: dict[str, Any], *, index: int = 0) -> dict[str, Any]:
+        role = str(message.get("role") or "")
+        if role == "elicitation_response":
+            answers = message.get("answers")
+            answers_list = answers if isinstance(answers, list) else []
+            return {
+                "id": str(message.get("message_id") or f"elicitation-response-{index}"),
+                "role": "elicitation_response",
+                "request_id": str(message.get("request_id") or ""),
+                "title": str(message.get("title") or "问题已回复"),
+                "summary": str(message.get("summary") or ""),
+                "answers": [
+                    {
+                        "id": str(item.get("id") or f"answer-{index}-{answer_index}"),
+                        "header": str(item.get("header") or "问题"),
+                        "value": str(item.get("value") or "未填写"),
+                    }
+                    for answer_index, item in enumerate(answers_list)
+                    if isinstance(item, dict)
+                ],
+            }
+
+        return {
+            "id": str(message.get("message_id") or f"user-{index}"),
+            "role": "user",
+            "content": str(message.get("content") or ""),
+        }
+
+    def assistant_item_from_blocks(
+        self,
+        *,
+        message_id: str,
+        blocks: list[dict[str, Any]],
+        elapsed_ms: int | None,
+        streaming: bool = False,
+        response_started_at: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_blocks: list[dict[str, Any]] = []
+        normalized_elapsed = elapsed_ms
+
+        for raw_block in blocks:
+            if not isinstance(raw_block, dict):
+                continue
+            kind = str(raw_block.get("kind") or "")
+            if kind == "elapsed":
+                elapsed_value = raw_block.get("elapsed_ms")
+                if isinstance(elapsed_value, int):
+                    normalized_elapsed = elapsed_value
+                elif isinstance(elapsed_value, float):
+                    normalized_elapsed = int(elapsed_value)
+                continue
+            if kind == "content":
+                normalized_blocks.append(
+                    {
+                        "id": str(raw_block.get("id") or f"{message_id}-content-{len(normalized_blocks)}"),
+                        "kind": "content",
+                        "content": str(raw_block.get("content") or ""),
+                        "status": "aborted"
+                        if str(raw_block.get("status") or "") == "aborted"
+                        else ("streaming" if streaming and str(raw_block.get("status") or "") == "streaming" else "done"),
+                    }
+                )
+                continue
+            if kind == "reasoning":
+                normalized_blocks.append(
+                    {
+                        "id": str(raw_block.get("id") or f"{message_id}-reasoning-{len(normalized_blocks)}"),
+                        "kind": "reasoning",
+                        "content": str(raw_block.get("content") or ""),
+                    }
+                )
+                continue
+            if kind == "runtime_notice":
+                normalized_blocks.append(
+                    {
+                        "id": str(raw_block.get("id") or f"{message_id}-runtime-{len(normalized_blocks)}"),
+                        "kind": "runtime_notice",
+                        "eventType": str(raw_block.get("eventType") or "runtime_recreated"),
+                        "title": str(raw_block.get("title") or "沙箱已重建"),
+                        "detail": str(raw_block.get("detail") or ""),
+                    }
+                )
+                continue
+            if kind == "tool":
+                normalized_blocks.append(
+                    {
+                        "id": str(raw_block.get("id") or f"{message_id}-tool-{len(normalized_blocks)}"),
+                        "kind": "tool",
+                        "title": str(raw_block.get("title") or "tool"),
+                        "meta": str(raw_block.get("meta") or "tool"),
+                        "argumentsText": str(raw_block.get("argumentsText") or ""),
+                        "outputText": str(raw_block.get("outputText") or ""),
+                        "status": self._normalize_tool_status(raw_block.get("status")),
+                    }
+                )
+
+        return {
+            "id": message_id,
+            "role": "assistant",
+            "blocks": normalized_blocks,
+            "elapsedMs": normalized_elapsed,
+            "streaming": streaming,
+            "responseStartedAt": response_started_at,
+        }
+
+    def system_event_item(
+        self,
+        *,
+        event_type: str,
+        detail: str | None = None,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "id": item_id or f"system-event-{event_type}",
+            "role": "system_event",
+            "title": self._SYSTEM_EVENT_TITLES.get(event_type, event_type),
+            "detail": detail,
+            "eventType": event_type,
+        }
+
+    def append_item(self, transcript: list[dict[str, Any]], item: dict[str, Any]) -> list[dict[str, Any]]:
+        item_id = str(item.get("id") or "")
+        if item_id:
+            for index, current in enumerate(transcript):
+                if str(current.get("id") or "") == item_id:
+                    next_transcript = list(transcript)
+                    next_transcript[index] = item
+                    return next_transcript
+        return [*transcript, item]
+
+    def filter_message_bound_items(self, transcript: list[dict[str, Any]], allowed_message_ids: set[str]) -> list[dict[str, Any]]:
+        filtered: list[dict[str, Any]] = []
+        for item in transcript:
+            item_id = str(item.get("id") or "")
+            role = str(item.get("role") or "")
+            if role in {"user", "assistant", "elicitation_response"}:
+                if item_id in allowed_message_ids:
+                    filtered.append(item)
+                continue
+        return filtered
 
     def _assistant_from_message(self, message: dict[str, Any], *, index: int) -> dict[str, Any] | None:
         blocks = message.get("blocks")
@@ -199,7 +346,10 @@ class TranscriptService:
                 if not isinstance(function, dict):
                     continue
                 tool_id = str(tool_call.get("id") or f"call-{index}-{offset}")
-                display = tool_display_service.resolve(str(function.get("name") or "tool"), self._parse_arguments(function.get("arguments")))
+                display = tool_display_service.resolve(
+                    str(function.get("name") or "tool"),
+                    self._parse_arguments(function.get("arguments")),
+                )
                 normalized_blocks.append(
                     {
                         "id": tool_id,
@@ -266,9 +416,7 @@ class TranscriptService:
     def _is_visible(self, message: dict[str, Any]) -> bool:
         if bool(message.get("ephemeral")):
             return False
-        if message.get("visible_in_transcript") is False:
-            return False
-        return True
+        return message.get("visible_in_transcript") is not False
 
     def _normalize_tool_status(self, status: Any) -> str:
         value = str(status or "")

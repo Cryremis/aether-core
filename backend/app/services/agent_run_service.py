@@ -13,6 +13,7 @@ from app.schemas.agent import AgentEvent
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.tool_execution_service import tool_execution_service
+from app.services.transcript_service import transcript_service
 
 
 def _utcnow_iso() -> str:
@@ -160,6 +161,7 @@ class AgentRunService:
                 )
                 self._apply_event_to_active_view(session, completed_event)
                 await self._publish(run_id, completed_event)
+            self._finalize_transcript(session)
             session.finish_run(run_id)
             session.active_run_view = None
             session_service.persist(session)
@@ -289,6 +291,39 @@ class AgentRunService:
             assistant["elapsedMs"] = int(payload.get("elapsed_ms") or self._active_elapsed_ms(session))
 
         session_service.persist(session)
+
+    def _finalize_transcript(self, session: AgentSession) -> None:
+        allowed_message_ids = {
+            str(message.get("message_id") or "")
+            for message in session.messages
+            if str(message.get("role") or "") in {"user", "assistant", "elicitation_response"}
+        }
+        transcript = transcript_service.filter_message_bound_items(session.transcript, allowed_message_ids)
+
+        active_view = session.active_run_view or {}
+        assistant = active_view.get("assistant")
+        if isinstance(assistant, dict):
+            blocks = assistant.get("blocks")
+            if isinstance(blocks, list) and blocks:
+                persisted_assistant_ids = {
+                    str(item.get("id") or "")
+                    for item in transcript
+                    if str(item.get("role") or "") == "assistant"
+                }
+                live_assistant_id = str(assistant.get("id") or f"live-{active_view.get('run_id') or uuid.uuid4().hex}")
+                if live_assistant_id in persisted_assistant_ids:
+                    session.transcript = transcript
+                    return
+                assistant_item = transcript_service.assistant_item_from_blocks(
+                    message_id=live_assistant_id,
+                    blocks=blocks,
+                    elapsed_ms=assistant.get("elapsedMs") if isinstance(assistant.get("elapsedMs"), int) else None,
+                    streaming=bool(assistant.get("streaming")),
+                    response_started_at=str(assistant.get("response_started_at") or "") or None,
+                )
+                transcript = transcript_service.append_item(transcript, assistant_item)
+
+        session.transcript = transcript
 
     def _find_or_create_block(self, blocks: list[dict[str, Any]], *, kind: str, prefix: str) -> dict[str, Any]:
         for block in reversed(blocks):

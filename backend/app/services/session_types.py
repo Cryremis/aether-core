@@ -47,6 +47,7 @@ class AgentSession:
     host_name: str = ""
     baseline_root: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
+    transcript: list[dict[str, Any]] = field(default_factory=list)
     host_context: dict[str, Any] = field(default_factory=dict)
     platform_files: list[dict[str, Any]] = field(default_factory=list)
     platform_skills: list[dict[str, Any]] = field(default_factory=list)

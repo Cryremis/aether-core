@@ -14,6 +14,7 @@ from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.store import store_service
 from app.services.timeline_service import timeline_service
+from app.services.transcript_service import transcript_service
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
@@ -159,6 +160,10 @@ async def respond_to_elicitation(
             turn_index=turn_index + 1,
         )
         session.messages.append(committed_message)
+        session.transcript = transcript_service.append_item(
+            session.transcript,
+            transcript_service.transcript_item_from_committed_message(committed_message),
+        )
         session.touch()
         session_service.persist(session)
     else:

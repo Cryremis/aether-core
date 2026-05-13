@@ -26,6 +26,7 @@ from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.tool_service import tool_service
 from app.services.tool_display_service import tool_display_service
+from app.services.transcript_service import transcript_service
 
 
 class AgentEngine:
@@ -67,12 +68,22 @@ class AgentEngine:
         message = context_message_adapter.make_assistant_message(
             content=content if content else None,
             tool_calls=tool_calls,
-            blocks=blocks if blocks else None,
+            blocks=blocks if blocks and visible_in_transcript else None,
             turn_index=turn_index,
         )
         if not visible_in_transcript:
             message["visible_in_transcript"] = False
         session.messages.append(message)
+        if visible_in_transcript:
+            session.transcript = transcript_service.append_item(
+                session.transcript,
+                transcript_service.assistant_item_from_blocks(
+                    message_id=str(message.get("message_id") or ""),
+                    blocks=blocks,
+                    elapsed_ms=None,
+                    streaming=False,
+                ),
+            )
         session_service.persist(session)
 
     def _append_runtime_notice_block(self, blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
@@ -306,6 +317,11 @@ class AgentEngine:
             message_count=len(session.messages),
         )
         if committed_user_message is not None and visible_user_message:
+            session.transcript = transcript_service.append_item(
+                session.transcript,
+                transcript_service.transcript_item_from_committed_message(committed_user_message),
+            )
+            session_service.persist(session)
             yield make_event(
                 session,
                 "message_committed",

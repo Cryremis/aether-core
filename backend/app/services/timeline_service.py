@@ -57,6 +57,16 @@ class TimelineService:
         self._clone_workspace(source_session, new_session)
         self._clone_host_and_assets(source_session, new_session)
         new_session.messages = forked_messages
+        allowed_message_ids = {
+            str(message.get("message_id") or "")
+            for message in forked_messages
+            if str(message.get("role") or "") in {"user", "assistant", "elicitation_response"}
+        }
+        new_session.transcript = [
+            copy.deepcopy(item)
+            for item in source_session.transcript
+            if str(item.get("id") or "") in allowed_message_ids
+        ]
         new_session.allow_network = source_session.allow_network
         new_session.message_schema_version = source_session.message_schema_version
         new_session.context_state = copy.deepcopy(source_session.context_state)
@@ -136,6 +146,16 @@ class TimelineService:
 
         before_count = len(session.messages)
         session.messages = copy.deepcopy(session.messages[: anchor_index + 1])
+        allowed_message_ids = {
+            str(message.get("message_id") or "")
+            for message in session.messages
+            if str(message.get("role") or "") in {"user", "assistant", "elicitation_response"}
+        }
+        session.transcript = [
+            copy.deepcopy(item)
+            for item in session.transcript
+            if str(item.get("id") or "") in allowed_message_ids
+        ]
         rerun_message_id = anchor_message_id
         if edited_content is not None:
             session.messages[anchor_index]["content"] = rerun_prompt
