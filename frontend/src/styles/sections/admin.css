@@ -289,6 +289,110 @@
   font-size: 12px;
 }
 
+.platform-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.platform-card__meta code,
+.platform-runtime-image__hint code {
+  display: inline-block;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.85);
+  border: 1px solid rgba(226, 232, 240, 0.85);
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  word-break: break-all;
+}
+
+.platform-runtime-image__hint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.platform-runtime-spec {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.72);
+  border: 1px solid rgba(226, 232, 240, 0.85);
+}
+
+.platform-runtime-spec__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.platform-runtime-spec__grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.platform-runtime-spec__grid code {
+  display: inline-block;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.85);
+  color: #1e293b;
+}
+
+.platform-runtime-spec__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.platform-runtime-spec__section strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.platform-runtime-spec__section p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #475569;
+}
+
+.platform-runtime-spec__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.platform-runtime-spec__chips code {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.85);
+  color: #334155;
+}
+
+.platform-runtime-spec__code {
+  margin: 0;
+  padding: 14px;
+  border-radius: 14px;
+  background: #0f172a;
+  color: #e2e8f0;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 /* --- Bento Grid 配置面板 (LLM + 文件管理器) --- */
 .epic-bento-grid {
   display: grid;
@@ -299,8 +403,7 @@
 
 @media (min-width: 1100px) {
   .epic-bento-grid {
-    grid-template-columns: minmax(360px, 1fr) minmax(600px, 2.2fr);
-    grid-template-rows: auto 1fr;
+    grid-template-columns: minmax(380px, 1.92fr) minmax(760px, 1.08fr);
     align-items: stretch;
   }
 
@@ -310,13 +413,8 @@
   }
 
   .epic-bento-card:nth-child(2) {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
-  .epic-bento-card:nth-child(3) {
     grid-column: 2;
-    grid-row: 1 / 3;
+    grid-row: 1;
   }
 }
 
@@ -326,6 +424,133 @@
   padding: 24px;
   height: 100%;
   min-height: 500px;
+}
+
+.epic-bento-card--settings,
+.epic-bento-card--baseline {
+  min-height: 720px;
+}
+
+.platform-settings-workbench {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.platform-settings-workbench__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px 16px;
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(248, 250, 252, 0.92) 0%, rgba(255, 255, 255, 0.88) 100%);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+}
+
+.platform-settings-workbench__platform {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(191, 219, 254, 0.75);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.platform-settings-workbench__platform span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.platform-settings-workbench__platform strong {
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.platform-settings-workbench__platform code {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(239, 246, 255, 0.95);
+  border: 1px solid rgba(191, 219, 254, 0.95);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  word-break: break-all;
+}
+
+.platform-settings-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.platform-settings-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  background: rgba(255, 255, 255, 0.72);
+  color: #475569;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.24s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.24s ease, background 0.24s ease;
+}
+
+.platform-settings-tab span {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.platform-settings-tab small {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #64748b;
+}
+
+.platform-settings-tab:hover {
+  transform: translateY(-2px);
+  border-color: rgba(147, 197, 253, 0.95);
+  background: #ffffff;
+  box-shadow: 0 14px 28px -18px rgba(37, 99, 235, 0.35);
+}
+
+.platform-settings-tab.is-active {
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.98) 0%, rgba(255, 255, 255, 1) 100%);
+  border-color: rgba(96, 165, 250, 0.95);
+  box-shadow:
+    0 0 0 3px rgba(59, 130, 246, 0.08),
+    0 18px 34px -24px rgba(37, 99, 235, 0.36);
+}
+
+.platform-settings-workbench__panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  padding: 20px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(248, 250, 252, 0.88) 100%);
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  overflow: hidden;
 }
 
 /* --- LLM 面板特化 --- */
@@ -458,6 +683,59 @@
   padding-top: 16px;
   display: flex;
   gap: 12px;
+}
+
+.platform-runtime-upload {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 40%),
+    linear-gradient(135deg, rgba(248, 250, 252, 0.92) 0%, rgba(255, 255, 255, 0.96) 100%);
+  border: 1px solid rgba(191, 219, 254, 0.88);
+}
+
+.platform-runtime-upload__content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.platform-runtime-upload__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #2563eb;
+}
+
+.platform-runtime-upload__content strong {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.platform-runtime-upload__content p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #64748b;
+}
+
+.platform-runtime-upload__button {
+  min-width: 132px;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 12px;
+  box-shadow: 0 14px 28px -18px rgba(37, 99, 235, 0.42);
+}
+
+.platform-runtime-upload__button span {
+  white-space: nowrap;
 }
 
 /* --- 资源管理器特化 --- */
@@ -699,6 +977,22 @@
   .management-console__user-controls {
     width: 100%;
     justify-content: space-between;
+  }
+  .platform-settings-workbench__header,
+  .platform-runtime-upload {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .platform-settings-tabs {
+    grid-template-columns: 1fr;
+  }
+  .epic-bento-card,
+  .epic-bento-card--settings,
+  .epic-bento-card--baseline {
+    min-height: auto;
+  }
+  .platform-settings-workbench__panel {
+    padding: 16px;
   }
 }
 

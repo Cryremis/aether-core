@@ -225,6 +225,152 @@ def test_platform_integration_guide_returns_expected_snippets(tmp_path):
     assert any(s["snippet_id"] == "frontend_browser_guest_cross_origin" for s in guest_mode["snippets"])
 
 
+def test_platform_admin_can_update_runtime_image_and_recycle_runtimes(tmp_path, monkeypatch):
+    initialize_isolated_runtime(tmp_path)
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="image-config-demo",
+        display_name="Image Config Demo",
+        host_type="embedded",
+        description="platform image config test",
+        owner_user_id=admin.user_id,
+    )
+
+    observed: dict[str, object] = {}
+
+    async def fake_collect_platform_runtimes(platform_id: int, *, reason: str) -> int:
+        observed["platform_id"] = platform_id
+        observed["reason"] = reason
+        return 3
+
+    monkeypatch.setattr(
+        "app.api.routes.platform_runtime_images.session_runtime_service.collect_platform_runtimes",
+        fake_collect_platform_runtimes,
+    )
+
+    client = TestClient(app)
+    response = client.put(
+        f"/api/v1/platform-runtime-images/platform/{platform['platform_id']}",
+        headers={"Authorization": f"Bearer {login.token}"},
+        json={"image": "registry.example.com/aether/platform:2026.05.12"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["custom_image"] == "registry.example.com/aether/platform:2026.05.12"
+    assert payload["resolved_image"] == "registry.example.com/aether/platform:2026.05.12"
+    assert payload["recycled_runtime_count"] == 3
+    assert observed["platform_id"] == platform["platform_id"]
+    assert observed["reason"] == "platform_image_updated"
+
+    refreshed = store_service.get_platform_by_id(platform["platform_id"])
+    assert refreshed is not None
+    assert refreshed["sandbox_image"] == "registry.example.com/aether/platform:2026.05.12"
+
+
+def test_platform_runtime_image_guide_returns_build_contract(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="image-guide-demo",
+        display_name="Image Guide Demo",
+        host_type="embedded",
+        description="platform image guide test",
+        owner_user_id=admin.user_id,
+    )
+
+    client = TestClient(app)
+    response = client.get(
+        f"/api/v1/platform-runtime-images/platform/{platform['platform_id']}/guide",
+        headers={"Authorization": f"Bearer {login.token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["display_name"] == "Image Guide Demo"
+    assert payload["build_spec"]["target_os"] == "linux"
+    assert payload["build_spec"]["target_arch"] == "amd64"
+    assert "/workspace/work" in payload["build_spec"]["required_directories"]
+    assert "AETHER_WORK_DIR" in payload["build_spec"]["required_env_vars"]
+    assert "docker save your-image:tag -o platform-image.tar" in "\n".join(payload["build_spec"]["build_steps"])
+    assert "FROM ubuntu:24.04" in payload["build_spec"]["sample_dockerfile"]
+
+
+def test_platform_admin_can_upload_runtime_image_and_enable_it(tmp_path, monkeypatch):
+    initialize_isolated_runtime(tmp_path)
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="image-upload-demo",
+        display_name="Image Upload Demo",
+        host_type="embedded",
+        description="platform image upload test",
+        owner_user_id=admin.user_id,
+    )
+
+    observed: dict[str, object] = {}
+
+    async def fake_publish(platform_id: int, upload_file):
+        observed["platform_id"] = platform_id
+        observed["filename"] = upload_file.filename
+        return platform_runtime_image_service.update_image(platform_id, "registry.example.com/aether/platform:upload")
+
+    async def fake_collect_platform_runtimes(platform_id: int, *, reason: str) -> int:
+        observed["collect_reason"] = reason
+        return 2
+
+    async def fake_cleanup_replaced_image(image: str, *, keep_image: str) -> None:
+        observed["cleanup_image"] = image
+        observed["cleanup_keep_image"] = keep_image
+
+    from app.services.platform_runtime_image_service import platform_runtime_image_service
+
+    monkeypatch.setattr(
+        "app.api.routes.platform_runtime_images.platform_runtime_image_service.publish_uploaded_image",
+        fake_publish,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.platform_runtime_images.session_runtime_service.collect_platform_runtimes",
+        fake_collect_platform_runtimes,
+    )
+    monkeypatch.setattr(
+        "app.api.routes.platform_runtime_images.platform_runtime_image_service.cleanup_replaced_image",
+        fake_cleanup_replaced_image,
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        f"/api/v1/platform-runtime-images/platform/{platform['platform_id']}/upload",
+        headers={"Authorization": f"Bearer {login.token}"},
+        files={"image_file": ("platform-image.tar", b"fake image tar", "application/x-tar")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["resolved_image"] == "registry.example.com/aether/platform:upload"
+    assert payload["recycled_runtime_count"] == 2
+    assert observed["platform_id"] == platform["platform_id"]
+    assert observed["filename"] == "platform-image.tar"
+    assert observed["collect_reason"] == "platform_image_uploaded"
+
+
 def test_public_embed_loader_is_served_from_backend(tmp_path):
     initialize_isolated_runtime(tmp_path)
 

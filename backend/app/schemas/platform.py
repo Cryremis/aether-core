@@ -74,9 +74,46 @@ class PlatformSummary(BaseModel):
     owner_user_id: int
     owner_name: str
     host_secret: str
+    sandbox_image: str | None = None
+    resolved_sandbox_image: str = ""
+    sandbox_image_updated_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     admin_user_ids: list[int] = Field(default_factory=list)
     admin_names: list[str] = Field(default_factory=list)
+
+
+class PlatformRuntimeImageUpdateRequest(BaseModel):
+    image: str
+
+
+class PlatformRuntimeImageSummary(BaseModel):
+    platform_id: int
+    custom_image: str | None = None
+    resolved_image: str
+    updated_at: datetime | None = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class PlatformRuntimeImageBuildSpec(BaseModel):
+    target_os: str
+    target_arch: str
+    image_format: str
+    shell: str
+    recommended_base: str
+    entrypoint: str
+    expected_workspace_root: str
+    required_directories: list[str] = Field(default_factory=list)
+    required_env_vars: list[str] = Field(default_factory=list)
+    resource_limits: list[str] = Field(default_factory=list)
+    build_steps: list[str] = Field(default_factory=list)
+    sample_dockerfile: str
+    notes: list[str] = Field(default_factory=list)
+
+
+class PlatformRuntimeImageGuide(BaseModel):
+    platform_id: int
+    display_name: str
+    current_image: str
+    build_spec: PlatformRuntimeImageBuildSpec
 
 
 class PlatformIntegrationGuideSnippets(BaseModel):

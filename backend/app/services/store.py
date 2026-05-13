@@ -212,6 +212,8 @@ class StoreService:
             self._ensure_column(conn, "platform_admins", "updated_at", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "platform_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(conn, "user_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(conn, "platforms", "sandbox_image", "TEXT")
+            self._ensure_column(conn, "platforms", "sandbox_image_updated_at", "TEXT")
             conn.execute("DROP TABLE IF EXISTS admin_whitelist")
             self._migrate_roles(conn)
             self._backfill_platform_admin_metadata(conn)
@@ -589,6 +591,20 @@ class StoreService:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM platforms ORDER BY platform_id DESC").fetchall()
         return [dict(row) for row in rows]
+
+    def update_platform_sandbox_image(self, *, platform_id: int, image: str | None) -> dict[str, Any] | None:
+        normalized = image.strip() if image else None
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE platforms
+                SET sandbox_image = ?, sandbox_image_updated_at = ?, updated_at = ?
+                WHERE platform_id = ?
+                """,
+                (normalized, now, now, platform_id),
+            )
+        return self.get_platform_by_id(platform_id)
 
     def is_platform_admin(self, *, platform_id: int, user_id: int) -> bool:
         with self._connect() as conn:

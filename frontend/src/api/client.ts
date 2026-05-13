@@ -32,6 +32,41 @@ export type PlatformCreatePayload = {
   owner_user_id?: number;
 };
 
+export type PlatformRuntimeImagePayload = {
+  image: string;
+};
+
+export type PlatformRuntimeImageSummary = {
+  platform_id: number;
+  custom_image?: string | null;
+  resolved_image: string;
+  updated_at?: string | null;
+  recycled_runtime_count?: number;
+};
+
+export type PlatformRuntimeImageBuildSpec = {
+  target_os: string;
+  target_arch: string;
+  image_format: string;
+  shell: string;
+  recommended_base: string;
+  entrypoint: string;
+  expected_workspace_root: string;
+  required_directories: string[];
+  required_env_vars: string[];
+  resource_limits: string[];
+  build_steps: string[];
+  sample_dockerfile: string;
+  notes: string[];
+};
+
+export type PlatformRuntimeImageGuide = {
+  platform_id: number;
+  display_name: string;
+  current_image: string;
+  build_spec: PlatformRuntimeImageBuildSpec;
+};
+
 export type PlatformIntegrationGuide = {
   platform_key: string;
   display_name: string;
@@ -610,6 +645,57 @@ export async function getPlatformIntegrationGuide(platformId: number) {
   const response = await apiFetch(`/platforms/${platformId}/integration-guide`);
   if (!response.ok) {
     throw new Error(`获取平台接入教程失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getPlatformRuntimeImage(platformId: number) {
+  const response = await apiFetch(`/platform-runtime-images/platform/${platformId}`);
+  if (!response.ok) {
+    throw new Error(`获取平台运行镜像失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getPlatformRuntimeImageGuide(platformId: number) {
+  const response = await apiFetch(`/platform-runtime-images/platform/${platformId}/guide`);
+  if (!response.ok) {
+    throw new Error(`获取平台运行镜像构建规范失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updatePlatformRuntimeImage(platformId: number, payload: PlatformRuntimeImagePayload) {
+  const response = await apiFetch(`/platform-runtime-images/platform/${platformId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`更新平台运行镜像失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function uploadPlatformRuntimeImage(platformId: number, file: File) {
+  const formData = new FormData();
+  formData.append("image_file", file);
+  const response = await apiFetch(`/platform-runtime-images/platform/${platformId}/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(`上传平台运行镜像失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function deletePlatformRuntimeImage(platformId: number) {
+  const response = await apiFetch(`/platform-runtime-images/platform/${platformId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`清除平台运行镜像失败: ${response.status}`);
   }
   return response.json();
 }

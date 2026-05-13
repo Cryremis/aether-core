@@ -30,6 +30,10 @@ export function PlatformList({ platforms, activePlatformId, onSelect, onOpenGuid
             </div>
             <p>{item.platform_key}</p>
             <p className="desc">{item.description || "未填写平台说明"}</p>
+            <div className="platform-card__meta">
+              <span>运行镜像</span>
+              <code>{item.resolved_sandbox_image}</code>
+            </div>
             <div className="secret-code"><code>{item.host_secret}</code></div>
           </article>
         ))}

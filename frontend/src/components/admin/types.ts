@@ -1,4 +1,4 @@
-import type { PlatformIntegrationGuide } from "../../api/client";
+import type { PlatformIntegrationGuide, PlatformRuntimeImageGuide } from "../../api/client";
 
 export type PlatformItem = {
   platform_id: number;
@@ -8,6 +8,9 @@ export type PlatformItem = {
   description: string;
   owner_name: string;
   host_secret: string;
+  sandbox_image?: string | null;
+  resolved_sandbox_image: string;
+  sandbox_image_updated_at?: string | null;
 };
 
 export type PlatformBaselineFileItem = {
@@ -45,6 +48,13 @@ export type LlmConfigFormState = {
 export type PromptConfigFormState = {
   enabled: boolean;
   system_prompt: string;
+};
+
+export type PlatformRuntimeImageFormState = {
+  image: string;
+  resolvedImage: string;
+  recycledRuntimeCount: number | null;
+  guide: PlatformRuntimeImageGuide | null;
 };
 
 export type IntegrationGuideState = {

@@ -20,6 +20,7 @@ from app.schemas.platform import (
     PlatformCreateRequest,
     PlatformSummary,
 )
+from app.services.platform_runtime_image_service import platform_runtime_image_service
 from app.services.conversation_service import conversation_service
 from app.services.platform_integration_service import platform_integration_service
 from app.services.platform_baseline_service import platform_baseline_service
@@ -41,6 +42,7 @@ def _get_managed_platform(platform_id: int, auth: AuthContext) -> dict:
 def _serialize_platform_summary(row: dict) -> dict:
     owner = store_service.get_user_by_id(row["owner_user_id"])
     admins = store_service.list_platform_admins(row["platform_id"])
+    custom_image = str(row.get("sandbox_image") or "").strip() or None
     return PlatformSummary(
         platform_id=row["platform_id"],
         platform_key=row["platform_key"],
@@ -50,6 +52,9 @@ def _serialize_platform_summary(row: dict) -> dict:
         owner_user_id=row["owner_user_id"],
         owner_name=owner.full_name if owner else "未知负责人",
         host_secret=row["host_secret"],
+        sandbox_image=custom_image,
+        resolved_sandbox_image=custom_image or platform_runtime_image_service.resolve_for_platform(row["platform_id"]),
+        sandbox_image_updated_at=row.get("sandbox_image_updated_at"),
         created_at=row["created_at"],
         admin_user_ids=[int(item["user_id"]) for item in admins],
         admin_names=[str(item["full_name"]) for item in admins],

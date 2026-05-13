@@ -7,6 +7,7 @@ import {
   createPlatform,
   deletePlatformLlmConfig,
   deletePlatformPromptConfig,
+  deletePlatformRuntimeImage,
   deletePlatformBaselineFile,
   downloadPlatformBaselineFile,
   getPlatformBaseline,
@@ -14,12 +15,16 @@ import {
   getPlatformIntegrationGuide,
   getPlatformLlmConfig,
   getPlatformPromptConfig,
+  getPlatformRuntimeImage,
+  getPlatformRuntimeImageGuide,
   listPlatforms,
   movePlatformBaselinePath,
   PlatformIntegrationGuide,
   savePlatformBaselineTextFile,
   updatePlatformPromptConfig,
   updatePlatformLlmConfig,
+  updatePlatformRuntimeImage,
+  uploadPlatformRuntimeImage,
   uploadPlatformBaselineFile,
   uploadPlatformBaselineSkill,
 } from "../api/client";
@@ -31,12 +36,14 @@ import { IntegrationGuideModal } from "./admin/IntegrationGuideModal";
 import { PlatformList } from "./admin/PlatformList";
 import { PlatformLlmPanel } from "./admin/PlatformLlmPanel";
 import { PlatformPromptPanel } from "./admin/PlatformPromptPanel";
+import { PlatformRuntimeImagePanel } from "./admin/PlatformRuntimeImagePanel";
 import { SkillUploadModal } from "./admin/SkillUploadModal";
 import type {
   LlmConfigFormState,
   PlatformBaselineEntryItem,
   PlatformBaselineFileItem,
   PlatformItem,
+  PlatformRuntimeImageFormState,
   PromptConfigFormState,
 } from "./admin/types";
 
@@ -44,22 +51,24 @@ type AdminPanelProps = {
   role: string;
 };
 
+type PlatformSettingsView = "image" | "prompt" | "llm";
+
 export function AdminPanel({ role }: AdminPanelProps) {
   const [platforms, setPlatforms] = useState<PlatformItem[]>([]);
-  const[activePlatformId, setActivePlatformId] = useState<number | null>(null);
+  const [activePlatformId, setActivePlatformId] = useState<number | null>(null);
   const [baselineEntries, setBaselineEntries] = useState<PlatformBaselineEntryItem[]>([]);
-  const[error, setError] = useState("");
-  const[baselineError, setBaselineError] = useState("");
+  const [error, setError] = useState("");
+  const [baselineError, setBaselineError] = useState("");
   
   // File Manager State
-  const[currentBaselineDirectory, setCurrentBaselineDirectory] = useState(""); // "" 代表根目录 (显示 input/skills/work 等)
+  const [currentBaselineDirectory, setCurrentBaselineDirectory] = useState(""); // "" 代表根目录 (显示 input/skills/work 等)
   const [selectedBaselinePath, setSelectedBaselinePath] = useState("");
   const [selectedBaselineContent, setSelectedBaselineContent] = useState("");
-  const[selectedBaselineMediaType, setSelectedBaselineMediaType] = useState("");
-  const[selectedBaselineTruncated, setSelectedBaselineTruncated] = useState(false);
+  const [selectedBaselineMediaType, setSelectedBaselineMediaType] = useState("");
+  const [selectedBaselineTruncated, setSelectedBaselineTruncated] = useState(false);
   const [baselineDirty, setBaselineDirty] = useState(false);
-  const[showSkillUploadModal, setShowSkillUploadModal] = useState(false);
-  const[skillUploadBusy, setSkillUploadBusy] = useState(false);
+  const [showSkillUploadModal, setShowSkillUploadModal] = useState(false);
+  const [skillUploadBusy, setSkillUploadBusy] = useState(false);
   const [skillUploadError, setSkillUploadError] = useState("");
 
   // Context Menu State
@@ -68,7 +77,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
   // Form States
   const [platformKey, setPlatformKey] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const[description, setDescription] = useState("");
+  const [description, setDescription] = useState("");
   const [platformLlmForm, setPlatformLlmForm] = useState<LlmConfigFormState>({
     enabled: true,
     base_url: "",
@@ -83,7 +92,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
     max_search_results: 8,
     fetch_timeout_seconds: 30,
   });
-  const[platformLlmError, setPlatformLlmError] = useState("");
+  const [platformLlmError, setPlatformLlmError] = useState("");
   const [platformLlmBusy, setPlatformLlmBusy] = useState(false);
   const [showPlatformLlmAdvanced, setShowPlatformLlmAdvanced] = useState(false);
   const [promptForm, setPromptForm] = useState<PromptConfigFormState>({
@@ -92,10 +101,19 @@ export function AdminPanel({ role }: AdminPanelProps) {
   });
   const [promptError, setPromptError] = useState("");
   const [promptBusy, setPromptBusy] = useState(false);
+  const [runtimeImageForm, setRuntimeImageForm] = useState<PlatformRuntimeImageFormState>({
+    image: "",
+    resolvedImage: "",
+    recycledRuntimeCount: null,
+    guide: null,
+  });
+  const [runtimeImageError, setRuntimeImageError] = useState("");
+  const [runtimeImageBusy, setRuntimeImageBusy] = useState(false);
+  const [settingsView, setSettingsView] = useState<PlatformSettingsView>("image");
   const [integrationGuide, setIntegrationGuide] = useState<PlatformIntegrationGuide | null>(null);
   const [integrationGuideError, setIntegrationGuideError] = useState("");
-  const[integrationGuideBusy, setIntegrationGuideBusy] = useState(false);
-  const[integrationGuidePlatformName, setIntegrationGuidePlatformName] = useState("");
+  const [integrationGuideBusy, setIntegrationGuideBusy] = useState(false);
+  const [integrationGuidePlatformName, setIntegrationGuidePlatformName] = useState("");
 
   const fileManagerRef = useRef<HTMLDivElement>(null);
 
@@ -154,6 +172,13 @@ export function AdminPanel({ role }: AdminPanelProps) {
       setPromptForm({
         enabled: true,
         system_prompt: "",
+      });
+      setRuntimeImageError("");
+      setRuntimeImageForm({
+        image: "",
+        resolvedImage: "",
+        recycledRuntimeCount: null,
+        guide: null,
       });
       return;
     }
@@ -214,6 +239,37 @@ export function AdminPanel({ role }: AdminPanelProps) {
         });
       } catch (err) {
         setPromptError(err instanceof Error ? err.message : "加载平台提示词配置失败");
+      }
+    })();
+    void (async () => {
+      try {
+        setRuntimeImageError("");
+        const result = await getPlatformRuntimeImage(activePlatformId);
+        const data = (result.data ?? null) as {
+          custom_image?: string | null;
+          resolved_image?: string;
+          recycled_runtime_count?: number;
+        } | null;
+        setRuntimeImageForm({
+          image: data?.custom_image ?? "",
+          resolvedImage: data?.resolved_image ?? "",
+          recycledRuntimeCount: data?.recycled_runtime_count ?? null,
+          guide: null,
+        });
+      } catch (err) {
+        setRuntimeImageError(err instanceof Error ? err.message : "加载平台运行镜像失败");
+      }
+    })();
+    void (async () => {
+      try {
+        const result = await getPlatformRuntimeImageGuide(activePlatformId);
+        const data = result.data ?? null;
+        setRuntimeImageForm((current) => ({
+          ...current,
+          guide: data as PlatformRuntimeImageFormState["guide"],
+        }));
+      } catch (err) {
+        setRuntimeImageError(err instanceof Error ? err.message : "加载平台运行镜像构建规范失败");
       }
     })();
   },[activePlatformId]);
@@ -358,6 +414,11 @@ export function AdminPanel({ role }: AdminPanelProps) {
   // ---------------- 视图驱动逻辑 ----------------
 
   const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
+  const settingsTabs: Array<{ key: PlatformSettingsView; title: string; description: string }> = [
+    { key: "image", title: "运行镜像", description: "构建规范与上传启用" },
+    { key: "prompt", title: "系统提示词", description: "平台级默认行为" },
+    { key: "llm", title: "默认 LLM", description: "模型入口与联网策略" },
+  ];
 
   const parseJsonObject = (raw: string, label: string) => {
     const trimmed = raw.trim();
@@ -493,6 +554,84 @@ export function AdminPanel({ role }: AdminPanelProps) {
       setPromptError(err instanceof Error ? err.message : "保存平台提示词配置失败");
     } finally {
       setPromptBusy(false);
+    }
+  };
+
+  const handleSavePlatformRuntimeImage = async () => {
+    if (!activePlatformId) return;
+    try {
+      setRuntimeImageBusy(true);
+      setRuntimeImageError("");
+      const result = await updatePlatformRuntimeImage(activePlatformId, {
+        image: runtimeImageForm.image.trim(),
+      });
+      const data = (result.data ?? {}) as {
+        custom_image?: string | null;
+        resolved_image?: string;
+        recycled_runtime_count?: number;
+      };
+      setRuntimeImageForm({
+        image: data.custom_image ?? "",
+        resolvedImage: data.resolved_image ?? "",
+        recycledRuntimeCount: data.recycled_runtime_count ?? null,
+        guide: runtimeImageForm.guide,
+      });
+      await loadData();
+    } catch (err) {
+      setRuntimeImageError(err instanceof Error ? err.message : "保存平台运行镜像失败");
+    } finally {
+      setRuntimeImageBusy(false);
+    }
+  };
+
+  const handleResetPlatformRuntimeImage = async () => {
+    if (!activePlatformId) return;
+    if (!window.confirm("确定清除该平台的专属运行镜像并回退到全局默认吗？")) return;
+    try {
+      setRuntimeImageBusy(true);
+      setRuntimeImageError("");
+      const result = await deletePlatformRuntimeImage(activePlatformId);
+      const data = (result.data ?? {}) as {
+        custom_image?: string | null;
+        resolved_image?: string;
+        recycled_runtime_count?: number;
+      };
+      setRuntimeImageForm({
+        image: data.custom_image ?? "",
+        resolvedImage: data.resolved_image ?? "",
+        recycledRuntimeCount: data.recycled_runtime_count ?? null,
+        guide: runtimeImageForm.guide,
+      });
+      await loadData();
+    } catch (err) {
+      setRuntimeImageError(err instanceof Error ? err.message : "清除平台运行镜像失败");
+    } finally {
+      setRuntimeImageBusy(false);
+    }
+  };
+
+  const handleUploadPlatformRuntimeImage = async (file: File | null) => {
+    if (!activePlatformId || !file) return;
+    try {
+      setRuntimeImageBusy(true);
+      setRuntimeImageError("");
+      const result = await uploadPlatformRuntimeImage(activePlatformId, file);
+      const data = (result.data ?? {}) as {
+        custom_image?: string | null;
+        resolved_image?: string;
+        recycled_runtime_count?: number;
+      };
+      setRuntimeImageForm((current) => ({
+        ...current,
+        image: data.custom_image ?? "",
+        resolvedImage: data.resolved_image ?? "",
+        recycledRuntimeCount: data.recycled_runtime_count ?? null,
+      }));
+      await loadData();
+    } catch (err) {
+      setRuntimeImageError(err instanceof Error ? err.message : "上传平台运行镜像失败");
+    } finally {
+      setRuntimeImageBusy(false);
     }
   };
 
@@ -652,31 +791,78 @@ export function AdminPanel({ role }: AdminPanelProps) {
       {/* ================= Bento Grid: LLM 与基线资源管理器 ================= */}
       {activePlatform ? (
         <div className="epic-bento-grid stagger-4">
-          <div className="epic-glass epic-bento-card">
-            <PlatformPromptPanel
-              promptForm={promptForm}
-              promptError={promptError}
-              promptBusy={promptBusy}
-              onChange={setPromptForm}
-              onSave={() => void handleSavePlatformPrompt()}
-              onReset={() => void handleResetPlatformPrompt()}
-            />
+          <div className="epic-glass epic-bento-card epic-bento-card--settings">
+            <div className="platform-settings-workbench">
+              <div className="platform-settings-workbench__header">
+                <div className="manager-header__info">
+                  <h4>平台运行工作台</h4>
+                  <p>把运行镜像、系统提示词和默认 LLM 收拢到一个侧边设置区，右侧保留完整资源工作区。</p>
+                </div>
+                <div className="platform-settings-workbench__platform">
+                  <span>当前平台</span>
+                  <strong>{activePlatform.display_name}</strong>
+                  <code>{activePlatform.platform_key}</code>
+                </div>
+              </div>
+
+              <div className="platform-settings-tabs" role="tablist" aria-label="平台设置视图">
+                {settingsTabs.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={settingsView === tab.key}
+                    className={`platform-settings-tab${settingsView === tab.key ? " is-active" : ""}`}
+                    onClick={() => setSettingsView(tab.key)}
+                  >
+                    <span>{tab.title}</span>
+                    <small>{tab.description}</small>
+                  </button>
+                ))}
+              </div>
+
+              <div className="platform-settings-workbench__panel">
+                {settingsView === "image" ? (
+                  <PlatformRuntimeImagePanel
+                    platformName={activePlatform.display_name}
+                    runtimeImageForm={runtimeImageForm}
+                    runtimeImageError={runtimeImageError}
+                    runtimeImageBusy={runtimeImageBusy}
+                    onChange={setRuntimeImageForm}
+                    onSave={() => void handleSavePlatformRuntimeImage()}
+                    onReset={() => void handleResetPlatformRuntimeImage()}
+                    onUpload={(file) => void handleUploadPlatformRuntimeImage(file)}
+                  />
+                ) : null}
+
+                {settingsView === "prompt" ? (
+                  <PlatformPromptPanel
+                    promptForm={promptForm}
+                    promptError={promptError}
+                    promptBusy={promptBusy}
+                    onChange={setPromptForm}
+                    onSave={() => void handleSavePlatformPrompt()}
+                    onReset={() => void handleResetPlatformPrompt()}
+                  />
+                ) : null}
+
+                {settingsView === "llm" ? (
+                  <PlatformLlmPanel
+                    platformLlmForm={platformLlmForm}
+                    platformLlmError={platformLlmError}
+                    platformLlmBusy={platformLlmBusy}
+                    showPlatformLlmAdvanced={showPlatformLlmAdvanced}
+                    onToggleAdvanced={setShowPlatformLlmAdvanced}
+                    onChange={setPlatformLlmForm}
+                    onSave={() => void handleSavePlatformLlm()}
+                    onReset={() => void handleResetPlatformLlm()}
+                  />
+                ) : null}
+              </div>
+            </div>
           </div>
 
-          <div className="epic-glass epic-bento-card">
-            <PlatformLlmPanel
-              platformLlmForm={platformLlmForm}
-              platformLlmError={platformLlmError}
-              platformLlmBusy={platformLlmBusy}
-              showPlatformLlmAdvanced={showPlatformLlmAdvanced}
-              onToggleAdvanced={setShowPlatformLlmAdvanced}
-              onChange={setPlatformLlmForm}
-              onSave={() => void handleSavePlatformLlm()}
-              onReset={() => void handleResetPlatformLlm()}
-            />
-          </div>
-
-          <div className="epic-glass epic-bento-card">
+          <div className="epic-glass epic-bento-card epic-bento-card--baseline">
             <BaselineManager
               activePlatform={activePlatform}
               baselineError={baselineError}

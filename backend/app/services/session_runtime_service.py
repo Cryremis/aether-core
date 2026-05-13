@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable
 
 from app.core.config import settings
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
+from app.services.platform_runtime_image_service import platform_runtime_image_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service, utcnow_iso
 
@@ -220,6 +221,19 @@ class SessionRuntimeService:
             if max_expires_at and max_expires_at <= now:
                 await self.collect_runtime(item["session_id"], reason="max_age_expired")
 
+    async def collect_platform_runtimes(self, platform_id: int, *, reason: str) -> int:
+        items = store_service.list_session_runtimes()
+        collected = 0
+        for item in items:
+            if int(item.get("platform_id") or 0) != int(platform_id):
+                continue
+            if item.get("status") in {"missing", "collected", "expired"}:
+                continue
+            updated = await self.collect_runtime(str(item["session_id"]), reason=reason)
+            if updated is not None:
+                collected += 1
+        return collected
+
     async def _gc_loop(self) -> None:
         while True:
             try:
@@ -277,6 +291,7 @@ class SessionRuntimeService:
     async def _create_runtime_locked(self, workspace: SandboxWorkspace, *, generation: int) -> dict[str, Any]:
         docker_binary = self._require_docker_binary()
         conversation = store_service.get_conversation_by_session(workspace.session_id) or {}
+        runtime_image = self._resolve_runtime_image(conversation)
         created_at = utcnow_iso()
         max_expires_at = self._to_iso(self._now() + timedelta(seconds=settings.sandbox_runtime_max_age_seconds))
         idle_expires_at = self._to_iso(self._now() + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds))
@@ -289,7 +304,7 @@ class SessionRuntimeService:
             external_user_id=conversation.get("external_user_id"),
             container_name=container_name,
             container_id=None,
-            image=settings.sandbox_docker_image,
+            image=runtime_image,
             status="provisioning",
             generation=generation,
             network_mode=self._runtime_network_mode(),
@@ -304,11 +319,11 @@ class SessionRuntimeService:
             restart_count=0,
             workspace_root=str(workspace.root),
             home_root=str(workspace.home_dir),
-            metadata=self._build_runtime_metadata(),
+            metadata=self._build_runtime_metadata(runtime_image),
         )
         process = await asyncio.create_subprocess_exec(
             docker_binary,
-            *self._build_run_args(workspace, container_name),
+            *self._build_run_args(workspace, container_name, runtime_image),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             **self._subprocess_kwargs(),
@@ -324,7 +339,7 @@ class SessionRuntimeService:
                 external_user_id=conversation.get("external_user_id"),
                 container_name=container_name,
                 container_id=None,
-                image=settings.sandbox_docker_image,
+                image=runtime_image,
                 status="failed",
                 generation=generation,
                 network_mode=self._runtime_network_mode(),
@@ -339,7 +354,7 @@ class SessionRuntimeService:
                 restart_count=0,
                 workspace_root=str(workspace.root),
                 home_root=str(workspace.home_dir),
-                metadata=self._build_runtime_metadata(),
+                metadata=self._build_runtime_metadata(runtime_image),
             )
             raise RuntimeError(stderr_text or "创建会话 runtime 失败。")
         container_id = self._decode_output(stdout_bytes).strip() or None
@@ -351,7 +366,7 @@ class SessionRuntimeService:
             external_user_id=conversation.get("external_user_id"),
             container_name=container_name,
             container_id=container_id,
-            image=settings.sandbox_docker_image,
+            image=runtime_image,
             status="running",
             generation=generation,
             network_mode=self._runtime_network_mode(),
@@ -366,7 +381,7 @@ class SessionRuntimeService:
             restart_count=0,
             workspace_root=str(workspace.root),
             home_root=str(workspace.home_dir),
-            metadata=self._build_runtime_metadata(),
+            metadata=self._build_runtime_metadata(runtime_image),
         )
 
     async def _collect_locked(self, session_id: str, *, reason: str) -> dict[str, Any] | None:
@@ -448,10 +463,10 @@ class SessionRuntimeService:
             restart_count=int(runtime.get("restart_count") or 0),
             workspace_root=str(workspace.root),
             home_root=str(workspace.home_dir),
-            metadata=runtime.get("metadata") or self._build_runtime_metadata(),
+            metadata=runtime.get("metadata") or self._build_runtime_metadata(str(runtime.get("image") or "")),
         )
 
-    def _build_run_args(self, workspace: SandboxWorkspace, container_name: str) -> list[str]:
+    def _build_run_args(self, workspace: SandboxWorkspace, container_name: str, image: str) -> list[str]:
         args = [
             "run",
             "-d",
@@ -528,7 +543,7 @@ class SessionRuntimeService:
             for dns_server in self._runtime_dns_servers():
                 if dns_server.strip():
                     args.extend(["--dns", dns_server.strip()])
-        args.append(settings.sandbox_docker_image)
+        args.append(image)
         args.extend(
             [
                 "/bin/bash",
@@ -657,14 +672,14 @@ class SessionRuntimeService:
         configured = settings.sandbox_docker_network_mode.strip()
         return configured or "bridge"
 
-    def _build_runtime_metadata(self) -> dict[str, Any]:
+    def _build_runtime_metadata(self, image: str) -> dict[str, Any]:
         return {
-            "runtime_spec": self._build_runtime_spec(),
+            "runtime_spec": self._build_runtime_spec(image),
         }
 
-    def _build_runtime_spec(self) -> dict[str, Any]:
+    def _build_runtime_spec(self, image: str | None = None) -> dict[str, Any]:
         return {
-            "image": settings.sandbox_docker_image,
+            "image": image or settings.sandbox_docker_image,
             "network_mode": self._runtime_network_mode(),
             "dns_servers": self._runtime_dns_servers(),
             "user": settings.sandbox_docker_user.strip() or f"{self._sandbox_uid()}:{self._sandbox_gid()}",
@@ -709,12 +724,18 @@ class SessionRuntimeService:
             return None
         metadata = runtime.get("metadata") or {}
         current_spec = metadata.get("runtime_spec")
-        desired_spec = self._build_runtime_spec()
+        desired_spec = self._build_runtime_spec(
+            self._resolve_runtime_image({"platform_id": runtime.get("platform_id")})
+        )
         if not current_spec:
             return "runtime_spec_missing"
         if current_spec != desired_spec:
             return "runtime_config_changed"
         return None
+
+    def _resolve_runtime_image(self, conversation: dict[str, Any]) -> str:
+        platform_id = conversation.get("platform_id")
+        return platform_runtime_image_service.resolve_for_platform(int(platform_id)) if platform_id is not None else settings.sandbox_docker_image
 
     def _resolve_docker_binary(self) -> str | None:
         configured = settings.sandbox_docker_command.strip()

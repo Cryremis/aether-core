@@ -46,7 +46,7 @@ def test_session_runtime_builds_persistent_container_args(tmp_path, monkeypatch)
     monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
     monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
     workspace = build_workspace(tmp_path / "sandbox")
-    args = session_runtime_service._build_run_args(workspace, "test-container")
+    args = session_runtime_service._build_run_args(workspace, "test-container", settings.sandbox_docker_image)
     joined = " ".join(args)
     assert "--network bridge" in joined
     assert "--network none" not in joined
@@ -87,11 +87,45 @@ def test_runtime_spec_drift_requests_recreate(monkeypatch):
     assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) == "runtime_spec_missing"
 
     runtime["metadata"] = {
-        "runtime_spec": session_runtime_service._build_runtime_spec(),
+        "runtime_spec": session_runtime_service._build_runtime_spec(settings.sandbox_docker_image),
     }
     assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) is None
 
     runtime["metadata"]["runtime_spec"]["network_mode"] = "none"
+    assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) == "runtime_config_changed"
+
+
+def test_runtime_spec_drift_detects_platform_image_change(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    monkeypatch.setattr(settings, "sandbox_allow_network", True)
+    monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
+    monkeypatch.setattr(settings, "sandbox_docker_dns_servers", [])
+    monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
+    monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="runtime-image-platform",
+        display_name="Runtime Image Platform",
+        host_type="embedded",
+        description="runtime image test",
+        owner_user_id=admin.user_id,
+    )
+    store_service.update_platform_sandbox_image(
+        platform_id=int(platform["platform_id"]),
+        image="registry.example.com/custom/platform:v2",
+    )
+
+    now = datetime.now(timezone.utc)
+    runtime = {
+        "status": "running",
+        "platform_id": platform["platform_id"],
+        "image": settings.sandbox_docker_image,
+        "metadata": {
+            "runtime_spec": session_runtime_service._build_runtime_spec(settings.sandbox_docker_image),
+        },
+    }
     assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) == "runtime_config_changed"
 
 
