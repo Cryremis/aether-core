@@ -849,14 +849,28 @@ function UserMessageBubble({
   const [localEditingContent, setLocalEditingContent] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  const resizeTextarea = () => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 120), window.innerHeight * 0.56)}px`;
+  };
+
   useEffect(() => {
     if (editingMessageId === message.id && textareaRef.current) {
       setLocalEditingContent(message.content);
       textareaRef.current.focus();
       const length = textareaRef.current.value.length;
       textareaRef.current.setSelectionRange(length, length);
+      requestAnimationFrame(resizeTextarea);
     }
   }, [editingMessageId, message.id, message.content]);
+
+  useEffect(() => {
+    if (editingMessageId === message.id) {
+      resizeTextarea();
+    }
+  }, [editingMessageId, message.id, localEditingContent]);
 
   const handleSaveEdit = () => {
     const trimmed = localEditingContent.trim();
@@ -918,7 +932,6 @@ function UserMessageBubble({
               value={localEditingContent}
               onChange={(e) => setLocalEditingContent(e.target.value)}
               onKeyDown={handleEditKeyDown}
-              rows={Math.min(8, Math.max(2, localEditingContent.split("\n").length + 1))}
             />
             <div className="user-bubble__edit-actions">
               <button

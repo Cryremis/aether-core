@@ -354,7 +354,11 @@
 }
 
 .user-bubble--editing {
-  padding-bottom: 8px;
+  width: min(760px, calc(100vw - 40px));
+  max-width: min(92vw, 760px);
+  padding: 12px;
+  border-color: rgba(37, 99, 235, 0.18);
+  box-shadow: 0 18px 40px -30px rgba(15, 23, 42, 0.35);
 }
 
 .user-bubble__edit-panel {
@@ -366,16 +370,16 @@
 
 .user-bubble__edit-textarea {
   width: 100%;
-  min-height: 60px;
-  max-height: 240px;
-  padding: 10px 12px;
+  min-height: 120px;
+  max-height: 56vh;
+  padding: 12px 14px;
   border: 1px solid rgba(226, 232, 240, 0.9);
   border-radius: 8px;
   background: rgba(248, 250, 252, 0.92);
   font-size: 15px;
   line-height: 1.5;
   color: var(--text-primary);
-  resize: none;
+  resize: vertical;
   transition: border-color 0.2s ease, background 0.2s ease;
   font-family: inherit;
 }
