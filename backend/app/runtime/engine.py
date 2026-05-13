@@ -287,11 +287,18 @@ class AgentEngine:
         conversation = store_service.get_conversation_by_session(session.session_id)
         is_new_conversation = conversation is None or conversation.get("message_count", 0) == 0
         if conversation is None:
+            seed = self._resolve_conversation_seed(session) or {}
             conversation = store_service.create_conversation(
                 session_id=session.session_id,
                 title=message.strip()[:80] or "新对话",
-                host_name=session.host_name or "AetherCore",
+                host_name=session.host_name or str(seed.get("host_name") or "AetherCore"),
+                platform_id=seed.get("platform_id"),
+                owner_user_id=seed.get("owner_user_id"),
+                external_user_id=seed.get("external_user_id"),
+                external_org_id=seed.get("external_org_id"),
             )
+            session.conversation_id = conversation.get("conversation_id")
+            session_service.persist(session)
         new_title = message.strip()[:80] or "新对话" if is_new_conversation else None
         store_service.touch_conversation(
             session.session_id,
@@ -597,6 +604,14 @@ class AgentEngine:
                         yield self._emit_context_event(session, context_event.type, context_event.payload)
                     continue
                 raise
+            except httpx.TransportError:
+                # 流式传输异常时，如果已有正文则以部分结果收尾，避免整轮失败；
+                # 若尚无正文，继续抛出让上层按错误路径处理。
+                if assistant_content.strip():
+                    tool_calls = {}
+                    last_stop_reason = "stream_interrupted"
+                else:
+                    raise
 
             if assistant_content:
                 if active_content_block_id:
@@ -1026,6 +1041,21 @@ class AgentEngine:
         conversation: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         return prompt_service.build_system_messages(session, conversation=conversation)
+
+    def _resolve_conversation_seed(self, session: AgentSession) -> dict[str, Any] | None:
+        """从已有 conversation 继承身份与平台字段，避免兜底创建时丢失归属。"""
+        if not session.conversation_id:
+            return None
+        source = store_service.get_conversation(session.conversation_id)
+        if source is None:
+            return None
+        return {
+            "platform_id": source.get("platform_id"),
+            "owner_user_id": source.get("owner_user_id"),
+            "external_user_id": source.get("external_user_id"),
+            "external_org_id": source.get("external_org_id"),
+            "host_name": source.get("host_name"),
+        }
 
 
 agent_engine = AgentEngine()

@@ -243,6 +243,59 @@ def test_agent_engine_injects_platform_and_host_system_prompts(monkeypatch, tmp_
     assert any("## 宿主信息" in str(message.get("content", "")) for message in system_messages)
 
 
+def test_agent_engine_fallback_conversation_inherits_platform_context(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    observed_messages: list[list[dict]] = []
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        observed_messages.append(messages)
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "done"},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    platform = store_service.get_platform_by_key("standalone")
+    assert platform is not None
+    store_service.upsert_platform_prompt_config(
+        platform_id=platform["platform_id"],
+        enabled=True,
+        system_prompt="平台注入校验={{platform.display_name}}",
+    )
+
+    source = store_service.create_conversation(
+        session_id="sess_engine_seed_source",
+        title="Seed source",
+        host_name="Seed Host",
+        platform_id=platform["platform_id"],
+    )
+
+    session = AgentSession(
+        session_id="sess_engine_seed_target",
+        conversation_id=source["conversation_id"],
+        host_name="Seed Host",
+    )
+
+    events = asyncio.run(collect_stream(session, "hello"))
+    assert any(item["type"] == "result" and item["payload"]["subtype"] == "success" for item in events)
+
+    created = store_service.get_conversation_by_session(session.session_id)
+    assert created is not None
+    assert created.get("platform_id") == platform["platform_id"]
+
+    system_messages = [message for message in observed_messages[0] if message.get("role") == "system"]
+    assert any("平台注入校验=AetherCore" in str(message.get("content", "")) for message in system_messages)
+
+
 def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
@@ -780,3 +833,33 @@ def test_agent_engine_persists_blocks_when_tool_requests_user_input(monkeypatch,
     last_blocks = visible_assistant[-1]["blocks"]
     assert any(block.get("kind") == "tool" for block in last_blocks)
     assert any(block.get("kind") == "elapsed" for block in last_blocks)
+
+
+def test_agent_engine_returns_partial_answer_when_stream_interrupted_after_content(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        yield {
+            "choices": [
+                {
+                    "delta": {"content": "partial answer"},
+                    "finish_reason": None,
+                }
+            ]
+        }
+        raise httpx.RemoteProtocolError("incomplete chunked read")
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = AgentSession(session_id="sess_engine_partial_stream")
+    events = asyncio.run(collect_stream(session, "say something"))
+
+    result_event = next(item for item in events if item["type"] == "result")
+    assert result_event["payload"]["subtype"] == "success"
+    assert result_event["payload"]["stop_reason"] == "stream_interrupted"
+    assert result_event["payload"]["result"] == "partial answer"
+    assert not any(item["type"] == "error" for item in events)
