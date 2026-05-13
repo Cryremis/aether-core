@@ -5,6 +5,10 @@ export type FileItem = {
   name: string;
   category: string;
   size: number;
+  relative_path?: string;
+  media_type?: string;
+  modified_at?: string | null;
+  created_at?: string | null;
 };
 
 export type SkillItem = {

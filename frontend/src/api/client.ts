@@ -1233,6 +1233,26 @@ export async function listFiles(sessionId: string) {
   return response.json();
 }
 
+export async function readFileContent(sessionId: string, fileId: string) {
+  const response = await apiFetch(`/agent/files/${encodeURIComponent(fileId)}/content?session_id=${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `读取文件失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function updateFileContent(sessionId: string, fileId: string, content: string) {
+  const response = await apiFetch(`/agent/files/${encodeURIComponent(fileId)}/content?session_id=${encodeURIComponent(sessionId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `保存文件失败: ${response.status}`));
+  }
+  return response.json();
+}
+
 export async function uploadFile(sessionId: string, file: File) {
   const formData = new FormData();
   formData.append("upload_file", file);

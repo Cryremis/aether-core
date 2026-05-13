@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import mimetypes
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.schemas.files import FileRecord
@@ -55,14 +56,17 @@ class ArtifactService:
         target_path: Path,
     ) -> FileRecord:
         media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        stat = target_path.stat()
+        modified_at = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
         record = FileRecord(
             file_id=file_id,
             session_id=session.session_id,
             name=name,
             relative_path=str(target_path.relative_to(session.workspace.root)),
-            size=target_path.stat().st_size,
+            size=stat.st_size,
             media_type=media_type,
             category="artifact",
+            modified_at=modified_at,
         )
         session.artifacts.append(record.model_dump(mode="json"))
         session_service.persist(session)

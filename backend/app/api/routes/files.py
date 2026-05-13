@@ -72,3 +72,36 @@ def download_file(session_id: str, file_id: str, auth: AuthContext = Depends(get
     if not file_path or not file_path.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(path=file_path, filename=file_path.name)
+
+
+@router.get("/{file_id}/content")
+def read_file_content(session_id: str, file_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    session = _ensure_session_access(session_id, auth)
+    try:
+        content = file_service.read_text(session, file_id=file_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="文件不存在") from exc
+    except IsADirectoryError as exc:
+        raise HTTPException(status_code=400, detail="目标是目录，无法预览") from exc
+    return ApiResponse(message="文件内容", data={"content": content})
+
+
+@router.put("/{file_id}/content")
+async def update_file_content(
+    session_id: str,
+    file_id: str,
+    payload: dict,
+    auth: AuthContext = Depends(get_auth_context),
+) -> ApiResponse:
+    session = _ensure_session_access(session_id, auth)
+    file_path = file_service.resolve_file_path(session, file_id)
+    if not file_path or not file_path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if file_path.is_dir():
+        raise HTTPException(status_code=400, detail="目标是目录，无法编辑")
+    content = payload.get("content")
+    if not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="content 必须是字符串")
+    file_path.write_text(content, encoding="utf-8")
+    artifact_service.sync_output_directory(session)
+    return ApiResponse(message="文件已保存", data={"items": [item.model_dump(mode="json") for item in file_service.list_sidebar_files(session)]})

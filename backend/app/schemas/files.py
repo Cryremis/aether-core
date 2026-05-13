@@ -16,6 +16,7 @@ class FileRecord(BaseModel):
     media_type: str
     category: Literal["upload", "artifact", "skill", "platform"]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    modified_at: datetime | None = None
 
 
 class FileListResponse(BaseModel):

@@ -90,7 +90,8 @@
 .resource-info p { font-size: 12px; color: var(--text-tertiary); margin-top: 3px; }
 
 .resource-card.block .desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
-.download-btn { padding: 8px; color: var(--text-tertiary); border-radius: 6px; transition: all 0.2s; background: var(--bg-hover); }
+.resource-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.download-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; color: var(--text-tertiary); border-radius: 6px; transition: all 0.2s; background: var(--bg-hover); border: 0; cursor: pointer; }
 .download-btn:hover { background: #dbeafe; color: var(--accent); transform: translateY(-1px); }
 
 .flex-row { display: flex; justify-content: space-between; width: 100%; align-items: center; }

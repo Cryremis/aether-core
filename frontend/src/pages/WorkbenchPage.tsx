@@ -18,6 +18,7 @@ import {
   getSessionSummary,
   listFiles,
   listSkills,
+  readFileContent,
   rerunSessionTimeline,
   streamElicitationResponse,
   streamChat,
@@ -27,6 +28,7 @@ import {
   type WorkboardState,
   updateSessionWorkboard,
   updateUserLlmConfig,
+  updateFileContent,
   uploadFile,
   uploadSkill,
   type TranscriptChatMessage,
@@ -65,6 +67,15 @@ const RESULT_MESSAGES: Record<string, string> = {
   error_max_turns: "执行达到轮次上限",
   error_runtime_limit: "执行达到运行时限",
 };
+
+const TEXT_PREVIEW_TYPES = [
+  "text/",
+  "application/json",
+  "application/javascript",
+  "application/typescript",
+  "application/xml",
+  "application/x-yaml",
+];
 
 function randomIdSegment() {
   return Math.random().toString(36).slice(2, 8);
@@ -167,6 +178,13 @@ function getOpenWorkItemCount(workboard: WorkboardState | null): number {
   return workboard.items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
 }
 
+function isTextFile(item: FileItem | null) {
+  if (!item) return false;
+  const mediaType = item.media_type || "";
+  if (TEXT_PREVIEW_TYPES.some((prefix) => mediaType.startsWith(prefix))) return true;
+  return /\.(txt|md|json|csv|tsv|xml|yaml|yml|js|jsx|ts|tsx|py|html|css|scss|log|ini|toml)$/i.test(item.name);
+}
+
 function appendTranscriptMessage(
   current: TranscriptMessage[],
   message: TranscriptMessage,
@@ -220,6 +238,11 @@ export function WorkbenchPage({
   const [pendingUserEcho, setPendingUserEcho] = useState<PendingUserEcho | null>(null);
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [selectedFile, setSelectedFile] = useState<FileItem | null>(null);
+  const [filePreviewContent, setFilePreviewContent] = useState("");
+  const [filePreviewLoading, setFilePreviewLoading] = useState(false);
+  const [filePreviewSaving, setFilePreviewSaving] = useState(false);
+  const [filePreviewError, setFilePreviewError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1841,6 +1864,42 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     }
   };
 
+  const handlePreviewFile = async (file: FileItem) => {
+    setSelectedFile(file);
+    setFilePreviewContent("");
+    setFilePreviewError("");
+    if (!sessionId) return;
+    if (!isTextFile(file)) {
+      setFilePreviewError("这个文件类型暂不支持文本预览，可以直接下载查看。");
+      return;
+    }
+    try {
+      setFilePreviewLoading(true);
+      const result = await readFileContent(sessionId, file.file_id);
+      const data = (result.data ?? {}) as { content?: string };
+      setFilePreviewContent(data.content ?? "");
+    } catch (err) {
+      setFilePreviewError(err instanceof Error ? err.message : "读取文件失败");
+    } finally {
+      setFilePreviewLoading(false);
+    }
+  };
+
+  const handleSaveFilePreview = async () => {
+    if (!sessionId || !selectedFile) return;
+    try {
+      setFilePreviewSaving(true);
+      setFilePreviewError("");
+      const result = await updateFileContent(sessionId, selectedFile.file_id, filePreviewContent);
+      const data = (result.data ?? {}) as { items?: FileItem[] };
+      if (data.items) setFiles(data.items);
+    } catch (err) {
+      setFilePreviewError(err instanceof Error ? err.message : "保存文件失败");
+    } finally {
+      setFilePreviewSaving(false);
+    }
+  };
+
   return (
     <main className="app-layout">
       <WorkbenchSidebar
@@ -1869,7 +1928,48 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         onLogout={onLogout}
         onSidebarResizeStart={handleSidebarResizeStart}
         getDownloadUrl={(fileId) => getDownloadUrl(sessionId, fileId)}
+        onPreviewFile={(file) => void handlePreviewFile(file)}
       />
+
+      {selectedFile ? (
+        <aside className="file-preview-drawer">
+          <div className="file-preview-drawer__header">
+            <div>
+              <h3>{selectedFile.name}</h3>
+              <p>{selectedFile.relative_path || "文件"}</p>
+            </div>
+            <button type="button" className="icon-button" onClick={() => setSelectedFile(null)} title="关闭">
+              <Icons.Close />
+            </button>
+          </div>
+          {filePreviewError ? <div className="file-preview-drawer__error">{filePreviewError}</div> : null}
+          {filePreviewLoading ? (
+            <div className="file-preview-drawer__placeholder">正在读取文件...</div>
+          ) : isTextFile(selectedFile) ? (
+            <textarea
+              className="file-preview-drawer__editor"
+              value={filePreviewContent}
+              onChange={(event) => setFilePreviewContent(event.target.value)}
+              spellCheck={false}
+            />
+          ) : (
+            <div className="file-preview-drawer__placeholder">当前文件只能下载查看。</div>
+          )}
+          <div className="file-preview-drawer__footer">
+            <a className="action-button small" href={getDownloadUrl(sessionId, selectedFile.file_id)} target="_blank" rel="noreferrer">
+              下载
+            </a>
+            <button
+              type="button"
+              className="action-button small"
+              disabled={!isTextFile(selectedFile) || filePreviewSaving || filePreviewLoading}
+              onClick={() => void handleSaveFilePreview()}
+            >
+              {filePreviewSaving ? "保存中" : "保存"}
+            </button>
+          </div>
+        </aside>
+      ) : null}
 
       <LlmConfigDialog
         open={showLlmDialog}

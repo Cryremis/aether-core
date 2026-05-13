@@ -4,6 +4,7 @@ from __future__ import annotations
 import mimetypes
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -54,6 +55,7 @@ class FileService:
         target_path.write_bytes(content)
 
         media_type = upload_file.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+        modified_at = datetime.fromtimestamp(target_path.stat().st_mtime, timezone.utc)
         record = FileRecord(
             file_id=file_id,
             session_id=session.session_id,
@@ -62,6 +64,7 @@ class FileService:
             size=len(content),
             media_type=media_type,
             category="upload",
+            modified_at=modified_at,
         )
         session.uploads.append(record.model_dump(mode="json"))
         session_service.persist(session)

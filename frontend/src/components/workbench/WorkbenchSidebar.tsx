@@ -31,7 +31,26 @@ type WorkbenchSidebarProps = {
   onLogout?: () => void;
   onSidebarResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   getDownloadUrl: (fileId: string) => string;
+  onPreviewFile: (file: FileItem) => void;
 };
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatModifiedAt(value?: string | null) {
+  if (!value) return "时间未知";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(timestamp);
+}
 
 export function WorkbenchSidebar({
   conversations,
@@ -59,6 +78,7 @@ export function WorkbenchSidebar({
   onLogout,
   onSidebarResizeStart,
   getDownloadUrl,
+  onPreviewFile,
 }: WorkbenchSidebarProps) {
   return (
     <>
@@ -138,9 +158,12 @@ export function WorkbenchSidebar({
                       <div className="resource-icon"><Icons.File /></div>
                       <div className="resource-info">
                         <strong>{item.name}</strong>
-                        <p>{item.category} · {(item.size / 1024).toFixed(1)} KB</p>
+                        <p>{item.category} · {formatFileSize(item.size)} · {formatModifiedAt(item.modified_at ?? item.created_at)}</p>
                       </div>
-                      <a className="download-btn" href={getDownloadUrl(item.file_id)} target="_blank" rel="noreferrer" title="下载"><Icons.Download /></a>
+                      <div className="resource-actions">
+                        <button type="button" className="download-btn" onClick={() => onPreviewFile(item)} title="预览 / 编辑"><Icons.Eye /></button>
+                        <a className="download-btn" href={getDownloadUrl(item.file_id)} target="_blank" rel="noreferrer" title="下载"><Icons.Download /></a>
+                      </div>
                     </article>
                   ))}
                 </div>
