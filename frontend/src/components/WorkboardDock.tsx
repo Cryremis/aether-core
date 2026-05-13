@@ -142,7 +142,6 @@ export function WorkboardDock({ workboard, visible, busy = false, onToggle, onAp
           op: "update_item",
           id: editingItemId,
           title,
-          active_form: title,
           notes: draft.notes.trim() || null,
           priority: draft.priority,
           status: draft.status,
@@ -152,7 +151,6 @@ export function WorkboardDock({ workboard, visible, busy = false, onToggle, onAp
       : {
           op: "add_item",
           title,
-          active_form: title,
           notes: draft.notes.trim() || null,
           priority: draft.priority,
           status: draft.status,
