@@ -762,11 +762,14 @@ details[open]::details-content {
 }
 
 .workboard-dock {
+  --workboard-height: 430px;
+  --workboard-header-height: 44px;
+  --workboard-resize-handle-height: 0px;
   border: 1px solid rgba(226, 232, 240, 0.9);
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.94)),
     radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 36%);
-  max-height: 400px;
+  max-height: var(--workboard-height);
   overflow: hidden;
   transition: max-height 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -784,11 +787,11 @@ details[open]::details-content {
 }
 
 .workboard-dock.is-collapsed {
-  max-height: 48px;
+  max-height: calc(var(--workboard-header-height) + var(--workboard-resize-handle-height));
 }
 
 .workboard-dock.is-expanded {
-  max-height: 400px;
+  max-height: var(--workboard-height);
 }
 
 .workboard-dock__body {
@@ -803,7 +806,7 @@ details[open]::details-content {
 
 .workboard-dock.is-expanded .workboard-dock__body {
   opacity: 1;
-  max-height: 340px;
+  max-height: calc(var(--workboard-height) - var(--workboard-header-height) - var(--workboard-resize-handle-height));
   padding: 0 12px 12px;
 }
 
@@ -812,6 +815,7 @@ details[open]::details-content {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: nowrap;
   gap: 12px;
   padding: 8px 12px;
   background: transparent;
@@ -845,6 +849,7 @@ details[open]::details-content {
 .workboard-dock__summary {
   font-size: 11px;
   color: #64748b;
+  white-space: nowrap;
 }
 
 .workboard-dock__eyebrow,
@@ -952,9 +957,13 @@ details[open]::details-content {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 160px;
+  max-height: clamp(120px, calc(var(--workboard-height) - 166px), 460px);
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.workboard-dock.is-resizing {
+  transition: none;
 }
 
 .workboard-dock__editor {
@@ -1177,7 +1186,7 @@ details[open]::details-content {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96)),
     radial-gradient(circle at top left, rgba(14, 165, 233, 0.08), transparent 38%);
-  max-height: 430px;
+  max-height: var(--workboard-height);
 }
 
 .workboard-dock__header {
@@ -1206,13 +1215,13 @@ details[open]::details-content {
 }
 
 .workboard-dock.is-expanded .workboard-dock__body {
-  max-height: 370px;
+  max-height: calc(var(--workboard-height) - var(--workboard-header-height) - var(--workboard-resize-handle-height));
   padding: 0 12px 12px;
 }
 
 .workboard-dock__items {
   gap: 8px;
-  max-height: 264px;
+  max-height: clamp(120px, calc(var(--workboard-height) - 166px), 460px);
   padding-top: 2px;
 }
 
@@ -1657,7 +1666,6 @@ details[open]::details-content {
 }
 
 @media (max-width: 1024px) {
-  .workboard-dock__header,
   .elicitation-panel__header,
   .elicitation-panel__footer,
   .workboard-item {
@@ -1669,6 +1677,12 @@ details[open]::details-content {
   .workboard-dock__header-right {
     flex-direction: row;
     justify-content: space-between;
+  }
+
+  .workboard-dock__header {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: nowrap;
   }
 
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 
 import type { WorkItem, WorkItemStatus, WorkboardOperation, WorkboardState } from "../api/client";
@@ -18,6 +18,12 @@ type DraftState = {
   priority: "low" | "medium" | "high";
   status: WorkItemStatus;
 };
+
+const WORKBOARD_DEFAULT_HEIGHT = 430;
+const WORKBOARD_MIN_HEIGHT = 110;
+const WORKBOARD_MAX_HEIGHT = 640;
+const WORKBOARD_DRAG_ACTIVATE_THRESHOLD = 6;
+const WORKBOARD_TOGGLE_DRAG_THRESHOLD = 56;
 
 function statusLabel(status: string) {
   switch (status) {
@@ -46,12 +52,22 @@ function createDraft(item?: WorkItem): DraftState {
 export function WorkboardDock({ workboard, visible, busy = false, onToggle, onApplyOps }: WorkboardDockProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [shouldRender, setShouldRender] = useState(visible);
+  const [dockHeight, setDockHeight] = useState(WORKBOARD_DEFAULT_HEIGHT);
+  const [isResizingDock, setIsResizingDock] = useState(false);
   const [error, setError] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftState>(() => createDraft());
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dropTargetItemId, setDropTargetItemId] = useState<string | null>(null);
+  const dockResizeStateRef = useRef<{
+    startY: number;
+    startHeight: number;
+    startCollapsed: boolean;
+    isDragging: boolean;
+    lastDeltaY: number;
+  } | null>(null);
+  const suppressToggleClickRef = useRef(false);
 
   const metrics = useMemo(() => {
     const items = workboard?.items ?? [];
@@ -79,8 +95,6 @@ export function WorkboardDock({ workboard, visible, busy = false, onToggle, onAp
       setEditingItemId(null);
     }
   }, [editingItemId, workboard]);
-
-  if (!shouldRender) return null;
 
   const openCreateModal = () => {
     setError("");
@@ -176,9 +190,93 @@ export function WorkboardDock({ workboard, visible, busy = false, onToggle, onAp
     await applyOps([{ op: "reorder_items", ordered_ids: orderedIds }]);
   };
 
+  const handleDockResizeMove = useCallback((event: PointerEvent) => {
+    const resizeState = dockResizeStateRef.current;
+    if (!resizeState) return;
+
+    const deltaY = event.clientY - resizeState.startY;
+    resizeState.lastDeltaY = deltaY;
+    if (!resizeState.isDragging && Math.abs(deltaY) >= WORKBOARD_DRAG_ACTIVATE_THRESHOLD) {
+      resizeState.isDragging = true;
+      setIsResizingDock(true);
+      suppressToggleClickRef.current = true;
+    }
+    if (!resizeState.isDragging) return;
+
+    if (!resizeState.startCollapsed) {
+      const rawHeight = resizeState.startHeight - deltaY;
+      const clampedHeight = Math.max(WORKBOARD_MIN_HEIGHT, Math.min(WORKBOARD_MAX_HEIGHT, rawHeight));
+      setDockHeight(clampedHeight);
+    }
+  }, []);
+
+  const handleDockResizeEnd = useCallback(() => {
+    const resizeState = dockResizeStateRef.current;
+    dockResizeStateRef.current = null;
+    setIsResizingDock(false);
+    window.removeEventListener("pointermove", handleDockResizeMove);
+    window.removeEventListener("pointerup", handleDockResizeEnd);
+    window.removeEventListener("pointercancel", handleDockResizeEnd);
+    setIsResizingDock(false);
+
+    if (!resizeState) return;
+    if (!resizeState.isDragging) return;
+
+    // 拖动阈值：避免轻微位移误触发展开/收起
+    if (resizeState.startCollapsed) {
+      if (resizeState.lastDeltaY <= -WORKBOARD_TOGGLE_DRAG_THRESHOLD) {
+        const rawHeight = resizeState.startHeight - resizeState.lastDeltaY;
+        const clampedHeight = Math.max(WORKBOARD_MIN_HEIGHT, Math.min(WORKBOARD_MAX_HEIGHT, rawHeight));
+        setDockHeight(clampedHeight);
+        setCollapsed(false);
+      }
+      return;
+    }
+
+    if (resizeState.lastDeltaY >= WORKBOARD_TOGGLE_DRAG_THRESHOLD) {
+      setCollapsed(true);
+    }
+  }, [handleDockResizeMove]);
+
+  const handleDockResizeStart = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!visible || event.button !== 0) return;
+    event.preventDefault();
+    suppressToggleClickRef.current = false;
+    dockResizeStateRef.current = {
+      startY: event.clientY,
+      startHeight: dockHeight,
+      startCollapsed: collapsed,
+      isDragging: false,
+      lastDeltaY: 0,
+    };
+    window.addEventListener("pointermove", handleDockResizeMove);
+    window.addEventListener("pointerup", handleDockResizeEnd);
+    window.addEventListener("pointercancel", handleDockResizeEnd);
+  }, [collapsed, dockHeight, handleDockResizeEnd, handleDockResizeMove, visible]);
+
+  const handleHeaderToggle = useCallback(() => {
+    if (suppressToggleClickRef.current) {
+      suppressToggleClickRef.current = false;
+      return;
+    }
+    setCollapsed((value) => !value);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("pointermove", handleDockResizeMove);
+      window.removeEventListener("pointerup", handleDockResizeEnd);
+      window.removeEventListener("pointercancel", handleDockResizeEnd);
+    };
+  }, [handleDockResizeEnd, handleDockResizeMove]);
+
   const hasItems = Boolean(workboard && workboard.items.length > 0);
   const modalTitle = editingItemId ? "编辑任务" : "新增任务";
   const canRenderPortal = typeof document !== "undefined";
+  const dockStyle = { "--workboard-height": `${dockHeight}px` } as CSSProperties;
+
+  if (!shouldRender) return null;
+
   const modal =
     isModalOpen && canRenderPortal
       ? createPortal(
@@ -271,9 +369,12 @@ export function WorkboardDock({ workboard, visible, busy = false, onToggle, onAp
 
   return (
     <>
-      <section className={`workboard-dock ${visible ? "is-visible" : "is-hidden"} ${collapsed ? "is-collapsed" : "is-expanded"} ${hasItems ? "" : "is-empty"}`}>
+      <section
+        className={`workboard-dock ${visible ? "is-visible" : "is-hidden"} ${collapsed ? "is-collapsed" : "is-expanded"} ${hasItems ? "" : "is-empty"} ${isResizingDock ? "is-resizing" : ""}`}
+        style={dockStyle}
+      >
         <div className="workboard-dock__header">
-          <button type="button" className="workboard-dock__header-left" onClick={() => setCollapsed((value) => !value)}>
+          <button type="button" className="workboard-dock__header-left" onClick={handleHeaderToggle} onPointerDown={handleDockResizeStart}>
             <span className="workboard-dock__eyebrow">任务清单</span>
             {hasItems ? (
               <>
