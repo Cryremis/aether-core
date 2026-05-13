@@ -10,6 +10,7 @@ import httpx
 from app.core.config import settings
 from app.runtime.engine import agent_engine
 from app.services.context.context_pipeline import context_pipeline
+from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
 
@@ -69,6 +70,13 @@ def seed_verbose_history(session: AgentSession, turns: int = 6) -> None:
         )
 
 
+def build_session(session_id: str, **overrides) -> AgentSession:
+    session = session_service.get_or_create(session_id)
+    for key, value in overrides.items():
+        setattr(session, key, value)
+    return session
+
+
 def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
@@ -88,7 +96,7 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
     monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
 
-    session = AgentSession(session_id="sess_engine_success")
+    session = build_session("sess_engine_success")
     events = asyncio.run(collect_stream(session, "reply directly"))
 
     result_events = [item for item in events if item["type"] == "result"]
@@ -125,7 +133,7 @@ def test_agent_engine_emits_committed_user_message_with_client_id(monkeypatch, t
     monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
 
-    session = AgentSession(session_id="sess_engine_committed_user")
+    session = build_session("sess_engine_committed_user")
 
     async def run_flow():
         events: list[dict] = []
@@ -163,7 +171,7 @@ def test_agent_engine_injects_runtime_state_context(monkeypatch, tmp_path):
     monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
 
-    session = AgentSession(session_id="sess_engine_runtime_state")
+    session = build_session("sess_engine_runtime_state")
     from app.services.runtime_state import runtime_state_service
 
     runtime_state_service.update_workboard(
@@ -214,8 +222,8 @@ def test_agent_engine_injects_platform_and_host_system_prompts(monkeypatch, tmp_
         system_prompt="平台={{platform.display_name}} 用户={{host.user.id}}",
     )
 
-    session = AgentSession(
-        session_id="sess_engine_prompt_layers",
+    session = build_session(
+        "sess_engine_prompt_layers",
         host_name="Demo Host",
         host_context={
             "user": {"id": "u-100"},
@@ -280,8 +288,8 @@ def test_agent_engine_fallback_conversation_inherits_platform_context(monkeypatc
         platform_id=platform["platform_id"],
     )
 
-    session = AgentSession(
-        session_id="sess_engine_seed_target",
+    session = build_session(
+        "sess_engine_seed_target",
         conversation_id=source["conversation_id"],
         host_name="Seed Host",
     )
@@ -374,7 +382,7 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
     monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
 
-    session = AgentSession(session_id="sess_engine_long_run")
+    session = build_session("sess_engine_long_run")
     events = asyncio.run(collect_stream(session, "continue long task"))
 
     result_events = [item for item in events if item["type"] == "result"]
@@ -446,7 +454,7 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
     monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
 
-    session = AgentSession(session_id="sess_engine_skill")
+    session = build_session("sess_engine_skill")
     events = asyncio.run(collect_stream(session, "analyze data"))
 
     assert len(observed_messages) == 2
@@ -526,7 +534,7 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
     monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
 
-    session = AgentSession(session_id="sess_engine_runtime_event")
+    session = build_session("sess_engine_runtime_event")
     events = asyncio.run(collect_stream(session, "repair runtime"))
     event_types = [item["type"] for item in events]
     assert "runtime_recreated" in event_types
@@ -596,7 +604,7 @@ def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tm
     monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
     monkeypatch.setattr(agent_engine, "_TOOL_PROGRESS_INTERVAL_SECONDS", 0.01)
 
-    session = AgentSession(session_id="sess_engine_tool_progress")
+    session = build_session("sess_engine_tool_progress")
     events = asyncio.run(collect_stream(session, "run the slow tool"))
 
     assert any(item["type"] == "tool_progress" for item in events)
@@ -606,7 +614,7 @@ def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tm
 
 def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     initialize_store(tmp_path)
-    session = AgentSession(session_id="sess_engine_proactive")
+    session = build_session("sess_engine_proactive")
     seed_verbose_history(session, turns=6)
 
     async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
@@ -644,7 +652,7 @@ def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
 
 def test_agent_engine_recovers_from_prompt_too_long(monkeypatch, tmp_path):
     initialize_store(tmp_path)
-    session = AgentSession(session_id="sess_engine_reactive")
+    session = build_session("sess_engine_reactive")
     seed_verbose_history(session, turns=7)
     call_count = {"value": 0}
 
@@ -735,7 +743,7 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
     monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
     monkeypatch.setattr(agent_engine, "_TOOL_PROGRESS_INTERVAL_SECONDS", 0.01)
 
-    session = AgentSession(session_id="sess_engine_abort_and_resume")
+    session = build_session("sess_engine_abort_and_resume")
 
     async def run_flow():
         first_events: list[dict] = []
@@ -820,7 +828,7 @@ def test_agent_engine_persists_transcript_when_tool_requests_user_input(monkeypa
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
     monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
 
-    session = AgentSession(session_id="sess_engine_await_input")
+    session = build_session("sess_engine_await_input")
     events = asyncio.run(collect_stream(session, "ask user"))
 
     completed = [item for item in events if item["type"] == "completed"]
@@ -852,7 +860,7 @@ def test_agent_engine_returns_partial_answer_when_stream_interrupted_after_conte
     monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
 
-    session = AgentSession(session_id="sess_engine_partial_stream")
+    session = build_session("sess_engine_partial_stream")
     events = asyncio.run(collect_stream(session, "say something"))
 
     result_event = next(item for item in events if item["type"] == "result")

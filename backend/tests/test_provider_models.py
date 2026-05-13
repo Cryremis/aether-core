@@ -437,10 +437,6 @@ class TestBackgroundRefresh:
 class TestRealModelsDevAPI:
     """测试真实的 models.dev API（可选，网络依赖）"""
     
-    @pytest.mark.skipif(
-        True,  # 默认跳过，避免CI失败
-        reason="需要网络连接，默认跳过"
-    )
     def test_fetch_real_api(self):
         """测试真实API获取（手动运行时启用）"""
         client = ModelsDevClient()
