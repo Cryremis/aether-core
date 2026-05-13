@@ -79,6 +79,9 @@ class FileService:
             *self.list_uploads(session),
         ]
 
+    def list_sidebar_files(self, session: AgentSession) -> list[FileRecord]:
+        return [*self.list_uploads(session), *artifact_service.list_artifacts(session)]
+
     def resolve_file_path(self, session: AgentSession, file_id: str) -> Path | None:
         assert session.workspace is not None
         for item in [*session.platform_files, *session.uploads, *session.artifacts]:

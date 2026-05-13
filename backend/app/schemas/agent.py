@@ -45,6 +45,7 @@ class AgentEvent(BaseModel):
         "run_started",
         "assistant_visible_started",
         "artifact_created",
+        "files_snapshot",
         "runtime_created",
         "runtime_recreated",
         "workboard_snapshot",

@@ -1016,6 +1016,11 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         return;
       }
 
+      if (eventType === "files_snapshot") {
+        setFiles((payload.items ?? []) as FileItem[]);
+        return;
+      }
+
       if (eventType === "elicitation_snapshot") {
         const snapshot = payload.snapshot as ElicitationState | undefined;
         if (snapshot) setElicitation(snapshot);
@@ -1289,9 +1294,6 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
                 }
               : block,
         );
-        if (["sandbox_shell", "create_text_artifact"].includes(toolName)) {
-          void refreshResources(effectiveSessionId);
-        }
         return;
       }
 
@@ -1313,10 +1315,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         return;
       }
 
-      if (eventType === "artifact_created") {
-        void refreshResources(effectiveSessionId);
-        return;
-      }
+      if (eventType === "artifact_created") return;
 
       if (eventType === "result") {
         const subtype = String(payload.subtype ?? "");
@@ -1819,7 +1818,8 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     try {
       setError("");
       await uploadFile(sessionId, file);
-      await refreshResources(sessionId);
+      const fileResult = await listFiles(sessionId);
+      setFiles((fileResult.items ?? []) as FileItem[]);
       void onSessionRefresh?.(sessionId);
       setSidebarView("files");
     } catch (uploadError) {
@@ -1832,7 +1832,8 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     try {
       setError("");
       await uploadSkill(sessionId, file);
-      await refreshResources(sessionId);
+      const skillResult = await listSkills(sessionId);
+      setSkills((skillResult.data ?? []) as SkillItem[]);
       void onSessionRefresh?.(sessionId);
       setSidebarView("skills");
     } catch (uploadError) {

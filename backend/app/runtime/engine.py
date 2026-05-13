@@ -17,6 +17,7 @@ from app.runtime.event_protocol import make_event
 from app.services.context.context_pipeline import context_pipeline
 from app.services.context.message_adapter import context_message_adapter
 from app.services.context.runtime_types import ContextEventType, ContextOverflowError
+from app.services.file_service import file_service
 from app.services.llm_client import llm_client
 from app.services.llm_config_service import llm_config_service
 from app.services.prompt_service import prompt_service
@@ -346,6 +347,11 @@ class AgentEngine:
             session,
             "workboard_snapshot",
             snapshot=runtime_state_service.get_workboard(session).model_dump(mode="json"),
+        )
+        yield make_event(
+            session,
+            "files_snapshot",
+            items=[item.model_dump(mode="json") for item in file_service.list_sidebar_files(session)],
         )
         yield make_event(
             session,
@@ -897,6 +903,12 @@ class AgentEngine:
                     artifact_payload = visible_result.get("artifact") if isinstance(visible_result, dict) else None
                     if artifact_payload:
                         yield make_event(session, "artifact_created", artifact=artifact_payload)
+                    if tool_name in {"sandbox_shell", "create_text_artifact"}:
+                        yield make_event(
+                            session,
+                            "files_snapshot",
+                            items=[item.model_dump(mode="json") for item in file_service.list_sidebar_files(session)],
+                        )
                     session.messages.append(
                         context_message_adapter.make_tool_message(
                             tool_call_id=tool_call["id"],
