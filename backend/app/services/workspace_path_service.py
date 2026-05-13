@@ -22,8 +22,6 @@ class WorkspacePathService:
     """统一处理沙箱逻辑路径与宿主机真实路径的映射。"""
 
     _SPECIAL_DIRS = {
-        "input": settings.sandbox_docker_input_dir,
-        "output": settings.sandbox_docker_output_dir,
         "skills": settings.sandbox_docker_skills_dir,
         "logs": settings.sandbox_docker_logs_dir,
         "work": settings.sandbox_docker_work_dir,

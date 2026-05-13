@@ -329,13 +329,13 @@ def test_prompt_workspace_paths_use_container_paths(tmp_path):
     session = session_service.get_or_create("sess_prompt_paths")
 
     rendered = prompt_service._render_template(
-        "{{workspace.root_dir}}|{{workspace.input_dir}}|{{workspace.work_dir}}|{{workspace.logs_dir}}",
+        "{{workspace.root_dir}}|{{workspace.work_dir}}|{{workspace.logs_dir}}",
         session=session,
         conversation={"conversation_id": "conv-demo"},
         platform=None,
     )
 
-    assert rendered == "/workspace|/workspace/input|/workspace/work|/workspace/logs"
+    assert rendered == "/workspace|/workspace/work|/workspace/logs"
 
 
 def test_read_tool_supports_offset_and_line_numbers(tmp_path):
@@ -372,7 +372,7 @@ def test_list_tool_defaults_to_workspace_root(tmp_path):
 
     settings.storage_root = tmp_path / "storage"
     session = session_service.get_or_create("sess_list_tool")
-    (session.workspace.input_dir / "upload.txt").write_text("demo", encoding="utf-8")
+    (session.workspace.work_dir / "upload.txt").write_text("demo", encoding="utf-8")
 
     result = __import__("asyncio").run(
         tool_service.execute(
@@ -384,5 +384,4 @@ def test_list_tool_defaults_to_workspace_root(tmp_path):
 
     names = [item["name"] for item in result["items"]]
     assert result["path"] == "/workspace"
-    assert "input" in names
     assert "work" in names

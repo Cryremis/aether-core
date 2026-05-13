@@ -31,7 +31,7 @@ from app.services.skill_loader import skill_loader
 class PlatformBaselineService:
     """管理平台基线环境。"""
 
-    _ROOT_DIRECTORIES = ("input", "skills", "work", "output", "logs")
+    _ROOT_DIRECTORIES = ("skills", "work", "logs")
 
     def ensure_platform_root(self, platform_key: str) -> Path:
         root = settings.platform_baselines_root / platform_key.strip().lower()
@@ -286,10 +286,8 @@ class PlatformBaselineService:
         platform_files: list[dict[str, object]] = []
         for item in self.list_files(platform_key):
             section_root = {
-                "input": session.workspace.input_dir,
                 "skills": session.workspace.skills_dir,
                 "work": session.workspace.work_dir,
-                "output": session.workspace.output_dir,
                 "logs": session.workspace.logs_dir,
             }[item.section]
             session_relative_path = Path(item.relative_path).relative_to(item.section)
@@ -315,10 +313,8 @@ class PlatformBaselineService:
         if session.workspace is None:
             return
         section_roots = {
-            "input": session.workspace.input_dir,
             "skills": session.workspace.skills_dir,
             "work": session.workspace.work_dir,
-            "output": session.workspace.output_dir,
             "logs": session.workspace.logs_dir,
         }
         for section, target_root in section_roots.items():
@@ -341,11 +337,11 @@ class PlatformBaselineService:
             raise ValueError("目标路径超出平台基线环境范围。")
         return resolved_target
 
-    def _extract_section(self, relative_path: str) -> Literal["input", "skills", "work", "output", "logs"]:
+    def _extract_section(self, relative_path: str) -> Literal["skills", "work", "logs"]:
         normalized = relative_path.replace("\\", "/").strip("/")
         section = normalized.split("/", 1)[0]
         if section not in set(self._ROOT_DIRECTORIES):
-            raise RuntimeError("平台基线路径必须位于 input、skills、work、output、logs 之一。")
+            raise RuntimeError("平台基线路径必须位于 skills、work、logs 之一。")
         return section  # type: ignore[return-value]
 
     def _install_single_skill_file(self, target_root: Path, filename: str, raw_bytes: bytes) -> None:

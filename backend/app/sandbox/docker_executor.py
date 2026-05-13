@@ -108,13 +108,9 @@ class DockerSandboxExecutor(SandboxExecutor):
             "--env",
             f"AETHER_SANDBOX_ROOT={settings.sandbox_docker_workspace_mount}",
             "--env",
-            f"AETHER_INPUT_DIR={settings.sandbox_docker_input_dir}",
-            "--env",
             f"AETHER_SKILLS_DIR={settings.sandbox_docker_skills_dir}",
             "--env",
             f"AETHER_WORK_DIR={settings.sandbox_docker_work_dir}",
-            "--env",
-            f"AETHER_OUTPUT_DIR={settings.sandbox_docker_output_dir}",
             "--env",
             f"AETHER_LOGS_DIR={settings.sandbox_docker_logs_dir}",
             "--env",
@@ -211,7 +207,7 @@ class DockerSandboxExecutor(SandboxExecutor):
 set -euo pipefail
 mkdir -p /workspace/metadata
 if [ ! -f /workspace/metadata/.baseline-materialized ]; then
-  for name in input skills work output logs; do
+  for name in skills work logs; do
     mkdir -p "/workspace/${{name}}"
     if [ -d "/aether/baseline/${{name}}" ]; then
       cp -R "/aether/baseline/${{name}}/." "/workspace/${{name}}/"
@@ -226,7 +222,7 @@ exec {process}
         setup_script = """
 set -euo pipefail
 mkdir -p /workspace /tmp/aether-runtime
-for name in input skills work output logs; do
+for name in skills work logs; do
   mkdir -p "/workspace/${{name}}"
   mkdir -p "/aether/session-upper/${{name}}"
   mkdir -p "/aether/session-overlay-work/${{name}}"

@@ -61,7 +61,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
   const [baselineError, setBaselineError] = useState("");
   
   // File Manager State
-  const [currentBaselineDirectory, setCurrentBaselineDirectory] = useState(""); // "" 代表根目录 (显示 input/skills/work 等)
+  const [currentBaselineDirectory, setCurrentBaselineDirectory] = useState(""); // "" 代表根目录 (显示 skills/work/logs)
   const [selectedBaselinePath, setSelectedBaselinePath] = useState("");
   const [selectedBaselineContent, setSelectedBaselineContent] = useState("");
   const [selectedBaselineMediaType, setSelectedBaselineMediaType] = useState("");
@@ -345,7 +345,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
 
   const handleDeleteBaselineFile = async (relativePath: string) => {
     if (!activePlatformId) return;
-    if (["input", "skills", "work", "output", "logs"].includes(relativePath)) {
+    if (["skills", "work", "logs"].includes(relativePath)) {
       setBaselineError("根目录不允许删除。"); return;
     }
     if (!window.confirm(`确定要删除 ${relativePath} 吗？此操作不可恢复。`)) return;
@@ -361,7 +361,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
 
   const handleRenameBaselinePath = async (sourcePath: string) => {
     if (!activePlatformId) return;
-    if (["input", "skills", "work", "output", "logs"].includes(sourcePath)) {
+    if (["skills", "work", "logs"].includes(sourcePath)) {
       setBaselineError("根目录不允许重命名。"); return;
     }
     const targetPath = window.prompt("输入新的完整路径", sourcePath);

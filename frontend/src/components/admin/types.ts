@@ -16,7 +16,7 @@ export type PlatformItem = {
 export type PlatformBaselineFileItem = {
   name: string;
   relative_path: string;
-  section: "input" | "skills" | "work" | "output" | "logs";
+  section: "skills" | "work" | "logs";
   size: number;
   media_type: string;
 };
@@ -24,7 +24,7 @@ export type PlatformBaselineFileItem = {
 export type PlatformBaselineEntryItem = {
   name: string;
   relative_path: string;
-  section: "input" | "skills" | "work" | "output" | "logs";
+  section: "skills" | "work" | "logs";
   kind: "file" | "directory";
   size: number;
   media_type: string;

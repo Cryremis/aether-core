@@ -53,10 +53,8 @@ ENV HOME={settings.sandbox_docker_home_dir}
 ENV XDG_CACHE_HOME={settings.sandbox_docker_cache_dir}
 ENV XDG_CONFIG_HOME={settings.sandbox_docker_home_dir}/.config
 ENV AETHER_SANDBOX_ROOT={settings.sandbox_docker_workspace_mount}
-ENV AETHER_INPUT_DIR={settings.sandbox_docker_input_dir}
 ENV AETHER_SKILLS_DIR={settings.sandbox_docker_skills_dir}
 ENV AETHER_WORK_DIR={settings.sandbox_docker_work_dir}
-ENV AETHER_OUTPUT_DIR={settings.sandbox_docker_output_dir}
 ENV AETHER_LOGS_DIR={settings.sandbox_docker_logs_dir}
 
 CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
@@ -70,20 +68,16 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
             entrypoint='镜像应支持 `/bin/bash -lc "while true; do sleep 3600; done"`',
             expected_workspace_root=settings.sandbox_docker_workspace_mount,
             required_directories=[
-                settings.sandbox_docker_input_dir,
                 settings.sandbox_docker_skills_dir,
                 settings.sandbox_docker_work_dir,
-                settings.sandbox_docker_output_dir,
                 settings.sandbox_docker_logs_dir,
                 settings.sandbox_docker_home_dir,
                 settings.sandbox_docker_cache_dir,
             ],
             required_env_vars=[
                 "AETHER_SANDBOX_ROOT",
-                "AETHER_INPUT_DIR",
                 "AETHER_SKILLS_DIR",
                 "AETHER_WORK_DIR",
-                "AETHER_OUTPUT_DIR",
                 "AETHER_LOGS_DIR",
                 "HOME",
                 "XDG_CACHE_HOME",

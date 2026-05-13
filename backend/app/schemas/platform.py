@@ -15,7 +15,7 @@ class PlatformCreateRequest(BaseModel):
 class PlatformBaselineFile(BaseModel):
     name: str
     relative_path: str
-    section: Literal["input", "skills", "work", "output", "logs"]
+    section: Literal["skills", "work", "logs"]
     size: int
     media_type: str
 
@@ -23,7 +23,7 @@ class PlatformBaselineFile(BaseModel):
 class PlatformBaselineEntry(BaseModel):
     name: str
     relative_path: str
-    section: Literal["input", "skills", "work", "output", "logs"]
+    section: Literal["skills", "work", "logs"]
     kind: Literal["file", "directory"]
     size: int = 0
     media_type: str = ""

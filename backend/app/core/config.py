@@ -94,8 +94,6 @@ class Settings(BaseSettings):
     sandbox_docker_image: str = "aethercore-sandbox:latest"
     sandbox_docker_workspace_mount: str = "/workspace"
     sandbox_docker_work_dir: str = "/workspace/work"
-    sandbox_docker_input_dir: str = "/workspace/input"
-    sandbox_docker_output_dir: str = "/workspace/output"
     sandbox_docker_skills_dir: str = "/workspace/skills"
     sandbox_docker_logs_dir: str = "/workspace/logs"
     sandbox_docker_home_dir: str = "/workspace/home"

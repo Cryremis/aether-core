@@ -102,7 +102,7 @@ def get_admin_conversation_detail(
         allow_network=session.allow_network,
         created_at=datetime.fromisoformat(conversation["created_at"]) if conversation.get("created_at") else datetime.now(timezone.utc),
         skills=skill_service.list_for_session(session),
-        files=[*file_service.list_uploads(session), *artifact_service.list_artifacts(session)],
+        files=file_service.list_sidebar_files(session),
         messages=session.messages,
         transcript=transcript_service.build_chat_transcript(session.messages),
         context_state=session.context_state,

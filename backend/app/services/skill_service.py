@@ -41,7 +41,7 @@ class SkillService:
             "要求：\n"
             "1. 始终使用中文回答。\n"
             "2. 处理文件前优先使用 list、read、glob、grep 等工具确认路径和内容，不要臆测。\n"
-            "3. 如需运行命令，优先使用 sandbox_shell，并把最终可下载结果写入输出目录。\n"
+            "3. 如需运行命令，优先使用 sandbox_shell，并把最终可下载结果写入工作目录。\n"
             "4. 当宿主工具可直接提供更可靠的数据时，优先调用宿主工具。\n"
             "5. 最终回答必须简洁，说明你做了什么、产出了什么文件、还有什么风险。\n"
             "6. 技能不是普通提示词片段。若用户任务明显匹配某个技能，必须先调用 invoke_skill 加载该技能，再继续执行任务。\n"
@@ -50,12 +50,10 @@ class SkillService:
             f"宿主上下文: {context}\n\n"
             "## 沙箱路径约定\n"
             f"沙箱根目录: {sandbox_paths['root']}\n"
-            f"输入目录: {sandbox_paths['input']}\n"
             f"技能目录: {sandbox_paths['skills']}\n"
             f"工作目录: {sandbox_paths['work']}\n"
-            f"输出目录: {sandbox_paths['output']}\n"
             f"日志目录: {sandbox_paths['logs']}\n"
-            "所有工具中的相对路径，都应当优先按沙箱根目录解析；例如用户上传文件通常位于 `input/` 下。\n\n"
+            "所有工具中的相对路径，都应当优先按沙箱根目录解析；用户上传文件和你生成的文件统一位于 `work/` 下。\n\n"
             "## 可用技能\n"
             f"{skill_listing}"
         )
@@ -67,7 +65,7 @@ class SkillService:
             "要求：\n"
             "1. 始终使用中文回答。\n"
             "2. 处理文件前优先使用 list、read、glob、grep 等工具确认路径和内容，不要臆测。\n"
-            "3. 如需运行命令，优先使用 sandbox_shell，并把最终可下载结果写入输出目录。\n"
+            "3. 如需运行命令，优先使用 sandbox_shell，并把最终可下载结果写入工作目录。\n"
             "4. 当宿主工具可直接提供更可靠的数据时，优先调用宿主工具。\n"
             "5. 最终回答必须简洁，说明你做了什么、产出了什么文件、还有什么风险。\n"
             "6. 技能不是普通提示词片段。若用户任务明显匹配某个技能，必须先调用 invoke_skill 加载该技能，再继续执行任务。\n"
@@ -83,12 +81,10 @@ class SkillService:
             f"宿主上下文: {context}\n\n"
             "## 沙箱路径约定\n"
             f"沙箱根目录: {sandbox_paths['root']}\n"
-            f"输入目录: {sandbox_paths['input']}\n"
             f"技能目录: {sandbox_paths['skills']}\n"
             f"工作目录: {sandbox_paths['work']}\n"
-            f"输出目录: {sandbox_paths['output']}\n"
             f"日志目录: {sandbox_paths['logs']}\n"
-            "所有工具中的相对路径，都应当优先按沙箱根目录解析；例如用户上传文件通常位于 `input/` 下。\n\n"
+            "所有工具中的相对路径，都应当优先按沙箱根目录解析；用户上传文件和你生成的文件统一位于 `work/` 下。\n\n"
             "## 可用技能\n"
             f"{skill_listing}"
         )
@@ -96,10 +92,8 @@ class SkillService:
     def _sandbox_path_map(self) -> dict[str, str]:
         return {
             "root": settings.sandbox_docker_workspace_mount,
-            "input": settings.sandbox_docker_input_dir,
             "skills": settings.sandbox_docker_skills_dir,
             "work": settings.sandbox_docker_work_dir,
-            "output": settings.sandbox_docker_output_dir,
             "logs": settings.sandbox_docker_logs_dir,
         }
 

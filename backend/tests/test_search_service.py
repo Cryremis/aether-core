@@ -9,18 +9,16 @@ from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 
 
 def build_workspace(root: Path) -> SandboxWorkspace:
-    for name in ["input", "skills", "work", "output", "logs", "home", "cache", "metadata", ".overlay-work"]:
+    for name in ["skills", "work", "logs", "home", "cache", "metadata", ".overlay-work"]:
         (root / name).mkdir(parents=True, exist_ok=True)
-    for name in ["input", "skills", "work", "output", "logs"]:
+    for name in ["skills", "work", "logs"]:
         (root / ".overlay-work" / name).mkdir(parents=True, exist_ok=True)
     return SandboxWorkspace(
         session_id="sess_search",
         root=root,
         baseline_root=None,
-        input_dir=root / "input",
         skills_dir=root / "skills",
         work_dir=root / "work",
-        output_dir=root / "output",
         logs_dir=root / "logs",
         home_dir=root / "home",
         cache_dir=root / "cache",
@@ -124,7 +122,7 @@ def test_glob_defaults_to_workspace_root(monkeypatch, tmp_path):
             shell=shell,
             executor="docker",
             exit_code=0,
-            stdout="input/file.txt\n",
+            stdout="work/file.txt\n",
             stderr="",
             duration_ms=5,
             log_path="logs/cmd.json",
@@ -136,10 +134,10 @@ def test_glob_defaults_to_workspace_root(monkeypatch, tmp_path):
         result = await search_service.execute_glob(
             session,
             {
-                "pattern": "input/**/*",
+                "pattern": "work/**/*",
             },
         )
-        assert result["filenames"] == ["input/file.txt"]
+        assert result["filenames"] == ["work/file.txt"]
 
     asyncio.run(execute())
     assert "cd /workspace &&" in recorded["command"]

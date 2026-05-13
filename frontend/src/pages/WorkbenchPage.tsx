@@ -218,6 +218,23 @@ function insertTranscriptMessageBeforeAssistant(
   ];
 }
 
+function trimTranscriptForRerun(
+  current: TranscriptMessage[],
+  anchorMessageId: string,
+  editedContent?: string,
+): TranscriptMessage[] {
+  const anchorIndex = current.findIndex((item) => item.id === anchorMessageId);
+  if (anchorIndex < 0) {
+    return current;
+  }
+  return current.slice(0, anchorIndex + 1).map((item, index) => {
+    if (index !== anchorIndex || item.role !== "user" || editedContent === undefined) {
+      return item;
+    }
+    return { ...item, content: editedContent };
+  });
+}
+
 
 export function WorkbenchPage({
   conversations,
@@ -278,6 +295,7 @@ export function WorkbenchPage({
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
+  const transcriptMessagesRef = useRef<TranscriptMessage[]>([]);
   const pendingUserEchoRef = useRef<PendingUserEcho | null>(null);
   const pendingAssistantIdRef = useRef<string | null>(null);
   const isStreamingRef = useRef(false);
@@ -317,6 +335,10 @@ export function WorkbenchPage({
   useEffect(() => {
     pendingUserEchoRef.current = pendingUserEcho;
   }, [pendingUserEcho]);
+
+  useEffect(() => {
+    transcriptMessagesRef.current = transcriptMessages;
+  }, [transcriptMessages]);
 
   useEffect(() => {
     if (!activeSessionId) return;
@@ -704,6 +726,11 @@ window.addEventListener("resize", handleResize);
     setFiles((fileResult.items ?? []) as FileItem[]);
   };
 
+  const refreshFiles = async (nextSessionId: string) => {
+    const fileResult = await listFiles(nextSessionId);
+    setFiles((fileResult.items ?? []) as FileItem[]);
+  };
+
   const syncTranscriptFromServer = async (targetSessionId: string) => {
     const summaryResult = await getSessionSummary(targetSessionId);
     const summary = (summaryResult.data ?? {}) as {
@@ -935,7 +962,14 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
     const normalized = fromCommittedMessage(committedMessage);
     const anchorAssistantId = pendingAssistantIdRef.current || liveRunRef.current?.assistantId || null;
     if (normalized.role === "user" || normalized.role === "elicitation_response") {
-      setTranscriptMessages((current) => insertTranscriptMessageBeforeAssistant(current, normalized, anchorAssistantId));
+      setTranscriptMessages((current) => {
+        const shouldReplaceLastUser =
+          normalized.role === "user" && current.some((item) => item.id === normalized.id && item.role === "user");
+        if (shouldReplaceLastUser) {
+          return current.map((item) => (item.id === normalized.id && item.role === "user" ? normalized : item));
+        }
+        return insertTranscriptMessageBeforeAssistant(current, normalized, anchorAssistantId);
+      });
     } else {
       setTranscriptMessages((current) => appendTranscriptMessage(current, normalized));
     }
@@ -1570,22 +1604,24 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
   const rerunFromTimeline = async (messageId: string, promptOverride?: string) => {
     const effectiveSessionId = sessionId || localSessionId;
     if (!effectiveSessionId || isStreamingRef.current) return;
+    const previousTranscript = transcriptMessagesRef.current;
 
     setBusy(true);
     setError("");
     shouldStickToBottomRef.current = true;
+
+    if (promptOverride !== undefined) {
+      setTranscriptMessages((current) => trimTranscriptForRerun(current, messageId, promptOverride));
+    }
 
     try {
       const rerunResult = promptOverride === undefined
         ? await rerunSessionTimeline(effectiveSessionId, messageId)
         : await editSessionTimeline(effectiveSessionId, messageId, promptOverride);
 
-      const summaryResult = await getSessionSummary(effectiveSessionId);
-      const summary = (summaryResult.data ?? {}) as {
-        transcript?: TranscriptChatMessage[];
-      };
-      setTranscriptMessages(fromTranscriptMessages(summary.transcript ?? []));
-      setPendingUserEcho(null);
+      setTranscriptMessages((current) =>
+        trimTranscriptForRerun(current, rerunResult.anchor_message_id, promptOverride),
+      );
 
       const assistantId = `assistant-rerun-${Date.now()}`;
       const roundStartTime = Date.now();
@@ -1684,6 +1720,9 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession);
         void onSessionRefresh?.(effectiveSessionId);
       }
     } catch (err) {
+      if (promptOverride !== undefined) {
+        setTranscriptMessages(previousTranscript);
+      }
       setError(err instanceof Error ? err.message : "重跑失败");
     } finally {
       setBusy(false);
@@ -1841,8 +1880,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     try {
       setError("");
       await uploadFile(sessionId, file);
-      const fileResult = await listFiles(sessionId);
-      setFiles((fileResult.items ?? []) as FileItem[]);
+      await refreshFiles(sessionId);
       void onSessionRefresh?.(sessionId);
       setSidebarView("files");
     } catch (uploadError) {
@@ -1936,7 +1974,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           <div className="file-preview-drawer__header">
             <div>
               <h3>{selectedFile.name}</h3>
-              <p>{selectedFile.relative_path || "文件"}</p>
+              <p>{selectedFile.relative_path || "work"}</p>
             </div>
             <button type="button" className="icon-button" onClick={() => setSelectedFile(null)} title="关闭">
               <Icons.Close />

@@ -31,10 +31,8 @@ const VAR_GROUPS = [
   {
     title: "工作区路径",
     vars: [
-      { name: "workspace.input_dir", desc: "输入目录" },
       { name: "workspace.skills_dir", desc: "技能目录" },
       { name: "workspace.work_dir", desc: "工作目录" },
-      { name: "workspace.output_dir", desc: "输出目录" },
     ],
   },
 ];

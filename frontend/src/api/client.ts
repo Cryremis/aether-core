@@ -172,7 +172,7 @@ export type UserRoleUpdatePayload = {
 export type PlatformBaselineFile = {
   name: string;
   relative_path: string;
-  section: "input" | "skills" | "work" | "output" | "logs";
+  section: "skills" | "work" | "logs";
   size: number;
   media_type: string;
 };
@@ -180,7 +180,7 @@ export type PlatformBaselineFile = {
 export type PlatformBaselineEntry = {
   name: string;
   relative_path: string;
-  section: "input" | "skills" | "work" | "output" | "logs";
+  section: "skills" | "work" | "logs";
   kind: "file" | "directory";
   size: number;
   media_type: string;
@@ -1234,7 +1234,7 @@ export async function listFiles(sessionId: string) {
 }
 
 export async function readFileContent(sessionId: string, fileId: string) {
-  const response = await apiFetch(`/agent/files/${encodeURIComponent(fileId)}/content?session_id=${encodeURIComponent(sessionId)}`);
+  const response = await apiFetch(`/agent/files/${fileId}/content?session_id=${encodeURIComponent(sessionId)}`);
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, `读取文件失败: ${response.status}`));
   }
@@ -1242,7 +1242,7 @@ export async function readFileContent(sessionId: string, fileId: string) {
 }
 
 export async function updateFileContent(sessionId: string, fileId: string, content: string) {
-  const response = await apiFetch(`/agent/files/${encodeURIComponent(fileId)}/content?session_id=${encodeURIComponent(sessionId)}`, {
+  const response = await apiFetch(`/agent/files/${fileId}/content?session_id=${encodeURIComponent(sessionId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content }),
@@ -1271,7 +1271,7 @@ export async function uploadFile(sessionId: string, file: File) {
 
 export function getDownloadUrl(sessionId: string, fileId: string) {
   const token = encodeURIComponent(getAccessToken());
-  return `${API_BASE}/agent/files/${encodeURIComponent(fileId)}/download?session_id=${encodeURIComponent(sessionId)}&access_token=${token}`;
+  return `${API_BASE}/agent/files/${fileId}/download?session_id=${encodeURIComponent(sessionId)}&access_token=${token}`;
 }
 
 export async function abortSession(sessionId: string) {

@@ -141,10 +141,8 @@ class LocalSandboxExecutor(SandboxExecutor):
             {
                 "AETHER_SESSION_ID": workspace.session_id,
                 "AETHER_SANDBOX_ROOT": str(workspace.root),
-                "AETHER_INPUT_DIR": str(workspace.input_dir),
                 "AETHER_SKILLS_DIR": str(workspace.skills_dir),
                 "AETHER_WORK_DIR": str(workspace.work_dir),
-                "AETHER_OUTPUT_DIR": str(workspace.output_dir),
                 "AETHER_LOGS_DIR": str(workspace.logs_dir),
                 "PYTHONIOENCODING": "utf-8",
                 "TERM": "xterm-256color",

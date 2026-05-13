@@ -152,13 +152,13 @@ export function WorkbenchSidebar({
                   </label>
                 </div>
                 <div className="item-list">
-                  {files.length === 0 ? <div className="empty-state">当前暂无上传文件</div> : null}
+                  {files.length === 0 ? <div className="empty-state">work 目录暂无文件</div> : null}
                   {files.map((item, index) => (
                     <article key={item.file_id} className="resource-card anim-enter" style={{ animationDelay: `${index * 0.05}s` }}>
                       <div className="resource-icon"><Icons.File /></div>
                       <div className="resource-info">
                         <strong>{item.name}</strong>
-                        <p>{item.category} · {formatFileSize(item.size)} · {formatModifiedAt(item.modified_at ?? item.created_at)}</p>
+                        <p>{formatFileSize(item.size)} · {formatModifiedAt(item.modified_at ?? item.created_at)}</p>
                       </div>
                       <div className="resource-actions">
                         <button type="button" className="download-btn" onClick={() => onPreviewFile(item)} title="预览 / 编辑"><Icons.Eye /></button>

@@ -495,13 +495,9 @@ class SessionRuntimeService:
             "--env",
             f"AETHER_SANDBOX_ROOT={settings.sandbox_docker_workspace_mount}",
             "--env",
-            f"AETHER_INPUT_DIR={settings.sandbox_docker_input_dir}",
-            "--env",
             f"AETHER_SKILLS_DIR={settings.sandbox_docker_skills_dir}",
             "--env",
             f"AETHER_WORK_DIR={settings.sandbox_docker_work_dir}",
-            "--env",
-            f"AETHER_OUTPUT_DIR={settings.sandbox_docker_output_dir}",
             "--env",
             f"AETHER_LOGS_DIR={settings.sandbox_docker_logs_dir}",
             "--env",
@@ -550,10 +546,8 @@ class SessionRuntimeService:
                 "-lc",
                 (
                     "mkdir -p "
-                    f"{shlex.quote(settings.sandbox_docker_input_dir)} "
                     f"{shlex.quote(settings.sandbox_docker_skills_dir)} "
                     f"{shlex.quote(settings.sandbox_docker_work_dir)} "
-                    f"{shlex.quote(settings.sandbox_docker_output_dir)} "
                     f"{shlex.quote(settings.sandbox_docker_logs_dir)} "
                     f"{shlex.quote(settings.sandbox_docker_home_dir)} "
                     f"{shlex.quote(settings.sandbox_docker_cache_dir)}"
@@ -594,13 +588,9 @@ class SessionRuntimeService:
             "--env",
             f"AETHER_SANDBOX_ROOT={settings.sandbox_docker_workspace_mount}",
             "--env",
-            f"AETHER_INPUT_DIR={settings.sandbox_docker_input_dir}",
-            "--env",
             f"AETHER_SKILLS_DIR={settings.sandbox_docker_skills_dir}",
             "--env",
             f"AETHER_WORK_DIR={settings.sandbox_docker_work_dir}",
-            "--env",
-            f"AETHER_OUTPUT_DIR={settings.sandbox_docker_output_dir}",
             "--env",
             f"AETHER_LOGS_DIR={settings.sandbox_docker_logs_dir}",
             "--env",

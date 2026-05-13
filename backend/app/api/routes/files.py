@@ -62,7 +62,8 @@ async def upload_file(
 @router.get("")
 def list_files(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> FileListResponse:
     session = _ensure_session_access(session_id, auth)
-    return FileListResponse(items=[*file_service.list_uploads(session), *artifact_service.list_artifacts(session)])
+    artifact_service.sync_work_directory(session)
+    return FileListResponse(items=file_service.list_sidebar_files(session))
 
 
 @router.get("/{file_id}/download")
@@ -103,5 +104,5 @@ async def update_file_content(
     if not isinstance(content, str):
         raise HTTPException(status_code=400, detail="content 必须是字符串")
     file_path.write_text(content, encoding="utf-8")
-    artifact_service.sync_output_directory(session)
+    artifact_service.sync_work_directory(session)
     return ApiResponse(message="文件已保存", data={"items": [item.model_dump(mode="json") for item in file_service.list_sidebar_files(session)]})

@@ -9,15 +9,13 @@ from app.sandbox.models import SandboxWorkspace
 class SandboxManager:
     """负责为每个会话准备独立工作区。"""
 
-    _SESSION_ROOTS = ("input", "skills", "work", "output", "logs")
+    _SESSION_ROOTS = ("skills", "work", "logs")
     _WRITABLE_DIR_MODE = 0o777
 
     def ensure_workspace(self, session_id: str, baseline_root: Path | None = None) -> SandboxWorkspace:
         session_root = (settings.sessions_root / session_id / "sandbox").resolve()
-        input_dir = session_root / "input"
         skills_dir = session_root / "skills"
         work_dir = session_root / "work"
-        output_dir = session_root / "output"
         logs_dir = session_root / "logs"
         home_dir = session_root / "home"
         cache_dir = session_root / "cache"
@@ -25,10 +23,8 @@ class SandboxManager:
         metadata_dir = session_root / "metadata"
 
         for directory in [
-            input_dir,
             skills_dir,
             work_dir,
-            output_dir,
             logs_dir,
             home_dir,
             cache_dir,
@@ -49,10 +45,8 @@ class SandboxManager:
             session_id=session_id,
             root=session_root,
             baseline_root=baseline_root.resolve() if baseline_root else None,
-            input_dir=input_dir,
             skills_dir=skills_dir,
             work_dir=work_dir,
-            output_dir=output_dir,
             logs_dir=logs_dir,
             home_dir=home_dir,
             cache_dir=cache_dir,

@@ -117,11 +117,9 @@ class PromptService:
             },
             "workspace": {
                 "root_dir": settings.sandbox_docker_workspace_mount if session and session.workspace else "",
-                "input_dir": settings.sandbox_docker_input_dir if session and session.workspace else "",
-                "skills_dir": settings.sandbox_docker_skills_dir if session and session.workspace else "",
-                "work_dir": settings.sandbox_docker_work_dir if session and session.workspace else "",
-                "output_dir": settings.sandbox_docker_output_dir if session and session.workspace else "",
-                "logs_dir": settings.sandbox_docker_logs_dir if session and session.workspace else "",
+            "skills_dir": settings.sandbox_docker_skills_dir if session and session.workspace else "",
+            "work_dir": settings.sandbox_docker_work_dir if session and session.workspace else "",
+            "logs_dir": settings.sandbox_docker_logs_dir if session and session.workspace else "",
             },
         }
 

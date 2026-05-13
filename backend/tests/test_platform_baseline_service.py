@@ -30,7 +30,7 @@ def test_platform_baseline_materializes_into_new_admin_session(tmp_path):
     initialize_store(tmp_path)
 
     standalone_root = platform_baseline_service.ensure_platform_root("standalone")
-    (standalone_root / "input" / "guide.txt").write_text("baseline guide", encoding="utf-8")
+    (standalone_root / "work" / "guide.txt").write_text("baseline guide", encoding="utf-8")
     skill_dir = standalone_root / "skills" / "analysis-helper"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
@@ -108,35 +108,35 @@ def test_platform_baseline_file_manager_operations(tmp_path):
     initialize_store(tmp_path)
 
     platform_root = platform_baseline_service.ensure_platform_root("standalone")
-    (platform_root / "input" / "docs").mkdir(parents=True, exist_ok=True)
+    (platform_root / "work" / "docs").mkdir(parents=True, exist_ok=True)
 
     created_dir = platform_baseline_service.create_directory(
         "standalone",
-        PlatformBaselineDirectoryRequest(relative_path="input/docs/specs"),
+        PlatformBaselineDirectoryRequest(relative_path="work/docs/specs"),
     )
     assert created_dir.kind == "directory"
 
     created_file = platform_baseline_service.write_text(
         "standalone",
-        PlatformBaselineWriteRequest(relative_path="input/docs/specs/readme.md", content="# hello"),
+        PlatformBaselineWriteRequest(relative_path="work/docs/specs/readme.md", content="# hello"),
     )
     assert created_file.kind == "file"
 
-    content = platform_baseline_service.read_text("standalone", relative_path="input/docs/specs/readme.md")
+    content = platform_baseline_service.read_text("standalone", relative_path="work/docs/specs/readme.md")
     assert content.content == "# hello"
 
     moved = platform_baseline_service.move_path(
         "standalone",
         PlatformBaselineMoveRequest(
-            source_relative_path="input/docs/specs/readme.md",
-            target_relative_path="input/docs/specs/guide.md",
+            source_relative_path="work/docs/specs/readme.md",
+            target_relative_path="work/docs/specs/guide.md",
         ),
     )
-    assert moved.relative_path == "input/docs/specs/guide.md"
+    assert moved.relative_path == "work/docs/specs/guide.md"
 
-    platform_baseline_service.delete_file("standalone", relative_path="input/docs/specs/guide.md")
-    assert not (platform_root / "input" / "docs" / "specs" / "guide.md").exists()
+    platform_baseline_service.delete_file("standalone", relative_path="work/docs/specs/guide.md")
+    assert not (platform_root / "work" / "docs" / "specs" / "guide.md").exists()
 
     import shutil
 
-    shutil.rmtree(platform_root / "input" / "docs")
+    shutil.rmtree(platform_root / "work" / "docs")

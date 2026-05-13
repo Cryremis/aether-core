@@ -246,7 +246,7 @@ class ToolService:
 
         self._registry.register(
             "list",
-            "列出沙箱目录内容。默认以沙箱根目录 `/workspace` 为起点，可用于查看 input/work/output/skills/logs 等目录。",
+            "列出沙箱目录内容。默认以沙箱根目录 `/workspace` 为起点，可用于查看 work/skills/logs 等目录。",
             {
                 "properties": {
                     "path": {"type": "string"},
@@ -274,7 +274,7 @@ class ToolService:
 
         self._registry.register(
             "create_text_artifact",
-            "在输出目录创建文本产物，便于用户下载。",
+            "在工作目录创建文本产物，便于用户预览、编辑和下载。",
             {
                 "properties": {"name": {"type": "string"}, "content": {"type": "string"}},
                 "additionalProperties": False,
@@ -522,7 +522,7 @@ class ToolService:
                     "runtime": exc.runtime,
                 },
             }
-        artifact_service.sync_output_directory(session)
+        artifact_service.sync_work_directory(session)
         response: dict[str, Any] = {
             "shell": result.shell,
             "executor": result.executor,

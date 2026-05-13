@@ -12,6 +12,7 @@ from typing import Any
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
+from app.services.transcript_service import transcript_service
 
 
 def _utcnow_iso() -> str:
@@ -39,7 +40,7 @@ class TimelineService:
     """会话时间线变更服务，统一承载 fork/rerun/edit 等分支语义。"""
 
     _TIMELINE_HISTORY_LIMIT = 120
-    _WORKSPACE_DIRS_TO_CLONE = ("input", "skills", "work", "output", "logs")
+    _WORKSPACE_DIRS_TO_CLONE = ("skills", "work", "logs")
 
     def fork_from_message(
         self,
@@ -159,6 +160,10 @@ class TimelineService:
         rerun_message_id = anchor_message_id
         if edited_content is not None:
             session.messages[anchor_index]["content"] = rerun_prompt
+            session.transcript = transcript_service.append_item(
+                session.transcript,
+                transcript_service.transcript_item_from_committed_message(session.messages[anchor_index]),
+            )
             rerun_message_id = anchor_message_id
         session.active_run = None
         session.last_abort = None
