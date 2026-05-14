@@ -3,6 +3,7 @@
 @import './sections/foundation.css';
 @import './sections/shell.css';
 @import './sections/auth-shell.css';
+@import './sections/product.css';
 @import './sections/workbench.css';
 @import './sections/chat.css';
 @import './sections/admin.css';

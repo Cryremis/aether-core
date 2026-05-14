@@ -1054,7 +1054,7 @@
 /* ================= 底部输入区 ================= */
 .composer-area { padding: 0 20px 24px; background: linear-gradient(0deg, var(--bg-body) 70%, transparent); position: relative; z-index: 20; }
 .composer-box {
-  max-width: 840px; margin: 0 auto; background: #ffffff; border: 1px solid var(--border-color);
+  max-width: 840px; margin: 0 auto; background: var(--surface-0); border: 1px solid var(--border-color);
   border-radius: 20px; padding: 10px 10px 10px 18px; display: flex; flex-direction: column;
   box-shadow: 0 4px 20px -6px rgba(0,0,0,0.08); transition: border-color 0.3s, box-shadow 0.3s;
 }
@@ -1082,21 +1082,21 @@
   padding: 0 12px;
   border: 1px solid rgba(226, 232, 240, 0.9);
   border-radius: 999px;
-  background: #f8fafc;
+  background: var(--surface-1);
   color: var(--text-secondary);
   transition: all 0.2s ease;
 }
 
 .network-toggle:hover {
   border-color: rgba(148, 163, 184, 0.6);
-  background: #eef2ff;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
   color: var(--text-primary);
 }
 
 .network-toggle.active {
   border-color: rgba(37, 99, 235, 0.28);
   background: rgba(37, 99, 235, 0.12);
-  color: #1d4ed8;
+  color: var(--accent);
   box-shadow: 0 8px 20px -16px rgba(37, 99, 235, 0.6);
 }
 
@@ -1114,7 +1114,7 @@
   padding: 0 10px;
   border: 1px solid rgba(226, 232, 240, 0.9);
   border-radius: 999px;
-  background: #f8fafc;
+  background: var(--surface-1);
   color: var(--text-secondary);
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
@@ -1123,7 +1123,7 @@
 
 .workboard-toggle:hover {
   border-color: rgba(148, 163, 184, 0.6);
-  background: #eef2ff;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
   color: var(--text-primary);
   transform: translateY(-1px);
 }
@@ -1191,9 +1191,9 @@
   box-shadow: none;
 }
 
-.send-btn { background: #f1f5f9; color: #94a3b8; border-radius: 50%; padding: 8px; width: 36px; height: 36px; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-.send-btn.active { background: var(--text-primary); color: #ffffff; }
-.send-btn.active:hover { background: #334155; transform: scale(1.08); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.send-btn { background: var(--surface-1); color: var(--text-tertiary); border-radius: 50%; padding: 8px; width: 36px; height: 36px; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+.send-btn.active { background: var(--text-primary); color: var(--bg-body); }
+.send-btn.active:hover { background: color-mix(in srgb, var(--text-primary) 86%, var(--accent)); transform: scale(1.08); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
 
 .stop-btn { background: #fef2f2; color: var(--error); border-radius: 50%; padding: 8px; width: 36px; height: 36px; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); border: 1px solid rgba(239, 68, 68, 0.3); }
 .stop-btn:hover { background: var(--error); color: #ffffff; transform: scale(1.08); box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3); }
@@ -1265,16 +1265,16 @@
 .markdown-body p:last-child { margin-bottom: 0; }
 .markdown-body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(37,99,235,0.3); transition: border-color 0.2s; }
 .markdown-body a:hover { border-color: var(--accent); }
-.markdown-body strong { font-weight: 600; color: #111827; }
+.markdown-body { color: var(--text-primary); }
+.markdown-body strong { font-weight: 600; color: var(--text-primary); }
 
 .markdown-body ul, .markdown-body ol { padding-left: 22px; margin-bottom: 14px; }
 .markdown-body li { margin-bottom: 6px; padding-left: 4px; }
 .markdown-body li::marker { color: var(--text-tertiary); }
 
-/* 内联代码：浅灰粉红经典搭配 */
 .markdown-body code {
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 0.85em; background: #f1f5f9; padding: 0.2em 0.4em; border-radius: 6px; color: #db2777; border: 1px solid #e2e8f0;
+  font-size: 0.85em; background: color-mix(in srgb, var(--accent) 10%, var(--surface-1)); padding: 0.2em 0.4em; border-radius: 6px; color: color-mix(in srgb, var(--accent) 75%, var(--text-primary)); border: 1px solid var(--border-color);
 }
 
 .markdown-body pre code {
@@ -1292,11 +1292,12 @@
   font-size: 14px;
   overflow: hidden;
   border-radius: 12px;
+  background: var(--surface-0);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .markdown-body table thead {
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  background: linear-gradient(135deg, var(--surface-1) 0%, var(--bg-hover) 100%);
 }
 
 .markdown-body table th {
@@ -1304,7 +1305,7 @@
   text-align: left;
   font-weight: 600;
   color: var(--text-primary);
-  border-bottom: 2px solid #e2e8f0;
+  border-bottom: 2px solid var(--border-color);
   letter-spacing: -0.01em;
 }
 
@@ -1313,17 +1314,17 @@
 }
 
 .markdown-body table tbody tr:nth-child(even) {
-  background: #f8fafc;
+  background: var(--surface-1);
 }
 
 .markdown-body table tbody tr:hover {
-  background: #eff6ff;
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-1));
 }
 
 .markdown-body table td {
   padding: 10px 16px;
   color: var(--text-secondary);
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border-color);
   line-height: 1.5;
 }
 
@@ -1490,5 +1491,233 @@
 @keyframes codeLangBlink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+/* ================= Workbench Theme Overrides ================= */
+:root[data-theme="dark"] .app-layout {
+  background: var(--bg-body);
+}
+
+:root[data-theme="dark"] .sidebar,
+:root[data-theme="dark"] .workbench-sidepanel,
+:root[data-theme="dark"] .history-sidebar {
+  background: color-mix(in srgb, var(--bg-sidebar) 94%, transparent);
+  border-color: var(--border-color);
+}
+
+:root[data-theme="dark"] .top-nav {
+  background: color-mix(in srgb, var(--surface-0) 82%, transparent);
+  border-bottom-color: var(--border-color);
+}
+
+:root[data-theme="dark"] .chat-area,
+:root[data-theme="dark"] .main-content {
+  background: var(--bg-body);
+}
+
+:root[data-theme="dark"] .context-pill,
+:root[data-theme="dark"] .context-pill__popup,
+:root[data-theme="dark"] .user-bubble,
+:root[data-theme="dark"] .user-bubble__actions,
+:root[data-theme="dark"] .user-bubble__edit-textarea,
+:root[data-theme="dark"] .tool-card,
+:root[data-theme="dark"] .tool-header,
+:root[data-theme="dark"] .tool-body,
+:root[data-theme="dark"] .tool-icon-button,
+:root[data-theme="dark"] .tool-metric,
+:root[data-theme="dark"] .tool-meta-list__item,
+:root[data-theme="dark"] .tool-kv-grid__details summary,
+:root[data-theme="dark"] .tool-json-popover__panel,
+:root[data-theme="dark"] .composer-box,
+:root[data-theme="dark"] .queued-messages-dock,
+:root[data-theme="dark"] .queued-message-item,
+:root[data-theme="dark"] .file-preview-drawer,
+:root[data-theme="dark"] .file-preview-drawer__editor,
+:root[data-theme="dark"] .resource-card,
+:root[data-theme="dark"] .skill-card,
+:root[data-theme="dark"] .history-item,
+:root[data-theme="dark"] .history-item--compact {
+  background: var(--surface-0);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .composer-area {
+  background: linear-gradient(0deg, var(--bg-body) 72%, transparent);
+}
+
+:root[data-theme="dark"] .composer-box {
+  box-shadow: 0 16px 44px -28px rgba(0, 0, 0, 0.72);
+}
+
+:root[data-theme="dark"] .network-toggle,
+:root[data-theme="dark"] .workboard-toggle,
+:root[data-theme="dark"] .send-btn,
+:root[data-theme="dark"] .resource-icon,
+:root[data-theme="dark"] .resource-card__icon,
+:root[data-theme="dark"] .resource-card__action,
+:root[data-theme="dark"] .session-badge,
+:root[data-theme="dark"] .segment-control,
+:root[data-theme="dark"] .download-btn {
+  background: var(--surface-1);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .network-toggle:hover,
+:root[data-theme="dark"] .workboard-toggle:hover,
+:root[data-theme="dark"] .attach-btn:hover,
+:root[data-theme="dark"] .icon-button:hover,
+:root[data-theme="dark"] .tool-header:hover,
+:root[data-theme="dark"] .tool-icon-button:hover,
+:root[data-theme="dark"] .history-item:hover,
+:root[data-theme="dark"] .download-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .network-toggle.active,
+:root[data-theme="dark"] .workboard-toggle.empty.active {
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border-color));
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .workboard-toggle.active,
+:root[data-theme="dark"] .workboard-toggle.completed {
+  background: color-mix(in srgb, var(--success) 14%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--success) 32%, var(--border-color));
+  color: var(--success);
+}
+
+:root[data-theme="dark"] .send-btn.active {
+  background: var(--accent);
+  color: #06111f;
+}
+
+:root[data-theme="dark"] .send-btn.active:hover {
+  background: var(--accent-hover);
+}
+
+:root[data-theme="dark"] .stop-btn {
+  background: color-mix(in srgb, var(--error) 14%, var(--surface-1));
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 34%, var(--border-color));
+}
+
+:root[data-theme="dark"] .welcome-icon {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
+}
+
+:root[data-theme="dark"] .timeline-system-event__label,
+:root[data-theme="dark"] .runtime-notice__title {
+  background: var(--surface-0);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .reasoning-content {
+  border-left-color: var(--border-color);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--surface-1) 56%, transparent) 0%, transparent 100%);
+}
+
+:root[data-theme="dark"] .tool-header__title-icon,
+:root[data-theme="dark"] .tool-status-chip--meta {
+  background: var(--surface-1);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .tool-panel--result,
+:root[data-theme="dark"] .tool-panel__content--result {
+  background: var(--surface-0);
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .tool-panel--result .tool-panel__head {
+  background: var(--surface-1);
+}
+
+:root[data-theme="dark"] .tool-plain-terminal {
+  color: var(--success);
+}
+
+:root[data-theme="dark"] .code-block {
+  background: var(--surface-1);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .code-block.output {
+  background: color-mix(in srgb, var(--success) 10%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--success) 28%, var(--border-color));
+  color: var(--success);
+}
+
+:root[data-theme="dark"] .markdown-body,
+:root[data-theme="dark"] .markdown-body p,
+:root[data-theme="dark"] .markdown-body li,
+:root[data-theme="dark"] .text-bubble {
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .markdown-body strong,
+:root[data-theme="dark"] .markdown-body table th {
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .markdown-body code {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-color));
+  color: color-mix(in srgb, var(--accent-hover) 82%, #ffffff);
+}
+
+:root[data-theme="dark"] .markdown-body pre code {
+  color: #d7e2ee;
+}
+
+:root[data-theme="dark"] .markdown-body table {
+  background: var(--surface-0);
+  box-shadow: 0 10px 28px -24px rgba(0, 0, 0, 0.72);
+}
+
+:root[data-theme="dark"] .markdown-body table thead {
+  background: linear-gradient(135deg, var(--surface-1), color-mix(in srgb, var(--surface-1) 82%, var(--accent)));
+}
+
+:root[data-theme="dark"] .markdown-body table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
+}
+
+:root[data-theme="dark"] .markdown-body table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
+}
+
+:root[data-theme="dark"] .markdown-body table td {
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .code-block-wrapper {
+  background: #101923;
+  border-color: #2b3a4e;
+}
+
+:root[data-theme="dark"] .code-header,
+:root[data-theme="dark"] .code-block-wrapper.streaming .code-header {
+  background: #152131;
+  border-color: #2b3a4e;
+}
+
+:root[data-theme="dark"] .code-header:hover {
+  background: #1c2b3d;
+}
+
+:root[data-theme="dark"] .copy-button:hover {
+  background: rgba(173, 186, 199, 0.14);
+}
+
+:root[data-theme="dark"] .file-preview-drawer__header,
+:root[data-theme="dark"] .file-preview-drawer__footer {
+  border-color: var(--border-color);
 }
 

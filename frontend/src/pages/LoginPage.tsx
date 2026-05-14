@@ -6,9 +6,11 @@ import {
   loginWithPassword,
   setAccessToken,
 } from "../api/client";
+import { useAppPreferences } from "../i18n";
 
 type LoginPageProps = {
   onLoggedIn: () => void;
+  variant?: "page" | "modal";
 };
 
 type OAuthProvider = {
@@ -17,7 +19,8 @@ type OAuthProvider = {
   authorize_url_template: string;
 };
 
-export function LoginPage({ onLoggedIn }: LoginPageProps) {
+export function LoginPage({ onLoggedIn, variant = "page" }: LoginPageProps) {
+  const { t } = useAppPreferences();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -93,13 +96,12 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
     window.location.href = url.includes("state=") ? url : `${url}&${state}`;
   };
 
-  return (
-    <main className="login-screen">
-      <section className="login-card">
+  const content = (
+    <section className={`login-card ${variant === "modal" ? "login-card--modal" : ""}`}>
         <div className="login-card__header">
           <span className="login-card__eyebrow">AetherCore</span>
-          <h1>用户登录</h1>
-          <p>登录后即可进入主聊天工作台试用，并在需要时申请注册新平台。</p>
+          <h1>{t("auth.title")}</h1>
+          <p>{variant === "modal" ? t("auth.description") : "登录后即可进入主聊天工作台试用，并在需要时申请注册新平台。"}</p>
         </div>
 
         <form className="login-form" onSubmit={handleSubmit}>
@@ -139,6 +141,15 @@ export function LoginPage({ onLoggedIn }: LoginPageProps) {
 
         {error ? <div className="login-error">{error}</div> : null}
       </section>
+  );
+
+  if (variant === "modal") {
+    return content;
+  }
+
+  return (
+    <main className="login-screen">
+      {content}
     </main>
   );
 }

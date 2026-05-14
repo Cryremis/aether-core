@@ -3,8 +3,8 @@
   display: flex;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top left, rgba(37, 99, 235, 0.05), transparent 24%),
-    #ffffff;
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 8%, transparent), transparent 24%),
+    var(--bg-body);
 }
 
 .workbench-sidepanel {
@@ -13,7 +13,7 @@
   display: flex;
   flex-direction: column;
   border-right: 1px solid rgba(226, 232, 240, 0.8);
-  background: rgba(248, 250, 252, 0.92);
+  background: color-mix(in srgb, var(--bg-sidebar) 92%, transparent);
 }
 
 .workbench-sidepanel__header {
@@ -33,7 +33,7 @@
 }
 
 .sidepanel-tab.is-active {
-  background: #fff;
+  background: var(--surface-0);
   border-color: rgba(226, 232, 240, 0.9);
   color: var(--text-primary);
   box-shadow: 0 8px 24px -20px rgba(15, 23, 42, 0.25);
@@ -71,8 +71,8 @@
   min-width: 72px;
   min-height: 36px;
   border-radius: 12px;
-  background: #0f172a;
-  color: #fff;
+  background: var(--text-primary);
+  color: var(--bg-body);
   font-size: 13px;
   font-weight: 600;
 }
@@ -90,7 +90,7 @@
 .resource-empty {
   padding: 18px 14px;
   border-radius: 16px;
-  background: #fff;
+  background: var(--surface-0);
   border: 1px dashed rgba(203, 213, 225, 0.8);
   color: var(--text-tertiary);
   font-size: 13px;
@@ -99,7 +99,7 @@
 .resource-card,
 .skill-card {
   border-radius: 18px;
-  background: #fff;
+  background: var(--surface-0);
   border: 1px solid rgba(226, 232, 240, 0.9);
   box-shadow: 0 18px 40px -34px rgba(15, 23, 42, 0.28);
 }
@@ -149,7 +149,7 @@
   padding: 12px 14px;
   border: 1px solid rgba(226, 232, 240, 0.95);
   border-radius: 14px;
-  background: #fff;
+  background: var(--surface-0);
 }
 
 .skill-form textarea {
@@ -160,8 +160,8 @@
 .skill-form button {
   min-height: 42px;
   border-radius: 14px;
-  background: #0f172a;
-  color: #fff;
+  background: var(--text-primary);
+  color: var(--bg-body);
   font-weight: 600;
 }
 
@@ -521,13 +521,13 @@
 
 .chat-composer__attach {
   color: var(--text-secondary);
-  background: #f8fafc;
+  background: var(--surface-1);
   cursor: pointer;
 }
 
 .chat-composer__send {
-  background: #0f172a;
-  color: #fff;
+  background: var(--text-primary);
+  color: var(--bg-body);
 }
 
 .markdown-body > *:first-child {
@@ -1106,12 +1106,12 @@ details[open]::details-content {
 }
 
 .workboard-dock__primary-btn {
-  background: #2563eb;
-  color: #fff;
+  background: var(--accent);
+  color: var(--bg-body);
 }
 
 .workboard-dock__primary-btn:hover {
-  background: #1d4ed8;
+  background: var(--accent-hover);
 }
 
 .workboard-dock__secondary-btn {
@@ -1730,7 +1730,7 @@ details[open]::details-content {
   border-radius: 999px;
   padding: 8px 12px;
   background: linear-gradient(135deg, #f59e0b, #f97316);
-  color: #fff;
+  color: #ffffff;
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;

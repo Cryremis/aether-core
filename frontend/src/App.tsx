@@ -13,9 +13,13 @@ import {
   renameSession,
   setAccessToken,
 } from "./api/client";
-import { LoginPage } from "./pages/LoginPage";
+import { AppChrome } from "./components/AppChrome";
+import { AuthModal } from "./components/AuthModal";
+import { HomePage } from "./pages/HomePage";
+import { PlatformDetailPage } from "./pages/PlatformDetailPage";
+import { PlatformsPage } from "./pages/PlatformsPage";
+import { AdminPage } from "./pages/AdminPage";
 
-const AdminPage = lazy(async () => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
 const WorkbenchPage = lazy(async () => import("./pages/WorkbenchPage").then((module) => ({ default: module.WorkbenchPage })));
 
 type ConversationItem = {
@@ -36,6 +40,8 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUserProfile | null>(null);
   const [isEmbedMode, setIsEmbedMode] = useState(false);
   const [isNewSession, setIsNewSession] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [pendingPath, setPendingPath] = useState("/workbench");
 
   const updateWorkbenchQuery = (nextSessionId: string, nextIsNewSession: boolean) => {
     const params = new URLSearchParams(new URL(window.location.href).searchParams);
@@ -47,13 +53,7 @@ export default function App() {
       params.delete("new");
     }
     const query = params.toString();
-    navigate(
-      {
-        pathname: "/workbench",
-        search: query ? `?${query}` : "",
-      },
-      { replace: true },
-    );
+    navigate({ pathname: "/workbench", search: query ? `?${query}` : "" }, { replace: true });
   };
 
   const refreshConversations = async (preferredSessionId?: string) => {
@@ -96,6 +96,15 @@ export default function App() {
     return items;
   };
 
+  const ensureWorkbenchSession = async () => {
+    const items = await refreshConversations();
+    if (items.length === 0) {
+      const created = await bootstrapAdminSession();
+      const nextSessionId = String(created.data?.session_id ?? "");
+      await refreshConversations(nextSessionId);
+    }
+  };
+
   useEffect(() => {
     const boot = async () => {
       const url = new URL(window.location.href);
@@ -123,12 +132,8 @@ export default function App() {
         const profile = await getCurrentUser();
         setCurrentUser(profile);
         setAuthed(true);
-
-        const items = await refreshConversations();
-        if (items.length === 0) {
-          const created = await bootstrapAdminSession();
-          const nextSessionId = String(created.data?.session_id ?? "");
-          await refreshConversations(nextSessionId);
+        if (window.location.pathname.startsWith("/workbench")) {
+          await ensureWorkbenchSession();
         }
       } catch {
         clearAccessToken();
@@ -143,14 +148,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isEmbedMode || !sessionId || window.parent === window) {
-      return;
-    }
+    if (!authed || !location.pathname.startsWith("/workbench") || isEmbedMode) return;
+    void ensureWorkbenchSession();
+  }, [authed, location.pathname]);
+
+  useEffect(() => {
+    if (authed || isEmbedMode) return;
+    const isProtectedPath =
+      location.pathname.startsWith("/workbench") ||
+      location.pathname.startsWith("/platforms") ||
+      location.pathname.startsWith("/system") ||
+      location.pathname.startsWith("/admin");
+    if (!isProtectedPath) return;
+    setPendingPath(`${location.pathname}${location.search}`);
+    setAuthModalOpen(true);
+    navigate("/", { replace: true });
+  }, [authed, isEmbedMode, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
+    if (!isEmbedMode || !sessionId || window.parent === window) return;
     const currentConversation = conversations.find((item) => item.session_id === sessionId);
-    if (!currentConversation) {
-      return;
-    }
-    // 通知宿主当前工作台正在查看的会话，便于下次打开时恢复到上次页面。
+    if (!currentConversation) return;
     window.parent.postMessage(
       {
         source: "aethercore-workbench",
@@ -169,13 +187,23 @@ export default function App() {
     const profile = await getCurrentUser();
     setCurrentUser(profile);
     setAuthed(true);
+    setAuthModalOpen(false);
 
-    const items = await refreshConversations();
-    if (items.length === 0) {
-      const created = await bootstrapAdminSession();
-      const nextSessionId = String(created.data?.session_id ?? "");
-      await refreshConversations(nextSessionId);
+    if (pendingPath.startsWith("/workbench")) {
+      await ensureWorkbenchSession();
     }
+
+    navigate(pendingPath || "/workbench", { replace: true });
+  };
+
+  const requireAuth = (targetPath: string) => {
+    const nextPath = targetPath || "/workbench";
+    if (authed) {
+      navigate(nextPath);
+      return;
+    }
+    setPendingPath(nextPath);
+    setAuthModalOpen(true);
   };
 
   const handleNewConversation = () => {
@@ -223,88 +251,90 @@ export default function App() {
     setCurrentUser(null);
     setIsEmbedMode(false);
     setIsNewSession(false);
-    navigate("/workbench", { replace: true });
-  };
-
-  const handleAdminBack = () => {
-    if (window.history.length > 1) {
-      navigate(-1);
-      return;
-    }
-    navigate("/workbench");
+    navigate("/", { replace: true });
   };
 
   const pageFallback = (
-    <main className="login-screen">
-      <section className="login-card">
-        <p>正在加载界面...</p>
-      </section>
+    <main className="app-loading">
+      <p>正在加载界面...</p>
     </main>
   );
 
   if (!ready) {
     return (
-      <main className="login-screen">
-        <section className="login-card">
-          <p>正在初始化工作台...</p>
-        </section>
+      <main className="app-loading">
+        <p>正在初始化 AetherCore...</p>
       </main>
     );
   }
 
-  if (!authed) {
-    return <LoginPage onLoggedIn={() => void handleLoggedIn()} />;
-  }
+  const shellClassName = isEmbedMode || location.pathname.startsWith("/workbench") ? "workspace-shell workspace-shell--workbench" : "workspace-shell";
 
   return (
-    <div className="workspace-shell">
+    <div className={shellClassName}>
+      {!isEmbedMode && !location.pathname.startsWith("/workbench") ? (
+        <AppChrome currentUser={currentUser} authed={authed} onRequireAuth={requireAuth} onLogout={handleLogout} />
+      ) : null}
+
       <section className="workspace-shell__main">
         <Suspense fallback={pageFallback}>
           <Routes>
             <Route
+              path="/"
+              element={<HomePage authed={authed} onOpenChat={() => requireAuth("/workbench")} onOpenPlatforms={() => requireAuth("/platforms")} />}
+            />
+            <Route path="/chat" element={<Navigate to="/workbench" replace />} />
+            <Route
               path="/workbench"
               element={
-                sessionId || isNewSession ? (
-                  <WorkbenchPage
-                    conversations={conversations}
-                    currentUser={currentUser}
-                    isEmbedMode={isEmbedMode}
-                    sessionId={sessionId}
-                    isNewSession={isNewSession}
-                    adminEntryHref={currentUser?.can_manage_platforms ? "/admin" : undefined}
-                    onLogout={handleLogout}
-                    onNewConversation={handleNewConversation}
-                    onDeleteSession={(id) => void handleDeleteSession(id)}
-                    onRenameSession={(id, title) => void handleRenameSession(id, title)}
-                    onSessionCreated={handleCreateSessionAndSelect}
-                    onSessionRefresh={(id) => void refreshConversations(id || sessionId)}
-                    onSessionSelect={(id) => {
-                      setSessionId(id);
-                      setIsNewSession(false);
-                      updateWorkbenchQuery(id, false);
-                    }}
-                  />
-                ) : null
-              }
-            />
-            <Route
-              path="/admin"
-              element={
-                currentUser?.can_manage_platforms ? (
-                  <AdminPage currentUser={currentUser} onBack={handleAdminBack} />
+                authed ? (
+                  sessionId || isNewSession ? (
+                    <WorkbenchPage
+                      conversations={conversations}
+                      currentUser={currentUser}
+                      isEmbedMode={isEmbedMode}
+                      sessionId={sessionId}
+                      isNewSession={isNewSession}
+                      adminEntryHref={currentUser?.can_manage_platforms ? "/platforms" : undefined}
+                      onLogout={handleLogout}
+                      onNewConversation={handleNewConversation}
+                      onDeleteSession={(id) => void handleDeleteSession(id)}
+                      onRenameSession={(id, title) => void handleRenameSession(id, title)}
+                      onSessionCreated={handleCreateSessionAndSelect}
+                      onSessionRefresh={(id) => void refreshConversations(id || sessionId)}
+                      onSessionSelect={(id) => {
+                        setSessionId(id);
+                        setIsNewSession(false);
+                        updateWorkbenchQuery(id, false);
+                      }}
+                    />
+                  ) : (
+                    pageFallback
+                  )
                 ) : (
-                  <Navigate to="/workbench" replace />
+                  <Navigate to="/" replace />
                 )
               }
             />
             <Route
-              path="/"
-              element={<Navigate to={`/workbench${location.search}`} replace />}
+              path="/platforms"
+              element={authed && currentUser?.can_manage_platforms ? <PlatformsPage currentUser={currentUser} /> : authed ? <Navigate to="/workbench" replace /> : <Navigate to="/" replace />}
             />
-            <Route path="*" element={<Navigate to="/workbench" replace />} />
+            <Route
+              path="/platforms/:platformId"
+              element={authed && currentUser ? <PlatformDetailPage currentUser={currentUser} /> : <Navigate to="/" replace />}
+            />
+            <Route
+              path="/system"
+              element={authed && currentUser?.can_manage_system ? <AdminPage currentUser={currentUser} scope="system" /> : authed ? <Navigate to="/platforms" replace /> : <Navigate to="/" replace />}
+            />
+            <Route path="/admin" element={<Navigate to="/platforms" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
       </section>
+
+      <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} onLoggedIn={() => void handleLoggedIn()} />
     </div>
   );
 }

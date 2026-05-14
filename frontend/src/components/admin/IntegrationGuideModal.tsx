@@ -118,15 +118,14 @@ function getAvailableIdentities(modes: GuideMode[], stage: AccessStage): Identit
   return VISIBLE_IDENTITIES.filter((item) => existing.has(item));
 }
 
-export function IntegrationGuideModal({
+function IntegrationGuideContent({
   integrationGuide,
   integrationGuideBusy,
   integrationGuideError,
   integrationGuidePlatformName,
   renderHighlightedSnippet,
   onCopy,
-  onClose,
-}: IntegrationGuideModalProps) {
+}: Omit<IntegrationGuideModalProps, "onClose">) {
   const modes = integrationGuide?.modes ?? [];
   const [selectedStage, setSelectedStage] = useState<AccessStage>("production");
   const [selectedIdentity, setSelectedIdentity] = useState<IdentityScenario>("authenticated_user");
@@ -192,7 +191,6 @@ export function IntegrationGuideModal({
       (activeMode?.snippets ?? []).filter(
         (item) =>
           !item.snippet_id.includes("frontend") &&
-          item.snippet_id !== "backend_env" &&
           item.snippet_id !== "host_tools_reference",
       ),
     [activeMode],
@@ -217,26 +215,13 @@ export function IntegrationGuideModal({
   const selectedBackendSnippet =
     backendCodeSnippets.find((item) => item.snippet_id === selectedTemplateId) ?? backendCodeSnippets[0] ?? null;
 
-  if (!(integrationGuide || integrationGuideBusy || integrationGuideError)) return null;
+  const body = (
+    <>
+      {integrationGuideBusy ? <div className="admin-panel__empty">接入教程加载中...</div> : null}
+      {integrationGuideError ? <div className="admin-panel__error">{integrationGuideError}</div> : null}
 
-  return (
-    <div className="guide-modal-backdrop" onClick={onClose}>
-      <div className="guide-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="guide-modal__header">
-          <div>
-            <h4>接入教程</h4>
-            <p>{integrationGuidePlatformName || integrationGuide?.display_name || "平台接入说明"}</p>
-          </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭接入教程">
-            ×
-          </button>
-        </div>
-
-        {integrationGuideBusy ? <div className="admin-panel__empty">接入教程加载中...</div> : null}
-        {integrationGuideError ? <div className="admin-panel__error">{integrationGuideError}</div> : null}
-
-        {integrationGuide ? (
-          <div className="guide-modal__body">
+      {integrationGuide ? (
+        <div className="guide-modal__body">
             {availableStages.length ? (
               <section className="guide-stage-grid">
                 {availableStages.map((stage) => (
@@ -432,9 +417,49 @@ export function IntegrationGuideModal({
                 ) : null}
               </aside>
             </section>
+        </div>
+      ) : null}
+    </>
+  );
+
+  if (!(integrationGuide || integrationGuideBusy || integrationGuideError)) return null;
+
+  return body;
+}
+
+export function IntegrationGuideModal(props: IntegrationGuideModalProps) {
+  const { integrationGuide, integrationGuideBusy, integrationGuideError, integrationGuidePlatformName, onClose } = props;
+  if (!(integrationGuide || integrationGuideBusy || integrationGuideError)) return null;
+
+  return (
+    <div className="guide-modal-backdrop" onClick={onClose}>
+      <div className="guide-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="guide-modal__header">
+          <div>
+            <h4>接入教程</h4>
+            <p>{integrationGuidePlatformName || integrationGuide?.display_name || "平台接入说明"}</p>
           </div>
-        ) : null}
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭接入教程">
+            ×
+          </button>
+        </div>
+
+        <IntegrationGuideContent {...props} />
       </div>
     </div>
+  );
+}
+
+export function IntegrationGuidePanel(props: Omit<IntegrationGuideModalProps, "onClose">) {
+  return (
+    <section className="guide-panel-embedded">
+      <div className="guide-modal__header">
+        <div>
+          <h4>接入教程</h4>
+          <p>{props.integrationGuidePlatformName || props.integrationGuide?.display_name || "平台接入说明"}</p>
+        </div>
+      </div>
+      <IntegrationGuideContent {...props} />
+    </section>
   );
 }

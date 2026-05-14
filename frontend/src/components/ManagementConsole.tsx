@@ -33,6 +33,7 @@ import type { ChatMessage, AssistantBlock } from "../pages/workbench/types";
 
 type ManagementConsoleProps = {
   currentUser: CurrentUserProfile;
+  scope?: "all" | "system";
 };
 
 type PlatformOption = {
@@ -68,11 +69,11 @@ function formatTime(value?: string | null) {
   return parsed.toLocaleString();
 }
 
-function isRuntimeActive(status: string) {
+export function isRuntimeActive(status: string) {
   return ["provisioning", "running", "busy"].includes(status);
 }
 
-function getRuntimeStatusLabel(status: string) {
+export function getRuntimeStatusLabel(status: string) {
   if (status === "running") return "运行中";
   if (status === "busy") return "执行中";
   if (status === "provisioning") return "创建中";
@@ -83,13 +84,13 @@ function getRuntimeStatusLabel(status: string) {
   return status;
 }
 
-function getRuntimeStatusClass(status: string) {
+export function getRuntimeStatusClass(status: string) {
   if (status === "running" || status === "busy" || status === "provisioning") return "approved";
   if (status === "expired" || status === "failed" || status === "missing") return "rejected";
   return "returned";
 }
 
-function convertAuditDetailToChatMessages(detail: AuditConversationDetail | null): ChatMessage[] {
+export function convertAuditDetailToChatMessages(detail: AuditConversationDetail | null): ChatMessage[] {
   if (!detail) return [];
   
   const transcript = detail.transcript;
@@ -226,8 +227,8 @@ function convertAuditDetailToChatMessages(detail: AuditConversationDetail | null
   });
 }
 
-export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
-  const [activeTab, setActiveTab] = useState<ManagementTab>("config");
+export function ManagementConsole({ currentUser, scope = "all" }: ManagementConsoleProps) {
+  const [activeTab, setActiveTab] = useState<ManagementTab>(scope === "system" ? "approvals" : "config");
   const [requests, setRequests] = useState<PlatformRegistrationRequestSummary[]>([]);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [runtimes, setRuntimes] = useState<SessionRuntimeSummary[]>([]);
@@ -510,9 +511,11 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
       {canManage && (
         <div className="admin-tabs-wrapper stagger-2">
           <nav className="admin-tabs">
-            <button type="button" className={`admin-tab-btn ${activeTab === "config" ? "is-active" : ""}`} onClick={() => setActiveTab("config")}>
-              平台配置
-            </button>
+            {scope === "all" ? (
+              <button type="button" className={`admin-tab-btn ${activeTab === "config" ? "is-active" : ""}`} onClick={() => setActiveTab("config")}>
+                平台配置
+              </button>
+            ) : null}
             {canManageSystem ? (
               <button type="button" className={`admin-tab-btn ${activeTab === "approvals" ? "is-active" : ""}`} onClick={() => setActiveTab("approvals")}>
                 注册审批 {pendingRequests.length > 0 && <span className="tab-badge">{pendingRequests.length}</span>}
@@ -528,12 +531,16 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
                 负责人治理
               </button>
             ) : null}
-            <button type="button" className={`admin-tab-btn ${activeTab === "runtimes" ? "is-active" : ""}`} onClick={() => setActiveTab("runtimes")}>
-              Runtime
-            </button>
-            <button type="button" className={`admin-tab-btn ${activeTab === "audit" ? "is-active" : ""}`} onClick={() => setActiveTab("audit")}>
-              审计会话
-            </button>
+            {scope === "all" ? (
+              <>
+                <button type="button" className={`admin-tab-btn ${activeTab === "runtimes" ? "is-active" : ""}`} onClick={() => setActiveTab("runtimes")}>
+                  Runtime
+                </button>
+                <button type="button" className={`admin-tab-btn ${activeTab === "audit" ? "is-active" : ""}`} onClick={() => setActiveTab("audit")}>
+                  审计会话
+                </button>
+              </>
+            ) : null}
           </nav>
         </div>
       )}
@@ -886,6 +893,12 @@ export function ManagementConsole({ currentUser }: ManagementConsoleProps) {
             <AdminPanel role={canManageSystem ? "system_admin" : currentUser.role} />
           </section>
         )}
+
+        {scope === "system" && !canManageSystem ? (
+          <section className="management-console__section epic-glass stagger-3">
+            <div className="admin-panel__empty">当前账号没有系统管理权限。</div>
+          </section>
+        ) : null}
       </div>
     </div>
   );

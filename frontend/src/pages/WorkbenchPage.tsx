@@ -34,6 +34,7 @@ import {
   type TranscriptChatMessage,
 } from "../api/client";
 import { ElicitationPanel } from "../components/ElicitationPanel";
+import { ThemeIconButton } from "../components/ThemeIconButton";
 import { WorkboardDock } from "../components/WorkboardDock";
 import { ChatTimeline } from "../components/workbench/ChatTimeline";
 import { Composer } from "../components/workbench/Composer";
@@ -2040,6 +2041,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? "新会话" : `Session ID: ${sessionId || localSessionId || "Initializing..."}`}</span>
           </div>
           <div className="nav-right">
+            <ThemeIconButton className="workbench-theme-toggle" />
             <ContextStatusPill contextStatus={contextStatus} />
           </div>
         </header>

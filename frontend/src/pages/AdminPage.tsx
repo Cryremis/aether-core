@@ -6,9 +6,10 @@ import { ManagementConsole } from "../components/ManagementConsole";
 type AdminPageProps = {
   currentUser: CurrentUserProfile;
   onBack?: () => void;
+  scope?: "all" | "system";
 };
 
-export function AdminPage({ currentUser, onBack }: AdminPageProps) {
+export function AdminPage({ currentUser, onBack, scope = "all" }: AdminPageProps) {
   return (
     <main className="admin-page">
       <div className="admin-page__bg-mesh" />
@@ -27,12 +28,12 @@ export function AdminPage({ currentUser, onBack }: AdminPageProps) {
               </svg>
             </div>
             <div>
-              <h1>管理控制台</h1>
-              <p>统一处理平台注册审批、负责人治理、平台审计、runtime 管理，以及平台基线与模型配置。</p>
+              <h1>{scope === "system" ? "系统管理" : "管理控制台"}</h1>
+              <p>{scope === "system" ? "统一处理平台注册审批、用户授权和平台负责人治理。" : "统一处理平台注册审批、负责人治理、平台审计、runtime 管理，以及平台基线与模型配置。"}</p>
             </div>
           </div>
         </div>
-        <ManagementConsole currentUser={currentUser} />
+        <ManagementConsole currentUser={currentUser} scope={scope} />
       </section>
     </main>
   );

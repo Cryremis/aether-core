@@ -49,11 +49,13 @@ import type {
 
 type AdminPanelProps = {
   role: string;
+  mode?: "overview" | "detail";
+  initialPlatformId?: number | null;
 };
 
 type PlatformSettingsView = "image" | "prompt" | "llm";
 
-export function AdminPanel({ role }: AdminPanelProps) {
+export function AdminPanel({ role, mode = "overview", initialPlatformId = null }: AdminPanelProps) {
   const [platforms, setPlatforms] = useState<PlatformItem[]>([]);
   const [activePlatformId, setActivePlatformId] = useState<number | null>(null);
   const [baselineEntries, setBaselineEntries] = useState<PlatformBaselineEntryItem[]>([]);
@@ -280,10 +282,11 @@ export function AdminPanel({ role }: AdminPanelProps) {
       setBaselineEntries([]);
       return;
     }
-    const preferred = platforms.find((item) => item.platform_key === "standalone") ?? platforms[0];
+    const requested = initialPlatformId ? platforms.find((item) => item.platform_id === initialPlatformId) : null;
+    const preferred = requested ?? platforms.find((item) => item.platform_key === "standalone") ?? platforms[0];
     const targetId = activePlatformId && platforms.some((item) => item.platform_id === activePlatformId) ? activePlatformId : preferred.platform_id;
     void loadPlatformBaseline(targetId);
-  }, [platforms]);
+  }, [initialPlatformId, platforms]);
 
   useEffect(() => {
     if (!selectedBaselinePath) return;
@@ -765,7 +768,7 @@ export function AdminPanel({ role }: AdminPanelProps) {
       {error ? <div className="admin-panel__error epic-error">{error}</div> : null}
 
       {/* 平台注册表单（仅系统管理员） */}
-      {role === "system_admin" ? (
+      {role === "system_admin" && mode === "overview" ? (
         <div className="epic-glass admin-panel__create-card stagger-3">
           <AdminForms
             platformKey={platformKey}
@@ -779,14 +782,16 @@ export function AdminPanel({ role }: AdminPanelProps) {
         </div>
       ) : null}
 
-      <div className="epic-glass stagger-4">
-        <PlatformList
-          platforms={platforms}
-          activePlatformId={activePlatformId}
-          onSelect={(platformId) => void loadPlatformBaseline(platformId)}
-          onOpenGuide={(platform) => void handleOpenIntegrationGuide(platform)}
-        />
-      </div>
+      {mode === "overview" ? (
+        <div className="epic-glass stagger-4">
+          <PlatformList
+            platforms={platforms}
+            activePlatformId={activePlatformId}
+            onSelect={(platformId) => void loadPlatformBaseline(platformId)}
+            onOpenGuide={(platform) => void handleOpenIntegrationGuide(platform)}
+          />
+        </div>
+      ) : null}
 
       {/* ================= Bento Grid: LLM 与基线资源管理器 ================= */}
       {activePlatform ? (
