@@ -1,80 +1,33 @@
 <!-- docs/host-integration.md -->
 
-# 宿主集成协议
+# Host Integration Notes
 
-本文档描述业务平台如何将自身能力注入到 AetherCore。
+This document is a maintainer note for AetherCore's host binding model. It is not the primary onboarding guide for host platform owners.
 
-## 1. 设计目标
+For real platform onboarding, register a platform in the AetherCore admin console and open that platform's built-in integration guide. The product guide contains the current frontend snippets, backend bind templates, authentication options, and optional host tool examples.
 
-- AetherCore 完全独立部署。
-- 宿主平台不侵入 AetherCore 内核。
-- 宿主平台通过结构化协议动态注入上下文、工具、技能与 API。
+## Runtime Model
 
-## 2. 基本流程
+Host integration has two layers:
 
-1. 宿主平台创建或恢复用户会话。
-2. 宿主平台调用 `POST /api/v1/host/bind`。
-3. AetherCore 返回 `session_id`。
-4. 前端工作台基于该 `session_id` 进行对话、文件上传、技能浏览与后续任务执行。
+- `host bind`: the host backend binds the current user, conversation key, page context, and optional capabilities to an AetherCore session through `POST /api/v1/host/bind`.
+- `embedded workbench`: the host frontend mounts the universal adapter and opens the AetherCore workbench with the embed token returned by bind.
 
-## 3. 宿主绑定请求结构
+During bind, a host can pass:
 
-宿主绑定请求由以下部分构成：
+- `context`: current user, page, auth, and host-specific extras.
+- `tools`: host-side callable capabilities. AetherCore exposes these to the agent runtime and calls the declared host endpoint when the model selects a tool.
+- `skills`: host-provided domain instructions or workflow guidance.
+- `apis`: host API metadata reserved for adapter and tooling expansion.
 
-- `host_name`
-- `host_type`
-- `session_id`
-- `context`
-- `tools`
-- `skills`
-- `apis`
+## Host Tools
 
-### 3.1 context
+Host tools are session-level descriptors, not uploaded host code. A descriptor includes the tool name, model-facing description, JSON input schema, and the host endpoint AetherCore should call.
 
-用于注入当前用户与页面上下文，例如：
+The implementation schema lives in [backend/app/schemas/host.py](../backend/app/schemas/host.py). Tool listing and execution are handled in [backend/app/services/tool_service.py](../backend/app/services/tool_service.py).
 
-```json
-{
-  "user": {
-    "id": "u_001",
-    "display_name": "张三"
-  },
-  "page": {
-    "title": "训练看板",
-    "pathname": "/pages/llm_training.html"
-  },
-  "extras": {
-    "filters": {
-      "model": "Qwen"
-    }
-  }
-}
-```
+## Documentation Ownership
 
-### 3.2 tools
-
-宿主工具只传递描述与调用端点，不直接把宿主代码暴露给 AetherCore。
-
-### 3.3 skills
-
-宿主技能可以是业务领域提示词、流程约束或能力声明，供 AetherCore 动态合并。
-
-### 3.4 apis
-
-宿主 API 描述用于后续生成统一的 Host API Adapter。
-
-## 4. 文件策略
-
-- 用户文件先上传至 AetherCore。
-- AetherCore 将文件放入会话沙箱工作区的 `input/`。
-- 产物统一生成到 `output/` 并由 AetherCore 提供下载。
-- 宿主平台只需要负责触发上传与展示下载入口。
-
-## 5. 后续演进
-
-后续将继续补充：
-
-- Host Tool Proxy 执行协议
-- 宿主签名与鉴权
-- 技能上传与校验协议
-- 沙箱任务状态回调协议
+- Root README: product value, deployer overview, and capability positioning.
+- Built-in integration guide: copyable onboarding instructions for platform owners.
+- This file: internal notes for maintainers changing host bind behavior.

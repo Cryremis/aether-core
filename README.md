@@ -43,6 +43,9 @@ AetherCore is built for that layer.
 - `Platform baselines`
   Preload per-platform files, skills, and workspace material into new sessions.
 
+- `Host capability injection`
+  Let embedded agents call host-side APIs through bind-time tools, so your product can expose project search, business data lookup, workflow actions, and other controlled capabilities without moving product code into AetherCore.
+
 ## What It Looks Like
 
 ```mermaid
@@ -124,41 +127,24 @@ Default local ports:
 
 ## Embed Into Your Product
 
-The typical integration flow is:
+AetherCore can be embedded into an existing product as a workbench, while still running on a shared backend runtime. A host product can bind its current user and page context into an AetherCore session, then optionally expose host-side capabilities as tools so the agent can call product APIs during a conversation.
+
+Typical integration flow:
 
 1. Register a platform in AetherCore.
 2. Keep the `host_secret` on your backend only.
 3. Expose a host-side bind endpoint such as `/api/v1/aethercore/embed/bind`.
 4. Return `token` and `session_id` to the browser.
 5. Mount the embedded workbench with the universal adapter.
+6. Optionally add host tools when the agent should query product data or trigger product-side actions.
 
-Host backend usually only needs one AetherCore base URL:
+The admin console includes a generated integration guide for each registered platform. That guide is the canonical place for copyable snippets: it knows the platform key, host secret, same-origin or cross-origin deployment choice, authentication mode, and backend framework template.
 
-- `AETHERCORE_API_BASE_URL`: used by your bind API to call `/api/v1/host/bind`
-- `AETHERCORE_WORKBENCH_URL`: optional override only when the browser-facing workbench URL differs from `AETHERCORE_API_BASE_URL`
-
-Minimal example:
-
-```html
-<script src="/api/v1/host/public/embed/aethercore-embed.js"></script>
-<script>
-  window.mountAetherCore({
-    platformKey: "your-platform-key",
-    bindUrl: "/api/v1/aethercore/embed/bind",
-    workbenchUrl: "https://ac.example.com",
-    getUserId: function () {
-      return window.currentUser?.id || "anonymous";
-    }
-  });
-</script>
-```
+For a plain embed, keep host capabilities empty and just open the workbench. When the host wants the agent to use product data, add host tools during bind so AetherCore can call controlled product APIs on behalf of the current user.
 
 Related files:
 
 - [host-adapters/universal/aethercore-embed.js](/C:/Work/AetherCore/host-adapters/universal/aethercore-embed.js)
-- [host-adapters/universal/README.md](/C:/Work/AetherCore/host-adapters/universal/README.md)
-- [docs/host-integration.md](/C:/Work/AetherCore/docs/host-integration.md)
-- [docs/host-integration-standard.md](/C:/Work/AetherCore/docs/host-integration-standard.md)
 
 ## Repository Structure
 
@@ -221,5 +207,3 @@ See also:
 
 - [docs/architecture.md](/C:/Work/AetherCore/docs/architecture.md)
 - [docs/context_management_mechanism.md](/C:/Work/AetherCore/docs/context_management_mechanism.md)
-- [docs/host-integration.md](/C:/Work/AetherCore/docs/host-integration.md)
-- [docs/host-integration-standard.md](/C:/Work/AetherCore/docs/host-integration-standard.md)

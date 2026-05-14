@@ -58,6 +58,7 @@ class PlatformIntegrationService:
             platform_key=platform_key,
             host_secret=host_secret,
         )
+        host_tools_reference = self._build_host_tools_reference_snippet()
 
         return PlatformIntegrationGuide(
             platform_key=platform_key,
@@ -76,6 +77,7 @@ class PlatformIntegrationService:
                 "FastAPI / Express 后端 bind 模板（可直接跑）",
                 "已有登录体系与匿名访客两套生产模板",
                 "Cookie / Bearer 两种认证方式示例",
+                "可选的宿主工具注入示例，让 Agent 调用网站 API",
                 "SPA 防重复挂载建议",
             ],
             placeholders=[
@@ -97,6 +99,8 @@ class PlatformIntegrationService:
                 "跨域部署：script URL 和 bind URL 改为绝对地址，并检查 CORS。",
                 "Cookie 模式适合同域（credentials: include）；Bearer 模式适合前后端分离（Authorization + credentials: omit）。",
                 "匿名访客模式统一使用 localStorage 键名 aethercore_guest_id。",
+                "只嵌入工作台时保持 tools / skills / apis 为空；需要开放宿主能力时再逐步添加。",
+                "宿主工具 endpoint 会收到 session_id、arguments 和 context，请始终按宿主自己的权限体系校验当前用户。",
                 "SPA 只在全局 Layout 初始化一次；window.__AETHERCORE_EMBED_INSTANCE__ 存在时不要重复 mount。",
             ],
             modes=[
@@ -119,10 +123,12 @@ class PlatformIntegrationService:
                         "按部署形态复制同域或跨域前端模板。",
                         "后端按模板添加 bind 代理。",
                         "验证可打开工作台后，再逐步接入 tools / skills / apis。",
+                        "需要 Agent 调用网站 API 时，在 bind 请求的 tools 数组声明工具名、描述、输入 schema 和宿主 endpoint。",
                     ],
                     warnings=[
                         "不要把 host_secret 暴露给浏览器。",
                         "跨域时请使用绝对 URL 并检查 CORS。",
+                        "开放宿主工具前，请确认 endpoint 会校验当前用户权限，避免 Agent 访问越权数据。",
                     ],
                     snippets=[
                         PlatformIntegrationSnippet(
@@ -153,6 +159,13 @@ class PlatformIntegrationService:
                             summary="可直接运行，按注释替换用户解析逻辑即可。",
                             content=backend_express_authenticated,
                         ),
+                        PlatformIntegrationSnippet(
+                            snippet_id="host_tools_reference",
+                            title="宿主工具示例（可选）",
+                            language="text",
+                            summary="让 Agent 调用宿主 API 时，在 bind 请求里添加这类工具描述。",
+                            content=host_tools_reference,
+                        ),
                     ],
                 ),
                 PlatformIntegrationMode(
@@ -174,6 +187,7 @@ class PlatformIntegrationService:
                         "按部署形态复制同域或跨域匿名访客前端模板。",
                         "bind 请求携带 guest_id，后端用它作为 external_user_id。",
                         "验证可用后再按需开放宿主能力。",
+                        "匿名访客工具建议只开放低风险查询能力，避免写操作或账户级敏感数据。",
                     ],
                     warnings=[
                         "不要把 host_secret 暴露给浏览器。",
@@ -207,6 +221,13 @@ class PlatformIntegrationService:
                             language="javascript",
                             summary="可直接运行的匿名访客模板。",
                             content=backend_express_guest,
+                        ),
+                        PlatformIntegrationSnippet(
+                            snippet_id="host_tools_reference",
+                            title="宿主工具示例（可选）",
+                            language="text",
+                            summary="让 Agent 调用宿主 API 时，在 bind 请求里添加这类工具描述。",
+                            content=host_tools_reference,
                         ),
                     ],
                 ),
@@ -650,6 +671,73 @@ class PlatformIntegrationService:
             }});
 
             export default router;
+            """
+        ).strip()
+
+    def _build_host_tools_reference_snippet(self) -> str:
+        return dedent(
+            """\
+            # 在 /api/v1/host/bind 请求体中添加：
+            {
+              "context": {
+                "user": {
+                  "id": "current-user-id",
+                  "name": "current-user-name"
+                },
+                "auth": {
+                  "token": "host-user-token",
+                  "token_header": "Authorization",
+                  "token_prefix": "Bearer"
+                },
+                "extras": {
+                  "host_callback_base_url": "https://your-platform.example.com"
+                }
+              },
+              "tools": [
+                {
+                  "name": "search_projects",
+                  "description": "搜索当前用户可见的项目",
+                  "endpoint": "/api/v1/agent/tools/search_projects/invoke",
+                  "input_schema": {
+                    "type": "object",
+                    "properties": {
+                      "query": {
+                        "type": "string",
+                        "description": "搜索关键词"
+                      },
+                      "limit": {
+                        "type": "integer",
+                        "description": "返回数量"
+                      }
+                    },
+                    "required": ["query"]
+                  }
+                }
+              ]
+            }
+
+            # AetherCore 调用 endpoint 时会发送：
+            {
+              "session_id": "aethercore-session-id",
+              "arguments": {
+                "query": "迁移评估",
+                "limit": 10
+              },
+              "context": {
+                "user": {
+                  "id": "current-user-id",
+                  "name": "current-user-name"
+                },
+                "auth": {
+                  "token": "host-user-token",
+                  "token_header": "Authorization",
+                  "token_prefix": "Bearer"
+                },
+                "extras": {
+                  "host_callback_base_url": "https://your-platform.example.com"
+                }
+              }
+            }
             """
         ).strip()
 

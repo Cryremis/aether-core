@@ -14,6 +14,8 @@
     subtitle: "嵌入式工作台",
     rootId: "aethercore-embed-root",
     storagePrefix: "aethercore_conversation_key",
+    sessionStoragePrefix: "aethercore_last_session",
+    conversationIdStoragePrefix: "aethercore_last_conversation_id",
     width: 760,
     minWidth: 420,
     maxWidth: 1100,
@@ -87,11 +89,12 @@
     const data = payload && payload.data ? payload.data : payload;
     const token = data && (data.token || data.embed_token);
     const sessionId = data && (data.session_id || data.sessionId);
+    const conversationId = data && (data.conversation_id || data.conversationId);
     const workbenchUrl = data && (data.workbench_url || data.workbenchUrl);
     if (!token || !sessionId) {
       throw new Error("AetherCore bind response must include token and session_id.");
     }
-    return { token: token, sessionId: sessionId, workbenchUrl: workbenchUrl };
+    return { token: token, sessionId: sessionId, conversationId: conversationId, workbenchUrl: workbenchUrl };
   }
 
   function injectStyles(config) {
@@ -144,6 +147,7 @@
       };
       this.width = this.config.width;
       this.cleanupResize = null;
+      this.handleWorkbenchMessage = this.handleWorkbenchMessage.bind(this);
     }
 
     init() {
@@ -174,6 +178,35 @@
       const next = `${this.config.platformKey}-${userId}-${uuid()}`;
       if (window.localStorage) window.localStorage.setItem(key, next);
       return next;
+    }
+
+    getPerUserStorageKey(prefix) {
+      const userId = this.config.getUserId();
+      return `${prefix}_${this.config.platformKey}_${userId}`;
+    }
+
+    getLastSessionId() {
+      const key = this.getPerUserStorageKey(this.config.sessionStoragePrefix);
+      return window.localStorage && window.localStorage.getItem(key);
+    }
+
+    setLastSessionId(sessionId) {
+      const key = this.getPerUserStorageKey(this.config.sessionStoragePrefix);
+      if (!window.localStorage) return;
+      if (sessionId) window.localStorage.setItem(key, sessionId);
+      else window.localStorage.removeItem(key);
+    }
+
+    getLastConversationId() {
+      const key = this.getPerUserStorageKey(this.config.conversationIdStoragePrefix);
+      return window.localStorage && window.localStorage.getItem(key);
+    }
+
+    setLastConversationId(conversationId) {
+      const key = this.getPerUserStorageKey(this.config.conversationIdStoragePrefix);
+      if (!window.localStorage) return;
+      if (conversationId) window.localStorage.setItem(key, conversationId);
+      else window.localStorage.removeItem(key);
     }
 
     clampWidth(width) {
@@ -229,6 +262,21 @@
       root.querySelector(".ac-embed-frame").addEventListener("load", () => this.handleFrameLoad());
       root.querySelector(".ac-embed-resize").addEventListener("pointerdown", (event) => this.startResize(event));
       window.addEventListener("resize", () => this.applyWidth(this.clampWidth(this.width)));
+      window.addEventListener("message", this.handleWorkbenchMessage);
+    }
+
+    handleWorkbenchMessage(event) {
+      const data = event && event.data;
+      if (!data || data.source !== "aethercore-workbench" || data.type !== "aethercore:session-changed") {
+        return;
+      }
+      const payload = data.payload || {};
+      if (payload.session_id) {
+        this.setLastSessionId(String(payload.session_id));
+      }
+      if (payload.conversation_id) {
+        this.setLastConversationId(String(payload.conversation_id));
+      }
     }
 
     open() {
@@ -258,6 +306,12 @@
     }
 
     async buildBindRequest() {
+      const defaultBody = {
+        conversation_key: this.state.conversationKey,
+        session_id: this.getLastSessionId() || null,
+        conversation_id: this.getLastConversationId() || null,
+      };
+
       if (typeof this.config.getBindRequest === "function") {
         const requestConfig = await this.config.getBindRequest(this.state, this.config);
         return Object.assign(
@@ -266,16 +320,19 @@
             method: "POST",
             credentials: this.config.credentials,
             headers: {},
-            body: { conversation_key: this.state.conversationKey },
+            body: defaultBody,
           },
-          requestConfig || {}
+          requestConfig || {},
+          {
+            body: Object.assign({}, defaultBody, (requestConfig && requestConfig.body) || {}),
+          }
         );
       }
 
       const payload =
         typeof this.config.getBindPayload === "function"
           ? await this.config.getBindPayload(this.state)
-          : { conversation_key: this.state.conversationKey };
+          : defaultBody;
 
       return {
         url: this.config.bindUrl,
@@ -314,6 +371,8 @@
           throw new Error(`AetherCore bind failed: ${response.status} ${await response.text()}`);
         }
         const result = parseBindResult(await response.json());
+        this.setLastSessionId(result.sessionId);
+        this.setLastConversationId(result.conversationId || null);
         this.state.embedUrl =
           result.workbenchUrl ||
           `${this.config.workbenchUrl}?embed_token=${encodeURIComponent(result.token)}&session_id=${encodeURIComponent(result.sessionId)}`;

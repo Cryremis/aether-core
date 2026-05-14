@@ -24,6 +24,8 @@ type ConversationItem = {
   title: string;
 };
 
+const EMBED_NAVIGATION_EVENT = "aethercore:session-changed";
+
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -139,6 +141,29 @@ export default function App() {
 
     void boot();
   }, []);
+
+  useEffect(() => {
+    if (!isEmbedMode || !sessionId || window.parent === window) {
+      return;
+    }
+    const currentConversation = conversations.find((item) => item.session_id === sessionId);
+    if (!currentConversation) {
+      return;
+    }
+    // 通知宿主当前工作台正在查看的会话，便于下次打开时恢复到上次页面。
+    window.parent.postMessage(
+      {
+        source: "aethercore-workbench",
+        type: EMBED_NAVIGATION_EVENT,
+        payload: {
+          session_id: currentConversation.session_id,
+          conversation_id: currentConversation.conversation_id,
+          title: currentConversation.title,
+        },
+      },
+      "*",
+    );
+  }, [conversations, isEmbedMode, sessionId]);
 
   const handleLoggedIn = async () => {
     const profile = await getCurrentUser();

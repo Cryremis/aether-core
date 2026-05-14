@@ -188,7 +188,18 @@ export function IntegrationGuideModal({
   }, [frontendSnippets, selectedDeployScope]);
 
   const backendCodeSnippets = useMemo(
-    () => (activeMode?.snippets ?? []).filter((item) => !item.snippet_id.includes("frontend") && item.snippet_id !== "backend_env"),
+    () =>
+      (activeMode?.snippets ?? []).filter(
+        (item) =>
+          !item.snippet_id.includes("frontend") &&
+          item.snippet_id !== "backend_env" &&
+          item.snippet_id !== "host_tools_reference",
+      ),
+    [activeMode],
+  );
+
+  const optionalSnippets = useMemo(
+    () => (activeMode?.snippets ?? []).filter((item) => item.snippet_id === "host_tools_reference"),
     [activeMode],
   );
 
@@ -336,6 +347,23 @@ export function IntegrationGuideModal({
                       ) : null}
                     </div>
                   ) : null}
+
+                  {optionalSnippets.length ? (
+                    <div className="guide-section">
+                      {optionalSnippets.map((snippet) => (
+                        <CollapsibleSnippetCard
+                          key={snippet.snippet_id}
+                          snippetId={snippet.snippet_id}
+                          title={snippet.title}
+                          summary={snippet.summary}
+                          content={snippet.content}
+                          language={snippet.language}
+                          renderHighlightedSnippet={renderHighlightedSnippet}
+                          onCopy={onCopy}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
                 </section>
               </div>
 
@@ -364,11 +392,37 @@ export function IntegrationGuideModal({
                   </div>
                 ) : null}
 
+                {activeMode?.steps?.length ? (
+                  <div className="guide-side-panel__item">
+                    <strong>接入步骤</strong>
+                    <div className="guide-note-list">
+                      {activeMode.steps.map((item, index) => (
+                        <div key={`${index}-${item}`} className="guide-note-item">
+                          <span>{index + 1}. {item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {integrationGuide.notes.length ? (
                   <div className="guide-side-panel__item">
                     <strong>接入建议</strong>
                     <div className="guide-note-list">
                       {integrationGuide.notes.map((item) => (
+                        <div key={item} className="guide-note-item">
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {activeMode?.warnings?.length ? (
+                  <div className="guide-side-panel__item">
+                    <strong>风险提醒</strong>
+                    <div className="guide-note-list">
+                      {activeMode.warnings.map((item) => (
                         <div key={item} className="guide-note-item">
                           <span>{item}</span>
                         </div>

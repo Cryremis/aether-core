@@ -43,6 +43,9 @@ AetherCore 就是为这层基础设施设计的。
 - `平台基线`
   不同宿主平台可以为新会话注入默认文件、技能和工作区内容。
 
+- `宿主能力注入`
+  嵌入式 Agent 可以通过 bind 时声明的工具调用宿主侧 API，让你的产品把项目搜索、业务数据查询、流程动作等能力安全地开放给 AetherCore，而不需要把业务代码搬进 AetherCore。
+
 ## 它的整体位置
 
 ```mermaid
@@ -124,6 +127,8 @@ python run_dev.py build frontend
 
 ## 嵌入到你的产品
 
+AetherCore 可以作为工作台嵌入到已有产品里，同时继续复用同一套后端 Agent Runtime。宿主产品可以把当前用户、页面上下文绑定到 AetherCore 会话中，也可以按需把宿主 API 暴露成 Agent 可调用的工具，让 Agent 在对话中查询产品数据或触发宿主侧动作。
+
 推荐接入流程是：
 
 1. 在 AetherCore 中注册平台。
@@ -131,34 +136,15 @@ python run_dev.py build frontend
 3. 提供一个宿主侧 bind 接口，例如 `/api/v1/aethercore/embed/bind`。
 4. 将 `token` 和 `session_id` 返回给浏览器。
 5. 通过通用 adapter 挂载内嵌工作台。
+6. 如需让 Agent 调用网站 API，再按需添加宿主工具。
 
-宿主后端通常只需要一个 AetherCore 地址：
+管理台会为每个已注册平台生成专属“接入教程”。那里是复制接入代码的主入口：它知道当前平台的 platform key、host secret、同域或跨域部署方式、认证模式和后端框架模板。
 
-- `AETHERCORE_API_BASE_URL`：宿主后端调用 AetherCore `/api/v1/host/bind` 时使用的地址
-- `AETHERCORE_WORKBENCH_URL`：可选，仅当浏览器访问工作台的地址和 `AETHERCORE_API_BASE_URL` 不一致时才需要单独配置
-
-最小示例：
-
-```html
-<script src="/api/v1/host/public/embed/aethercore-embed.js"></script>
-<script>
-  window.mountAetherCore({
-    platformKey: "your-platform-key",
-    bindUrl: "/api/v1/aethercore/embed/bind",
-    workbenchUrl: "https://ac.example.com",
-    getUserId: function () {
-      return window.currentUser?.id || "anonymous";
-    }
-  });
-</script>
-```
+如果只需要嵌入工作台，保持宿主能力为空即可；如果希望 Agent 使用产品数据，再在 bind 时添加宿主工具，让 AetherCore 代表当前用户调用受控的网站 API。
 
 相关文件：
 
 - [host-adapters/universal/aethercore-embed.js](/C:/Work/AetherCore/host-adapters/universal/aethercore-embed.js)
-- [host-adapters/universal/README.md](/C:/Work/AetherCore/host-adapters/universal/README.md)
-- [docs/host-integration.md](/C:/Work/AetherCore/docs/host-integration.md)
-- [docs/host-integration-standard.md](/C:/Work/AetherCore/docs/host-integration-standard.md)
 
 ## 仓库结构
 
@@ -221,5 +207,3 @@ python run.py health
 
 - [docs/architecture.md](/C:/Work/AetherCore/docs/architecture.md)
 - [docs/context_management_mechanism.md](/C:/Work/AetherCore/docs/context_management_mechanism.md)
-- [docs/host-integration.md](/C:/Work/AetherCore/docs/host-integration.md)
-- [docs/host-integration-standard.md](/C:/Work/AetherCore/docs/host-integration-standard.md)
