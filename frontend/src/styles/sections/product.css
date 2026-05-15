@@ -786,10 +786,10 @@
 @keyframes landingFadeInUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
 
 .reveal-on-scroll {
-  opacity: 0; transform: translateY(40px) scale(0.98);
-  transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0; transform: translateY(18px);
+  transition: opacity 0.42s ease-out, transform 0.42s ease-out;
 }
-.reveal-on-scroll.is-revealed { opacity: 1; transform: translateY(0) scale(1); }
+.reveal-on-scroll.is-revealed { opacity: 1; transform: none; transition: none; }
 
 /* --- 顶级按钮样式 --- */
 .btn-primary-epic, .btn-secondary-epic {
@@ -857,33 +857,303 @@
 
 .hero-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: center; }
 
-/* 终端模拟器 */
-.hero-visual-wrapper { margin-top: 80px; width: 100%; max-width: 860px; perspective: 1000px; }
-.hero-terminal {
-  text-align: left; background: #0f172a; border: 1px solid rgba(255,255,255,0.1);
-  box-shadow: 0 32px 80px -20px rgba(0,0,0,0.3);
-  transform: rotateX(10deg) scale(0.96); transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+/* --- 嵌入式宿主+Agent特效图 --- */
+.hero-visual-wrapper { 
+  margin-top: 80px; width: min(100vw - 48px, 1120px); max-width: none; 
+  perspective: 1200px; /* 3D 景深 */
 }
-.hero-terminal::after { background: #0f172a; opacity: 1; } /* 覆盖 spotlight 默认白底 */
-.hero-visual-wrapper:hover .hero-terminal { transform: rotateX(0deg) scale(1); }
 
-.terminal-header {
-  height: 40px; background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05);
-  display: flex; align-items: center; padding: 0 16px; position: relative;
+.hero-embedded-mockup {
+  position: relative;
+  width: 100%;
+  height: 500px;
+  overflow: visible;
+  pointer-events: none;
+  transform: rotateX(4deg) rotateY(-2deg) scale(0.98);
+  transform-style: preserve-3d;
 }
-.mac-btns { display: flex; gap: 8px; }
-.mac-btns span { width: 12px; height: 12px; border-radius: 50%; background: #475569; }
-.mac-btns span:nth-child(1) { background: #ef4444; }
-.mac-btns span:nth-child(2) { background: #f59e0b; }
-.mac-btns span:nth-child(3) { background: #10b981; }
-.terminal-title { position: absolute; left: 50%; transform: translateX(-50%); font-family: ui-monospace, monospace; font-size: 12px; color: #64748b; font-weight: 600;}
 
-.terminal-body {
-  padding: 24px; min-height: 240px; display: flex; flex-direction: column; gap: 12px;
-  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 14px; color: #94a3b8; line-height: 1.5;
+.hero-visual-wrapper:hover .hero-embedded-mockup { transform: rotateX(4deg) rotateY(-2deg) scale(0.98); }
+
+/* 1. 背景：模糊的假宿主系统 */
+.host-system-ui {
+  position: absolute;
+  left: 28px;
+  top: 34px;
+  width: 800px;
+  height: 420px;
+  display: flex;
+  background: #1e293b;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px;
+  box-shadow: 0 24px 70px -34px rgba(15, 23, 42, 0.95);
+  opacity: 0.76;
+  filter: grayscale(40%);
+  overflow: hidden;
+  transition: opacity 0.5s ease;
 }
-.terminal-body .text-success { color: #34d399; font-weight: 600; }
-.terminal-cursor { width: 8px; height: 16px; background: #94a3b8; display: inline-block; animation: blink 1s step-end infinite; margin-top: 4px; }
+.hero-visual-wrapper:hover .host-system-ui { opacity: 0.62; }
+
+.host-sidebar { width: 80px; background: #0f172a; border-right: 1px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; align-items: center; padding-top: 20px; gap: 16px; }
+.host-logo { width: 32px; height: 32px; border-radius: 8px; background: rgba(255,255,255,0.2); margin-bottom: 20px; }
+.host-nav-item { width: 40px; height: 40px; border-radius: 8px; background: rgba(255,255,255,0.05); }
+.host-nav-item.active { background: var(--accent); opacity: 0.5; }
+
+.host-main { flex: 1; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+.host-header { display: flex; justify-content: space-between; align-items: center; }
+.host-breadcrumb { width: 140px; height: 16px; border-radius: 4px; background: rgba(255,255,255,0.1); }
+.host-avatar { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); }
+
+.host-card-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.host-stat-card { height: 80px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); }
+.host-table { flex: 1; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; padding: 16px; gap: 12px; }
+.host-table-header { width: 100%; height: 20px; border-radius: 4px; background: rgba(255,255,255,0.08); margin-bottom: 8px; }
+.host-table-row { width: 100%; height: 16px; border-radius: 4px; background: rgba(255,255,255,0.04); }
+
+/* 2. 中景：悬浮的 Agent 工作台 */
+.embedded-agent-panel {
+  position: absolute;
+  top: 34px;
+  left: 428px;
+  height: 420px;
+  width: 400px;
+  background: rgba(255, 255, 255, 0.98);
+  border-radius: 0 20px 20px 0;
+  box-shadow: -18px 0 46px rgba(0,0,0,0.34);
+  border-left: 1px solid rgba(255,255,255,0.22);
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+  transform: translateX(0);
+  animation: slideInAgent 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: 0.8s;
+  opacity: 0;
+}
+:root[data-theme="dark"] .embedded-agent-panel { background: var(--surface-0); border-color: var(--line-strong); }
+
+@keyframes slideInAgent {
+  from { transform: translateX(34px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.agent-panel-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px; border-bottom: 1px solid var(--line-soft); color: var(--text-primary);
+}
+.agent-title { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 8px var(--success); }
+
+.agent-panel-body {
+  flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow: hidden;
+}
+.agent-panel-footer {
+  padding: 16px; border-top: 1px solid var(--line-soft); background: var(--surface-1);
+}
+.fake-input {
+  width: 100%; height: 36px; border-radius: 8px; border: 1px solid var(--line-strong);
+  background: var(--surface-0); display: flex; align-items: center; padding: 0 12px;
+}
+
+/* 骨架屏样式 */
+.skeleton-block { height: 12px; background: var(--line-strong); border-radius: 4px; margin-bottom: 6px; }
+.skeleton-block:last-child { margin-bottom: 0; }
+.w-100 { width: 100%; } .w-80 { width: 80%; } .w-60 { width: 60%; } .w-40 { width: 40%; }
+
+/* 消息流出场动画 */
+.mock-msg {
+  position: absolute; visibility: hidden; opacity: 0; transform: translateY(10px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+  width: 100%; display: flex; flex-direction: column;
+}
+.mock-msg.visible {
+  position: relative; visibility: visible; opacity: 1; transform: translateY(0);
+}
+.mock-msg.user {
+  background: var(--surface-2); padding: 12px 14px;
+  border-radius: 12px; border-bottom-right-radius: 4px; align-self: flex-end; max-width: 90%;
+}
+.mock-msg.assistant { align-self: flex-start; }
+
+.mock-tool-card {
+  border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-0);
+  overflow: hidden; transition: border-color 0.3s ease; width: 90%;
+}
+.mock-tool-card.running { border-left: 3px solid var(--accent); }
+.mock-tool-card.done { border-left: 3px solid var(--success); }
+.tool-card-header {
+  padding: 10px 12px; background: var(--surface-1); display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.tool-card-body { padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+
+/* 3. 特效连线 (Data Beams) */
+.data-beams {
+  position: absolute;
+  left: 846px;
+  top: 152px;
+  transform: translateZ(64px);
+  width: 142px;
+  height: 184px;
+  display: grid;
+  grid-template-rows: repeat(6, 1fr);
+  gap: 13px;
+  z-index: 15;
+}
+
+.beam {
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.14), rgba(255,255,255,0.04));
+  position: relative;
+  opacity: 0.45;
+}
+
+.beam-label {
+  position: absolute; top: -13px; left: 50%; transform: translateX(-50%);
+  font-size: 9px; color: var(--text-tertiary); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.beam::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 0;
+  width: 46%;
+  height: 5px;
+  background: var(--accent);
+  filter: blur(2px);
+  border-radius: 50%;
+  opacity: 0;
+}
+
+.beam.is-active::after {
+  animation: beamFlowToEngine 1.45s linear infinite;
+  opacity: 1;
+}
+
+.beam.is-once::after {
+  animation: beamFlowToEngineOnce 0.92s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.beam--intent::after { background: var(--accent); }
+.beam--plan::after { background: #38bdf8; }
+.beam--tool-call::after { background: var(--success); }
+.beam--tool-result::after { background: var(--brand-amber); }
+.beam--audit::after { background: #94a3b8; }
+
+.beam--stream.is-active::after {
+  animation: beamFlowToHost 1.35s linear infinite;
+  background: #8b5cf6;
+}
+
+.beam--tool-result.is-active::after {
+  animation: beamFlowToHost 1.22s linear infinite;
+}
+
+@keyframes beamFlowToEngine {
+  0% { left: -46%; opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+
+@keyframes beamFlowToEngineOnce {
+  0% { left: -46%; opacity: 0; }
+  18% { opacity: 1; }
+  82% { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+
+@keyframes beamFlowToHost {
+  0% { left: 100%; opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { left: -46%; opacity: 0; }
+}
+
+/* 4. AetherCore Engine 后台驱动 */
+.aether-engine {
+  position: absolute;
+  right: 0;
+  top: 244px;
+  transform: translateY(-50%);
+  width: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  z-index: 20;
+}
+
+.engine-core {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.engine-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 2px dashed rgba(59, 130, 246, 0.5);
+  animation: engineSpin 6s linear infinite;
+}
+.engine-ring.ring-2 {
+  inset: -12px; border-color: rgba(16, 185, 129, 0.3); border-style: solid; border-width: 1px;
+  animation-direction: reverse; animation-duration: 10s;
+}
+
+.engine-center {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  color: white; box-shadow: 0 0 24px rgba(59, 130, 246, 0.6);
+  animation: pulseEngine 2s infinite alternate;
+}
+
+.engine-label {
+  color: #e2e8f0; font-weight: 800; font-size: 14px; letter-spacing: -0.01em;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.5); white-space: nowrap;
+}
+
+.engine-status {
+  display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600;
+  color: var(--text-secondary); background: rgba(15, 23, 42, 0.8);
+  padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.1);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+
+@keyframes engineSpin { 100% { transform: rotate(360deg); } }
+@keyframes pulseEngine {
+  0% { transform: scale(1); box-shadow: 0 0 20px rgba(59, 130, 246, 0.4); }
+  100% { transform: scale(1.08); box-shadow: 0 0 32px rgba(59, 130, 246, 0.8); }
+}
+
+@media (max-width: 900px) {
+  .hero-embedded-mockup { transform: none !important; }
+  .host-system-ui {
+    left: 16px;
+    right: 16px;
+    top: 34px;
+    width: auto;
+    height: 360px;
+  }
+  .embedded-agent-panel {
+    left: 50%;
+    right: 16px;
+    top: 34px;
+    height: 360px;
+    width: auto;
+    transform: none;
+  }
+  .data-beams, .aether-engine { display: none; /* 移动端隐藏较复杂的机制图 */ }
+}
 
 /* ================= 2. 协作范式 Synergy Section ================= */
 .synergy-section { width: 100%; max-width: 1200px; padding: 60px 24px 100px; z-index: 10; }
@@ -914,13 +1184,48 @@
 .synergy-list .check { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 8px var(--success); }
 
 .synergy-connection {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; width: 140px; flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; width: 174px; flex-shrink: 0;
 }
-.conn-line { width: 100%; height: 2px; background: var(--line-strong); position: relative; overflow: hidden; }
-.pulse-dot { position: absolute; top: -1px; left: 0; width: 40px; height: 4px; background: var(--accent); filter: blur(2px); border-radius: 50%; }
+.conn-line { width: 100%; height: 28px; background: transparent; position: relative; overflow: visible; }
+.conn-line::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: var(--line-strong);
+}
+.pulse-dot { position: absolute; top: calc(50% - 2px); left: 0; z-index: 1; width: 40px; height: 4px; background: var(--accent); filter: blur(2px); border-radius: 50%; }
 .forward .pulse-dot { animation: pulseRight 2s linear infinite; }
 .backward .pulse-dot { animation: pulseLeft 2s linear infinite; background: var(--success); }
-.conn-label { font-size: 12px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface-1); padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line-soft); }
+.conn-line__text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 3;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-0) 96%, var(--bg-body) 4%);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--bg-body) 76%, transparent), 0 8px 18px -14px rgba(15, 23, 42, 0.45);
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.conn-label { font-size: 12px; font-weight: 800; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em; background: var(--surface-1); padding: 5px 14px; border-radius: 999px; border: 1px solid var(--line-soft); }
+.conn-security-note {
+  max-width: 160px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-align: center;
+}
 
 @keyframes pulseRight { 0% { transform: translateX(-40px); opacity: 0;} 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translateX(140px); opacity: 0; } }
 @keyframes pulseLeft { 0% { transform: translateX(140px); opacity: 0;} 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translateX(-40px); opacity: 0; } }
@@ -997,8 +1302,10 @@
 @media (max-width: 1024px) {
   .synergy-diagram { flex-direction: column; }
   .synergy-connection { flex-direction: row; width: 100%; height: 100px; }
-  .conn-line { height: 100%; width: 2px; }
-  .pulse-dot { top: 0; left: -1px; width: 4px; height: 40px; }
+  .conn-line { height: 100%; width: 56px; }
+  .conn-line::before { left: 50%; right: auto; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+  .conn-line__text { top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-90deg); }
+  .pulse-dot { top: 0; left: calc(50% - 2px); width: 4px; height: 40px; }
   .forward .pulse-dot { animation: pulseDown 2s linear infinite; }
   .backward .pulse-dot { animation: pulseUp 2s linear infinite; }
 
@@ -1049,3 +1356,10 @@
 .admin-page:has(.management-console) { background: radial-gradient(circle at 20% 0%, color-mix(in srgb, var(--brand-cyan) 10%, transparent), transparent 34rem), var(--bg-body); }
 .platform-integration-panel { padding: 24px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface-glass); box-shadow: var(--shadow-sm); }
 .platform-integration-panel__head { justify-content: space-between; margin-bottom: 20px; display: flex; align-items: center; gap: 12px; }
+
+.bento-icon svg, 
+.icon-wrap svg {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}

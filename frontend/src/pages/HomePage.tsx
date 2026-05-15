@@ -14,18 +14,28 @@ function useSpotlight() {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    let frameId = 0;
     const handleMouseMove = (e: MouseEvent) => {
-      const cards = container.querySelectorAll(".spotlight-card");
-      for (const card of cards) {
-        const rect = card.getBoundingClientRect();
+      const target = e.target instanceof Element ? e.target.closest(".spotlight-card") : null;
+      if (!(target instanceof HTMLElement)) return;
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        const rect = target.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        (card as HTMLElement).style.setProperty("--mouse-x", `${x}px`);
-        (card as HTMLElement).style.setProperty("--mouse-y", `${y}px`);
-      }
+        target.style.setProperty("--mouse-x", `${x}px`);
+        target.style.setProperty("--mouse-y", `${y}px`);
+      });
     };
     container.addEventListener("mousemove", handleMouseMove);
-    return () => container.removeEventListener("mousemove", handleMouseMove);
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      container.removeEventListener("mousemove", handleMouseMove);
+    };
   }, []);
   return containerRef;
 }
@@ -46,47 +56,147 @@ function useScrollReveal() {
   }, []);
 }
 
-// 终端打字机特效组件
-function TerminalMockup() {
-  const [lines, setLines] = useState<string[]>([]);
-  const sequence = [
-    { text: "> initializing AetherCore managed agent...", delay: 300 },
-    { text: "> binding host capabilities (APIs, Context)... [OK]", delay: 1000 },
-    { text: "> allocating isolated execution sandbox... [OK]", delay: 1800 },
-    { text: "> restoring timeline & context window... [OK]", delay: 2500 },
-    { text: "> awaiting user instruction.", delay: 3200, isSuccess: true },
-  ];
+// 嵌入式工作台特效组件
+function HeroEmbeddedMockup() {
+  const [step, setStep] = useState(0);
 
   useEffect(() => {
-    let currentLine = 0;
-    const timeouts: ReturnType<typeof setTimeout>[] = [];
+    let timeout: ReturnType<typeof setTimeout>;
 
-    const processNext = () => {
-      if (currentLine >= sequence.length) return;
-      const { text, delay, isSuccess } = sequence[currentLine];
-      const timer = setTimeout(() => {
-        setLines(prev => [...prev, isSuccess ? `<span class="text-success">${text}</span>` : text]);
-        currentLine++;
-        processNext();
-      }, delay - (currentLine > 0 ? sequence[currentLine - 1].delay : 0));
-      timeouts.push(timer);
+    const runSequence = (currentStep: number) => {
+      if (currentStep === 0) {
+        // 初始状态，等待一下开始
+        timeout = setTimeout(() => runSequence(1), 800); 
+      } else if (currentStep === 1) {
+        // 用户发送骨架屏
+        timeout = setTimeout(() => runSequence(2), 800);
+      } else if (currentStep === 2) {
+        // AI 简短回复骨架屏
+        timeout = setTimeout(() => runSequence(3), 1000);
+      } else if (currentStep === 3) {
+        // 出现工具调用 (Running)
+        timeout = setTimeout(() => runSequence(4), 1800);
+      } else if (currentStep === 4) {
+        // 工具调用完成，出现 AI 大段回复骨架屏
+        timeout = setTimeout(() => runSequence(0), 4500); 
+      }
+      setStep(currentStep);
     };
 
-    processNext();
-    return () => timeouts.forEach(clearTimeout);
+    runSequence(0);
+    return () => clearTimeout(timeout);
   }, []);
 
   return (
-    <div className="hero-terminal spotlight-card">
-      <div className="terminal-header">
-        <div className="mac-btns"><span/><span/><span/></div>
-        <div className="terminal-title">system-integration ~ ready</div>
+    <div className="hero-embedded-mockup">
+      {/* 1. 背景：模拟的宿主系统 (Host System) */}
+      <div className="host-system-ui">
+        <div className="host-sidebar">
+          <div className="host-logo" />
+          <div className="host-nav-item" />
+          <div className="host-nav-item active" />
+          <div className="host-nav-item" />
+        </div>
+        <div className="host-main">
+          <div className="host-header">
+            <div className="host-breadcrumb" />
+            <div className="host-avatar" />
+          </div>
+          <div className="host-content">
+            <div className="host-card-row">
+               <div className="host-stat-card" />
+               <div className="host-stat-card" />
+               <div className="host-stat-card" />
+            </div>
+            <div className="host-table">
+               <div className="host-table-header" />
+               <div className="host-table-row" />
+               <div className="host-table-row" />
+               <div className="host-table-row" />
+            </div>
+          </div>
+        </div>
       </div>
-      <div className="terminal-body">
-        {lines.map((line, i) => (
-          <div key={i} dangerouslySetInnerHTML={{ __html: line }} />
-        ))}
-        <div className="terminal-cursor" />
+
+      {/* 2. 中景：嵌入的 Agent 面板 */}
+      <div className="embedded-agent-panel">
+        <div className="agent-panel-header">
+          <div className="agent-title">
+            <span className="live-dot" /> AI Copilot
+          </div>
+          <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </div>
+        
+        <div className="agent-panel-body">
+          {/* 用户发送 */}
+          <div className={`mock-msg user ${step >= 1 ? 'visible' : ''}`}>
+             <div className="skeleton-block w-80" />
+             <div className="skeleton-block w-60" />
+          </div>
+          
+          {/* AI 响应 */}
+          <div className={`mock-msg assistant ${step >= 2 ? 'visible' : ''}`}>
+             <div className="skeleton-block w-40" />
+          </div>
+
+          {/* 工具调用 */}
+          <div className={`mock-msg assistant ${step >= 3 ? 'visible' : ''}`}>
+             <div className={`mock-tool-card ${step >= 4 ? 'done' : 'running'}`}>
+                <div className="tool-card-header">
+                   <span>
+                     {step >= 4 
+                       ? <svg viewBox="0 0 24 24" width="12" height="12" stroke="#10b981" strokeWidth="3" fill="none"><polyline points="20 6 9 17 4 12"/></svg>
+                       : <span className="loader" />
+                     }
+                   </span>
+                   <div className="skeleton-block w-40" style={{marginBottom: 0, height: 8}} />
+                </div>
+                <div className="tool-card-body">
+                   <div className="skeleton-block w-80" style={{height: 8}} />
+                   {step >= 4 && <div className="skeleton-block w-60" style={{height: 8}} />}
+                </div>
+             </div>
+          </div>
+
+          {/* AI 大段输出 */}
+          <div className={`mock-msg assistant ${step >= 4 ? 'visible' : ''}`}>
+             <div className="skeleton-block w-100" />
+             <div className="skeleton-block w-100" />
+             <div className="skeleton-block w-80" />
+             <div className="skeleton-block w-60" />
+          </div>
+        </div>
+        
+        <div className="agent-panel-footer">
+          <div className="fake-input">
+             <div className="skeleton-block w-40" style={{marginBottom: 0}} />
+          </div>
+        </div>
+      </div>
+
+      {/* 3. 连线特效：数据流转 */}
+      <div className="data-beams">
+        <div className={`beam beam--intent ${step === 1 ? "is-active is-once" : ""}`}><div className="beam-label">Intent</div></div>
+        <div className={`beam beam--plan ${step >= 2 ? "is-active" : ""}`}><div className="beam-label">Plan</div></div>
+        <div className={`beam beam--tool-call ${step >= 3 ? "is-active" : ""}`}><div className="beam-label">Tool Call</div></div>
+        <div className={`beam beam--tool-result ${step >= 4 ? "is-active" : ""}`}><div className="beam-label">Tool Result</div></div>
+        <div className={`beam beam--stream ${step >= 2 ? "is-active" : ""}`}><div className="beam-label">AI Stream</div></div>
+        <div className={`beam beam--audit ${step >= 3 ? "is-active" : ""}`}><div className="beam-label">Audit Sync</div></div>
+      </div>
+
+      {/* 4. 远景/右侧：AetherCore 引擎 */}
+      <div className="aether-engine">
+        <div className="engine-core">
+           <div className="engine-ring ring-1" />
+           <div className="engine-ring ring-2" />
+           <div className="engine-center">
+              <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none"><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+           </div>
+        </div>
+        <div className="engine-label">AetherCore Engine</div>
+        <div className="engine-status">
+           <span className="live-dot" /> Sandbox Ready
+        </div>
       </div>
     </div>
   );
@@ -137,7 +247,7 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
         </div>
 
         <div className="hero-visual-wrapper animate-fade-in-up" style={{ animationDelay: "0.6s" }}>
-           <TerminalMockup />
+           <HeroEmbeddedMockup />
         </div>
       </section>
 
@@ -165,9 +275,16 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
 
           {/* Connection */}
           <div className="synergy-connection">
-            <div className="conn-line forward"><span className="pulse-dot"></span></div>
-            <div className="conn-label">双向绑定协议</div>
-            <div className="conn-line backward"><span className="pulse-dot"></span></div>
+            <div className="conn-line forward">
+              <span className="conn-line__text">Host Secret Handshake</span>
+              <span className="pulse-dot"></span>
+            </div>
+            <div className="conn-label">安全双向绑定</div>
+            <div className="conn-line backward">
+              <span className="conn-line__text">Tool Auth Token</span>
+              <span className="pulse-dot"></span>
+            </div>
+            <div className="conn-security-note">身份校验 · 授权调用 · 审计留痕</div>
           </div>
 
           {/* AetherCore Side */}
