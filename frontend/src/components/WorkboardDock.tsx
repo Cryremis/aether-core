@@ -236,7 +236,7 @@ export function WorkboardDock({ workboard, visible, busy = false, onToggle, onAp
     }
   }, [handleDockResizeMove]);
 
-  const handleDockResizeStart = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  const handleDockResizeStart = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     if (!visible || event.button !== 0) return;
     event.preventDefault();
     suppressToggleClickRef.current = false;

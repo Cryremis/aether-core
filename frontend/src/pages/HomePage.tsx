@@ -47,11 +47,12 @@ function useScrollReveal() {
       entries.forEach(entry => {
         if (entry.isIntersecting) {
           entry.target.classList.add('is-revealed');
+          observer.unobserve(entry.target);
         }
       });
     }, { threshold: 0.1, rootMargin: "0px 0px -50px 0px" });
 
-    document.querySelectorAll('.reveal-on-scroll').forEach(el => observer.observe(el));
+    document.querySelectorAll('.landing-page .reveal-on-scroll').forEach(el => observer.observe(el));
     return () => observer.disconnect();
   }, []);
 }
@@ -62,6 +63,7 @@ function useHeroTilt() {
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
+    if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
 
     let frameId = 0;
     const setTilt = (clientX: number, clientY: number) => {
@@ -277,9 +279,7 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
         </div>
         
         <h1 className="hero-title animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
-          <span className="hero-title-main">{t("home.hero.titleMain")}</span>
-          <br />
-          <span className="hero-title-gradient">{t("home.hero.titleGradient")}</span>
+          {t("home.hero.titleMain")}
         </h1>
         
         <p className="hero-subtitle animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
