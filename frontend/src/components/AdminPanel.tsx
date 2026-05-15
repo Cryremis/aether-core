@@ -38,6 +38,7 @@ import { PlatformLlmPanel } from "./admin/PlatformLlmPanel";
 import { PlatformPromptPanel } from "./admin/PlatformPromptPanel";
 import { PlatformRuntimeImagePanel } from "./admin/PlatformRuntimeImagePanel";
 import { SkillUploadModal } from "./admin/SkillUploadModal";
+import { useAppPreferences } from "../i18n";
 import type {
   LlmConfigFormState,
   PlatformBaselineEntryItem,
@@ -56,6 +57,7 @@ type AdminPanelProps = {
 type PlatformSettingsView = "image" | "prompt" | "llm";
 
 export function AdminPanel({ role, mode = "overview", initialPlatformId = null }: AdminPanelProps) {
+  const { t } = useAppPreferences();
   const [platforms, setPlatforms] = useState<PlatformItem[]>([]);
   const [activePlatformId, setActivePlatformId] = useState<number | null>(null);
   const [baselineEntries, setBaselineEntries] = useState<PlatformBaselineEntryItem[]>([]);
@@ -418,9 +420,9 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
 
   const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
   const settingsTabs: Array<{ key: PlatformSettingsView; title: string; description: string }> = [
-    { key: "image", title: "运行镜像", description: "构建规范与上传启用" },
-    { key: "prompt", title: "系统提示词", description: "平台级默认行为" },
-    { key: "llm", title: "默认 LLM", description: "模型入口与联网策略" },
+    { key: "image", title: t("admin.tab.image"), description: t("admin.tab.imageDesc") },
+    { key: "prompt", title: t("admin.tab.prompt"), description: t("admin.tab.promptDesc") },
+    { key: "llm", title: t("admin.tab.llm"), description: t("admin.tab.llmDesc") },
   ];
 
   const parseJsonObject = (raw: string, label: string) => {
@@ -800,17 +802,17 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
             <div className="platform-settings-workbench">
               <div className="platform-settings-workbench__header">
                 <div className="manager-header__info">
-                  <h4>平台运行工作台</h4>
-                  <p>把运行镜像、系统提示词和默认 LLM 收拢到一个侧边设置区，右侧保留完整资源工作区。</p>
+                  <h4>{t("admin.platformWorkbench.title")}</h4>
+                  <p>{t("admin.platformWorkbench.copy")}</p>
                 </div>
                 <div className="platform-settings-workbench__platform">
-                  <span>当前平台</span>
+                  <span>{t("admin.platformWorkbench.current")}</span>
                   <strong>{activePlatform.display_name}</strong>
                   <code>{activePlatform.platform_key}</code>
                 </div>
               </div>
 
-              <div className="platform-settings-tabs" role="tablist" aria-label="平台设置视图">
+              <div className="platform-settings-tabs" role="tablist" aria-label={t("admin.platformWorkbench.tabsLabel")}>
                 {settingsTabs.map((tab) => (
                   <button
                     key={tab.key}

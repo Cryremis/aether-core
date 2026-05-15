@@ -34,7 +34,7 @@ type PlatformDetailPageProps = {
 type DetailTab = "governance" | "integration" | "runtime" | "audit";
 
 function formatTime(value?: string | null) {
-  if (!value) return "未记录";
+  if (!value) return "";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString();
@@ -176,7 +176,7 @@ export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
           <div>
             <p className="platforms-hero__eyebrow">{platform?.platform_key || "platform"}</p>
             <h1>{platform?.display_name || (loading ? t("common.loading") : "Platform")}</h1>
-            <p>{platform?.description || "平台治理、接入、资源、runtime 和审计视图。"}</p>
+            <p>{platform?.description || t("platformDetail.descriptionFallback")}</p>
           </div>
         </div>
       </section>
@@ -209,7 +209,7 @@ export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
           <div className="management-console__section-head">
             <div>
               <h4>{t("platformDetail.runtime")}</h4>
-              <p>默认只展示当前平台活跃 runtime，打开历史后可查看已回收、过期或失效记录。</p>
+              <p>{t("platformDetail.runtimeHint")}</p>
             </div>
             <span className="management-console__metric">{runtimes.length} Runtime</span>
           </div>
@@ -229,16 +229,16 @@ export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
                 <div className="management-console__card-head">
                   <div>
                     <strong>{item.conversation_title || item.session_id}</strong>
-                    <p>{item.container_name || "尚未创建容器"}</p>
+                    <p>{item.container_name || t("common.notRecorded")}</p>
                   </div>
                   <span className={`request-status request-status--${getRuntimeStatusClass(item.status)}`}>{getRuntimeStatusLabel(item.status)}</span>
                 </div>
-                <p>用户：{item.owner_user_name || item.external_user_id || "未知"}</p>
-                <p>Session：{item.session_id} · 代次：{item.generation ?? 0}</p>
-                <p>最近使用：{formatTime(item.last_used_at)} · 闲置到期：{formatTime(item.idle_expires_at)}</p>
+                <p>{t("platformDetail.owner")}：{item.owner_user_name || item.external_user_id || t("common.unknown")}</p>
+                <p>{t("platformDetail.session")}：{item.session_id} · {t("platformDetail.generation")}：{item.generation ?? 0}</p>
+                <p>{t("platformDetail.lastUsed")}：{formatTime(item.last_used_at) || t("common.notRecorded")} · {t("platformDetail.idleExpires")}：{formatTime(item.idle_expires_at) || t("common.notRecorded")}</p>
                 {isRuntimeActive(item.status) ? (
                   <button type="button" className="action-button action-button--ghost danger-button" disabled={busy || item.status === "busy"} onClick={() => void handleCollectRuntime(item.session_id)}>
-                    回收容器
+                    {t("platformDetail.collectRuntime")}
                   </button>
                 ) : null}
               </article>
@@ -252,10 +252,10 @@ export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
           <div className="management-console__section-head">
             <div>
               <h4>{t("platformDetail.audit")}</h4>
-              <p>查看当前平台下的会话记录、完整消息和 runtime 状态。</p>
+              <p>{t("platformDetail.auditHint")}</p>
             </div>
             <button type="button" className="action-button action-button--ghost" disabled={busy} onClick={() => void loadAuditSessions()}>
-              {busy ? "刷新中..." : t("platformDetail.refresh")}
+              {busy ? t("platformDetail.refreshing") : t("platformDetail.refresh")}
             </button>
           </div>
           <div className="management-console__audit-layout">
@@ -266,9 +266,9 @@ export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
                   <div className="management-console__card-head">
                     <div>
                       <strong>{item.title || "新对话"}</strong>
-                      <p>{item.owner_user_name || item.external_user_name || item.external_user_id || "未知"}</p>
+                      <p>{item.owner_user_name || item.external_user_name || item.external_user_id || t("common.unknown")}</p>
                     </div>
-                    <span className="request-status request-status--returned">{item.message_count} 条</span>
+                    <span className="request-status request-status--returned">{item.message_count} {t("platformDetail.messages")}</span>
                   </div>
                   <div className="management-console__audit-card-session"><code>{item.session_id.slice(0, 12)}...</code></div>
                 </button>
@@ -280,7 +280,7 @@ export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
                   <ChatTimeline loading={busy} messages={convertAuditDetailToChatMessages(selectedAuditDetail)} actionsDisabled={true} />
                 </div>
               ) : (
-                <div className="admin-panel__empty management-console__audit-empty-detail">选择左侧会话后，可在这里查看完整审计详情</div>
+                <div className="admin-panel__empty management-console__audit-empty-detail">{t("platformDetail.selectAudit")}</div>
               )}
             </div>
           </div>

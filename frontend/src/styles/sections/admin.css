@@ -2631,3 +2631,87 @@
   min-width: 0;
   flex: 1;
 }
+
+/* Theme-aware integration guide surfaces */
+.guide-modal {
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 10%, transparent), transparent 38%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 88%, transparent), var(--surface-0));
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.guide-modal__header {
+  border-bottom-color: var(--border-color);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 88%, transparent), color-mix(in srgb, var(--surface-0) 96%, transparent));
+}
+
+.guide-modal__header .icon-button:hover {
+  background: var(--bg-hover);
+}
+
+.guide-stage-card,
+.guide-path-card,
+.guide-mode-card {
+  border-color: var(--border-color);
+  background: linear-gradient(180deg, var(--surface-0), var(--surface-1));
+}
+
+.guide-stage-card.is-active,
+.guide-path-card.is-active,
+.guide-mode-card--recommended {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 12%, var(--surface-0)), var(--surface-0));
+}
+
+.guide-path-card__badge {
+  background: linear-gradient(135deg, var(--surface-strong), color-mix(in srgb, var(--surface-strong) 72%, var(--accent)));
+  color: var(--bg-body);
+}
+
+.guide-path-pill {
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  color: var(--text-secondary);
+}
+
+.guide-snippet-card__header,
+.guide-note-item {
+  border-color: var(--border-color);
+  background: color-mix(in srgb, var(--surface-1) 86%, transparent);
+}
+
+.guide-snippet-card__meta strong {
+  color: var(--text-primary);
+}
+
+.guide-snippet-card__meta span {
+  color: var(--text-secondary);
+}
+
+.guide-side-panel {
+  background: linear-gradient(180deg, var(--surface-1), color-mix(in srgb, var(--surface-1) 78%, var(--surface-2)));
+  border-color: var(--border-color);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--surface-0) 82%, transparent), 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.guide-side-panel__item {
+  border-color: var(--border-color);
+  background: color-mix(in srgb, var(--surface-0) 76%, transparent);
+}
+
+.guide-side-panel__item:hover {
+  background: var(--surface-0);
+}
+
+.guide-callout {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--brand-cyan) 10%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-color));
+}
+
+.guide-callout strong,
+.guide-mode-card__eyebrow {
+  color: var(--accent);
+}
+
+.guide-warning-item {
+  background: color-mix(in srgb, var(--error-bg) 72%, var(--surface-0));
+}

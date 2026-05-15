@@ -1,7 +1,8 @@
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { Link } from "react-router-dom";
 
 import type { CurrentUserProfile } from "../../api/client";
+import { useAppPreferences } from "../../i18n";
 import type { FileItem, SidebarView, SkillItem, WorkbenchConversation } from "../../pages/workbench/types";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
@@ -25,9 +26,9 @@ type WorkbenchSidebarProps = {
   onDeleteSession?: (sessionId: string) => void;
   onUploadFile: (file: File | undefined) => void;
   onUploadSkill: (file: File | undefined) => void;
+  onOpenPersonalSettings: () => void;
   onOpenLlmDialog: () => void;
   adminEntryHref?: string;
-  onOpenPlatformRegistration?: () => void;
   onLogout?: () => void;
   onSidebarResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   getDownloadUrl: (fileId: string) => string;
@@ -40,11 +41,11 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function formatModifiedAt(value?: string | null) {
-  if (!value) return "时间未知";
+function formatModifiedAt(value: string | null | undefined, language: string, fallback: string) {
+  if (!value) return fallback;
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
+  if (!Number.isFinite(timestamp)) return fallback;
+  return new Intl.DateTimeFormat(language, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -72,14 +73,40 @@ export function WorkbenchSidebar({
   onDeleteSession,
   onUploadFile,
   onUploadSkill,
+  onOpenPersonalSettings,
   onOpenLlmDialog,
   adminEntryHref,
-  onOpenPlatformRegistration,
   onLogout,
   onSidebarResizeStart,
   getDownloadUrl,
   onPreviewFile,
 }: WorkbenchSidebarProps) {
+  const { language, t } = useAppPreferences();
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [accountMenuOpen]);
+
+  const roleLabel = currentUser?.can_manage_system
+    ? t("account.role.systemAdmin")
+    : currentUser?.can_manage_platforms
+      ? `${t("account.role.platformAdmin")} · ${currentUser.managed_platform_count}`
+      : t("account.role.user");
+
+  const handleMenuAction = (action: () => void) => {
+    setAccountMenuOpen(false);
+    action();
+  };
+
   return (
     <>
       <aside
@@ -93,48 +120,42 @@ export function WorkbenchSidebar({
               {!isEmbedMode && currentUser ? (
                 <p className="sidebar-user-meta">
                   {currentUser.full_name}
-                  <span>
-                    {currentUser.can_manage_system
-                      ? "系统管理员"
-                      : currentUser.can_manage_platforms
-                        ? `平台负责人 · ${currentUser.managed_platform_count}`
-                        : "普通用户"}
-                  </span>
+                  <span>{roleLabel}</span>
                 </p>
               ) : (
-                <p className="sidebar-user-meta">嵌入工作台</p>
+                <p className="sidebar-user-meta">{t("workbench.user.embed")}</p>
               )}
             </div>
             {isMobile ? <button className="icon-button" onClick={onCloseSidebar}><Icons.Menu /></button> : null}
           </div>
 
           <div className="segment-control">
-            <button className={`segment-btn ${sidebarView === "sessions" ? "active" : ""}`} onClick={() => onSidebarViewChange("sessions")}>会话</button>
-            <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => onSidebarViewChange("files")}>文件</button>
-            <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => onSidebarViewChange("skills")}>技能</button>
+            <button className={`segment-btn ${sidebarView === "sessions" ? "active" : ""}`} onClick={() => onSidebarViewChange("sessions")}>{t("workbench.sidebar.sessions")}</button>
+            <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => onSidebarViewChange("files")}>{t("workbench.sidebar.files")}</button>
+            <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => onSidebarViewChange("skills")}>{t("workbench.sidebar.skills")}</button>
           </div>
 
           <div className="sidebar-content">
             {sidebarView === "sessions" ? (
               <div className="tab-pane">
                 <div className="pane-header">
-                  <h3>历史会话</h3>
+                  <h3>{t("workbench.sidebar.history")}</h3>
                   <button type="button" className="action-button small" onClick={onNewConversation}>
-                    新建
+                    {t("workbench.sidebar.new")}
                   </button>
                 </div>
                 <div className="item-list">
-                  {conversations.length === 0 ? <div className="empty-state">暂无历史会话</div> : null}
+                  {conversations.length === 0 ? <div className="empty-state">{t("workbench.sidebar.noHistory")}</div> : null}
                   {conversations.map((item) => (
                     <div key={item.conversation_id} className={`history-item history-item--compact ${item.session_id === sessionId ? "is-active" : ""}`}>
                       <button type="button" className="history-item__main" onClick={() => onSessionSelect?.(item.session_id)}>
-                        <span className="history-item__title" title={item.title || "新对话"}>{item.title || "新对话"}</span>
+                        <span className="history-item__title" title={item.title || t("workbench.sidebar.newConversation")}>{item.title || t("workbench.sidebar.newConversation")}</span>
                       </button>
                       <div className="history-item__actions">
-                        <button type="button" className="history-item__action-btn" title="重命名" onClick={(e) => { e.stopPropagation(); onRenameSession?.(item.session_id, item.title); }}>
+                        <button type="button" className="history-item__action-btn" title={t("workbench.sidebar.rename")} onClick={(e) => { e.stopPropagation(); onRenameSession?.(item.session_id, item.title); }}>
                           <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg>
                         </button>
-                        <button type="button" className="history-item__action-btn history-item__action-btn--delete" title="删除" onClick={(e) => { e.stopPropagation(); onDeleteSession?.(item.session_id); }}>
+                        <button type="button" className="history-item__action-btn history-item__action-btn--delete" title={t("workbench.sidebar.delete")} onClick={(e) => { e.stopPropagation(); onDeleteSession?.(item.session_id); }}>
                           <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
                       </div>
@@ -145,24 +166,24 @@ export function WorkbenchSidebar({
             ) : sidebarView === "files" ? (
               <div className="tab-pane">
                 <div className="pane-header">
-                  <h3>会话文件</h3>
+                  <h3>{t("workbench.sidebar.sessionFiles")}</h3>
                   <label className="action-button small">
-                    <span>上传</span>
+                    <span>{t("workbench.sidebar.upload")}</span>
                     <input type="file" onChange={(e) => { onUploadFile(e.target.files?.[0]); e.currentTarget.value = ""; }} />
                   </label>
                 </div>
                 <div className="item-list">
-                  {files.length === 0 ? <div className="empty-state">work 目录暂无文件</div> : null}
+                  {files.length === 0 ? <div className="empty-state">{t("workbench.sidebar.noFiles")}</div> : null}
                   {files.map((item, index) => (
                     <article key={item.file_id} className="resource-card anim-enter" style={{ animationDelay: `${index * 0.05}s` }}>
                       <div className="resource-icon"><Icons.File /></div>
                       <div className="resource-info">
                         <strong>{item.name}</strong>
-                        <p>{formatFileSize(item.size)} · {formatModifiedAt(item.modified_at ?? item.created_at)}</p>
+                        <p>{formatFileSize(item.size)} · {formatModifiedAt(item.modified_at ?? item.created_at, language, t("workbench.sidebar.unknownTime"))}</p>
                       </div>
                       <div className="resource-actions">
-                        <button type="button" className="download-btn" onClick={() => onPreviewFile(item)} title="预览 / 编辑"><Icons.Eye /></button>
-                        <a className="download-btn" href={getDownloadUrl(item.file_id)} target="_blank" rel="noreferrer" title="下载"><Icons.Download /></a>
+                        <button type="button" className="download-btn" onClick={() => onPreviewFile(item)} title={t("workbench.sidebar.preview")}><Icons.Eye /></button>
+                        <a className="download-btn" href={getDownloadUrl(item.file_id)} target="_blank" rel="noreferrer" title={t("workbench.sidebar.download")}><Icons.Download /></a>
                       </div>
                     </article>
                   ))}
@@ -171,17 +192,17 @@ export function WorkbenchSidebar({
             ) : (
               <div className="tab-pane">
                 <div className="pane-header">
-                  <h3>技能包</h3>
+                  <h3>{t("workbench.sidebar.skillPackages")}</h3>
                   <label className="action-button small">
-                    <span>上传</span>
+                    <span>{t("workbench.sidebar.upload")}</span>
                     <input type="file" accept=".zip,.md" onChange={(e) => { onUploadSkill(e.target.files?.[0]); e.currentTarget.value = ""; }} />
                   </label>
                 </div>
-                <div className="empty-state">支持上传真实技能包目录压缩成的 `.zip`，或单个 `SKILL.md` 文件。</div>
+                <div className="empty-state">{t("workbench.sidebar.skillHint")}</div>
 
-                <h3 className="sub-title">已加载技能 ({skills.length})</h3>
+                <h3 className="sub-title">{t("workbench.sidebar.loadedSkills")} ({skills.length})</h3>
                 <div className="item-list">
-                  {skills.length === 0 ? <div className="empty-state">暂无已加载技能</div> : null}
+                  {skills.length === 0 ? <div className="empty-state">{t("workbench.sidebar.noSkills")}</div> : null}
                   {skills.map((item, index) => (
                     <article key={`${item.name}-${index}`} className="resource-card block anim-enter" style={{ animationDelay: `${index * 0.05 + 0.1}s` }}>
                       <div className="flex-row">
@@ -197,26 +218,48 @@ export function WorkbenchSidebar({
           </div>
 
           {!isEmbedMode ? (
-            <div className="sidebar-footer">
-              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onOpenLlmDialog}>
-                模型配置
-              </button>
-              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onOpenPlatformRegistration}>
-                申请注册新平台
-              </button>
-              {currentUser?.can_manage_platforms && adminEntryHref ? (
-                <Link className="action-button sidebar-footer__button" to={adminEntryHref}>
-                  管理配置
-                </Link>
+            <div className="sidebar-footer sidebar-footer--account" ref={accountMenuRef}>
+              {accountMenuOpen ? (
+                <div className="account-menu" role="menu">
+                  <button type="button" className="account-menu__item" onClick={() => handleMenuAction(onOpenPersonalSettings)}>
+                    <Icons.User />
+                    <span>{t("workbench.sidebar.personalSettings")}</span>
+                  </button>
+                  <button type="button" className="account-menu__item" onClick={() => handleMenuAction(onOpenLlmDialog)}>
+                    <Icons.Sliders />
+                    <span>{t("workbench.sidebar.modelConfig")}</span>
+                  </button>
+                  {currentUser?.can_manage_platforms && adminEntryHref ? (
+                    <Link className="account-menu__item" to={adminEntryHref} onClick={() => setAccountMenuOpen(false)}>
+                      <Icons.Console />
+                      <span>{t("workbench.sidebar.adminConsole")}</span>
+                    </Link>
+                  ) : null}
+                  <button type="button" className="account-menu__item account-menu__item--danger" onClick={() => handleMenuAction(() => onLogout?.())}>
+                    <Icons.LogOut />
+                    <span>{t("workbench.sidebar.signOut")}</span>
+                  </button>
+                </div>
               ) : null}
-              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onLogout}>
-                退出登录
+              <button
+                type="button"
+                className={`account-menu-trigger${accountMenuOpen ? " is-open" : ""}`}
+                aria-expanded={accountMenuOpen}
+                aria-label={t("workbench.sidebar.accountMenu")}
+                onClick={() => setAccountMenuOpen((current) => !current)}
+              >
+                <span className="account-menu-trigger__avatar">{(currentUser?.full_name || "A").slice(0, 1).toUpperCase()}</span>
+                <span className="account-menu-trigger__meta">
+                  <strong>{currentUser?.full_name || "AetherCore"}</strong>
+                  <span>{roleLabel}</span>
+                </span>
+                <Icons.ChevronUp />
               </button>
             </div>
           ) : (
             <div className="sidebar-footer">
               <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onOpenLlmDialog}>
-                模型配置
+                {t("workbench.sidebar.modelConfig")}
               </button>
             </div>
           )}

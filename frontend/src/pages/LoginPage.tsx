@@ -101,27 +101,27 @@ export function LoginPage({ onLoggedIn, variant = "page" }: LoginPageProps) {
         <div className="login-card__header">
           <span className="login-card__eyebrow">AetherCore</span>
           <h1>{t("auth.title")}</h1>
-          <p>{variant === "modal" ? t("auth.description") : "登录后即可进入主聊天工作台试用，并在需要时申请注册新平台。"}</p>
+          <p>{variant === "modal" ? t("auth.description") : t("auth.pageDescription")}</p>
         </div>
 
         <form className="login-form" onSubmit={handleSubmit}>
           <label>
-            <span>用户名</span>
-            <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="请输入用户名" />
+            <span>{t("auth.username")}</span>
+            <input value={username} onChange={(event) => setUsername(event.target.value)} placeholder={t("auth.usernamePlaceholder")} />
           </label>
 
           <label>
-            <span>密码</span>
+            <span>{t("auth.password")}</span>
             <input
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="请输入密码"
+              placeholder={t("auth.passwordPlaceholder")}
             />
           </label>
 
           <button type="submit" disabled={!canSubmit}>
-            {busy ? "登录中..." : "账号登录"}
+            {busy ? t("auth.busy") : t("auth.passwordLogin")}
           </button>
         </form>
 
@@ -134,7 +134,7 @@ export function LoginPage({ onLoggedIn, variant = "page" }: LoginPageProps) {
               onClick={() => handleOAuthLogin(provider)}
               disabled={busy || !provider.authorize_url_template}
             >
-              使用 {provider.display_name} 登录
+              {t("auth.oauthLogin").replace("{provider}", provider.display_name)}
             </button>
           ))}
         </div>

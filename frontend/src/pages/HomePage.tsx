@@ -1,5 +1,5 @@
 // frontend/src/pages/HomePage.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useAppPreferences } from "../i18n";
 
 type HomePageProps = {
@@ -56,8 +56,54 @@ function useScrollReveal() {
   }, []);
 }
 
+function useHeroTilt() {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    let frameId = 0;
+    const setTilt = (clientX: number, clientY: number) => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        const rect = wrapper.getBoundingClientRect();
+        const x = (clientX - rect.left) / rect.width - 0.5;
+        const y = (clientY - rect.top) / rect.height - 0.5;
+        wrapper.style.setProperty("--hero-tilt-x", `${(-y * 7).toFixed(2)}deg`);
+        wrapper.style.setProperty("--hero-tilt-y", `${(x * 9).toFixed(2)}deg`);
+        wrapper.style.setProperty("--hero-shift-x", `${(x * 18).toFixed(2)}px`);
+        wrapper.style.setProperty("--hero-shift-y", `${(y * 14).toFixed(2)}px`);
+        wrapper.style.setProperty("--hero-glint-x", `${((x + 0.5) * 100).toFixed(2)}%`);
+        wrapper.style.setProperty("--hero-glint-y", `${((y + 0.5) * 100).toFixed(2)}%`);
+      });
+    };
+
+    const handlePointerMove = (event: PointerEvent) => setTilt(event.clientX, event.clientY);
+    const handlePointerLeave = () => {
+      wrapper.style.setProperty("--hero-tilt-x", "4deg");
+      wrapper.style.setProperty("--hero-tilt-y", "-2deg");
+      wrapper.style.setProperty("--hero-shift-x", "0px");
+      wrapper.style.setProperty("--hero-shift-y", "0px");
+      wrapper.style.setProperty("--hero-glint-x", "50%");
+      wrapper.style.setProperty("--hero-glint-y", "42%");
+    };
+
+    wrapper.addEventListener("pointermove", handlePointerMove);
+    wrapper.addEventListener("pointerleave", handlePointerLeave);
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      wrapper.removeEventListener("pointermove", handlePointerMove);
+      wrapper.removeEventListener("pointerleave", handlePointerLeave);
+    };
+  }, []);
+
+  return wrapperRef;
+}
+
 // 嵌入式工作台特效组件
 function HeroEmbeddedMockup() {
+  const { t } = useAppPreferences();
   const [step, setStep] = useState(0);
 
   useEffect(() => {
@@ -176,26 +222,31 @@ function HeroEmbeddedMockup() {
 
       {/* 3. 连线特效：数据流转 */}
       <div className="data-beams">
-        <div className={`beam beam--intent ${step === 1 ? "is-active is-once" : ""}`}><div className="beam-label">Intent</div></div>
-        <div className={`beam beam--plan ${step >= 2 ? "is-active" : ""}`}><div className="beam-label">Plan</div></div>
-        <div className={`beam beam--tool-call ${step >= 3 ? "is-active" : ""}`}><div className="beam-label">Tool Call</div></div>
-        <div className={`beam beam--tool-result ${step >= 4 ? "is-active" : ""}`}><div className="beam-label">Tool Result</div></div>
-        <div className={`beam beam--stream ${step >= 2 ? "is-active" : ""}`}><div className="beam-label">AI Stream</div></div>
-        <div className={`beam beam--audit ${step >= 3 ? "is-active" : ""}`}><div className="beam-label">Audit Sync</div></div>
+        <div className={`beam beam--intent ${step === 1 ? "is-active is-once" : ""}`}><div className="beam-label">{t("home.mock.intent")}</div></div>
+        <div className={`beam beam--plan ${step >= 2 ? "is-active" : ""}`}><div className="beam-label">{t("home.mock.plan")}</div></div>
+        <div className={`beam beam--tool-call ${step >= 3 ? "is-active" : ""}`}><div className="beam-label">{t("home.mock.toolCall")}</div></div>
+        <div className={`beam beam--tool-result ${step >= 4 ? "is-active" : ""}`}><div className="beam-label">{t("home.mock.toolResult")}</div></div>
+        <div className={`beam beam--stream ${step >= 2 ? "is-active" : ""}`}><div className="beam-label">{t("home.mock.stream")}</div></div>
+        <div className={`beam beam--audit ${step >= 3 ? "is-active" : ""}`}><div className="beam-label">{t("home.mock.audit")}</div></div>
       </div>
 
       {/* 4. 远景/右侧：AetherCore 引擎 */}
       <div className="aether-engine">
         <div className="engine-core">
+           <div className="engine-aura" />
            <div className="engine-ring ring-1" />
            <div className="engine-ring ring-2" />
+           <div className="engine-ring ring-3" />
+           <div className="engine-orbit orbit-1"><span /></div>
+           <div className="engine-orbit orbit-2"><span /></div>
            <div className="engine-center">
-              <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none"><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+              <span className="engine-core-mark" />
+              <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M7 12h10"></path><path d="M12 7v10"></path><path d="M8.5 8.5 15.5 15.5"></path><path d="m15.5 8.5-7 7"></path></svg>
            </div>
         </div>
-        <div className="engine-label">AetherCore Engine</div>
+        <div className="engine-label">{t("home.mock.engine")}</div>
         <div className="engine-status">
-           <span className="live-dot" /> Sandbox Ready
+           <span className="live-dot" /> {t("home.mock.ready")}
         </div>
       </div>
     </div>
@@ -205,6 +256,7 @@ function HeroEmbeddedMockup() {
 export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps) {
   const { t } = useAppPreferences();
   const spotlightRef = useSpotlight();
+  const heroTiltRef = useHeroTilt();
   useScrollReveal();
 
   return (
@@ -221,32 +273,36 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
       <section className="hero-section">
         <div className="hero-badge animate-fade-in-up" style={{ animationDelay: "0.1s" }}>
           <span className="hero-badge-dot" />
-          全托管式企业级 Agent 平台
+          {t("home.hero.badge")}
         </div>
         
         <h1 className="hero-title animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
-          <span className="hero-title-main">把强大的 AI 引擎，</span>
+          <span className="hero-title-main">{t("home.hero.titleMain")}</span>
           <br />
-          <span className="hero-title-gradient">5分钟无缝嵌入你的系统</span>
+          <span className="hero-title-gradient">{t("home.hero.titleGradient")}</span>
         </h1>
         
         <p className="hero-subtitle animate-fade-in-up" style={{ animationDelay: "0.3s" }}>
-          你只需提供平台 API，我们负责赋予它“大脑”。AetherCore 提供开箱即用的沙箱执行、复杂的会话记忆管理、主动反问能力，以及一套完整的企业级后台治理平面。
+          {t("home.hero.longSubtitle")}
         </p>
         
         <div className="hero-actions animate-fade-in-up" style={{ animationDelay: "0.4s" }}>
           <button type="button" className="btn-primary-epic" onClick={onOpenChat}>
-            体验 AI 工作台
+            {t("home.hero.primary")}
             <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2" fill="none">
               <path d="M5 12h14m-6-6 6 6-6 6" />
             </svg>
           </button>
           <button type="button" className="btn-secondary-epic" onClick={onOpenPlatforms}>
-            管理控制台
+            {t("home.adminConsole")}
           </button>
         </div>
 
-        <div className="hero-visual-wrapper animate-fade-in-up" style={{ animationDelay: "0.6s" }}>
+        <div
+          className="hero-visual-wrapper animate-fade-in-up"
+          ref={heroTiltRef}
+          style={{ animationDelay: "0.6s" } as CSSProperties}
+        >
            <HeroEmbeddedMockup />
         </div>
       </section>
@@ -254,9 +310,9 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
       {/* ================= 2. 核心协作范式 ================= */}
       <section className="synergy-section reveal-on-scroll">
         <div className="section-header text-center">
-          <div className="feature-eyebrow">The Paradigm</div>
-          <h2>你提供工具接口，我提供智能大脑</h2>
-          <p>打破“大模型不懂业务”的孤岛。宿主系统通过 SDK 暴露平台能力，AetherCore 的 Agent 将自动阅读接口文档、规划任务，并在安全的沙箱中调用你的系统接口完成操作。</p>
+          <div className="feature-eyebrow">{t("home.paradigm.eyebrow")}</div>
+          <h2>{t("home.paradigm.title")}</h2>
+          <p>{t("home.paradigm.copy")}</p>
         </div>
 
         <div className="synergy-diagram">
@@ -264,39 +320,39 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
           <div className="synergy-box host-box spotlight-card">
             <div className="synergy-box-header">
               <div className="icon-wrap host"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
-              <h3>你的业务系统 (Host)</h3>
+              <h3>{t("home.synergy.host")}</h3>
             </div>
             <ul className="synergy-list">
-              <li><span className="check"/> 提供 REST API / RPC 接口</li>
-              <li><span className="check"/> 提供业务数据与上下文</li>
-              <li><span className="check"/> 挂载 5 分钟前端 SDK</li>
+              <li><span className="check"/> {t("home.synergy.hostApi")}</li>
+              <li><span className="check"/> {t("home.synergy.hostData")}</li>
+              <li><span className="check"/> {t("home.synergy.hostSdk")}</li>
             </ul>
           </div>
 
           {/* Connection */}
           <div className="synergy-connection">
             <div className="conn-line forward">
-              <span className="conn-line__text">Host Secret Handshake</span>
+              <span className="conn-line__text">{t("home.synergy.handshake")}</span>
               <span className="pulse-dot"></span>
             </div>
-            <div className="conn-label">安全双向绑定</div>
+            <div className="conn-label">{t("home.synergy.binding")}</div>
             <div className="conn-line backward">
-              <span className="conn-line__text">Tool Auth Token</span>
+              <span className="conn-line__text">{t("home.synergy.token")}</span>
               <span className="pulse-dot"></span>
             </div>
-            <div className="conn-security-note">身份校验 · 授权调用 · 审计留痕</div>
+            <div className="conn-security-note">{t("home.synergy.security")}</div>
           </div>
 
           {/* AetherCore Side */}
           <div className="synergy-box agent-box spotlight-card">
             <div className="synergy-box-header">
               <div className="icon-wrap agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></div>
-              <h3>AetherCore 引擎 (Agent)</h3>
+              <h3>{t("home.synergy.agent")}</h3>
             </div>
             <ul className="synergy-list">
-              <li><span className="check"/> 意图理解与任务拆解 (Workboard)</li>
-              <li><span className="check"/> 安全的代码沙箱与命令执行</li>
-              <li><span className="check"/> 多轮上下文与记忆管理</li>
+              <li><span className="check"/> {t("home.synergy.intent")}</li>
+              <li><span className="check"/> {t("home.synergy.sandbox")}</li>
+              <li><span className="check"/> {t("home.synergy.memory")}</li>
             </ul>
           </div>
         </div>
@@ -305,9 +361,9 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
       {/* ================= 3. 开箱即用的神级能力 (Bento) ================= */}
       <section className="capabilities-section reveal-on-scroll">
         <div className="section-header text-center">
-          <div className="feature-eyebrow">Out of the Box</div>
-          <h2>我们造好了所有轮子，开箱即用</h2>
-          <p>不用再手写繁琐的 Prompt 循环。AetherCore 包含了最前沿的 Agent 交互模式，让你的 AI 产品瞬间达到行业顶尖体验。</p>
+          <div className="feature-eyebrow">{t("home.capabilities.eyebrow")}</div>
+          <h2>{t("home.capabilities.title")}</h2>
+          <p>{t("home.capabilities.copy")}</p>
         </div>
 
         <div className="bento-grid capabilities-grid">
@@ -316,8 +372,8 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
           <article className="bento-card spotlight-card">
              <div className="bento-card-content">
                 <div className="bento-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12h11c2 0 3-1.5 4-3l4-4M17 5h4v4M15 15c1 1 2.5 2.5 4 4l2 2M17 21h4v-4"></path></svg></div>
-                <h3>对话状态机 (Timeline)</h3>
-                <p>支持对任意历史消息进行 Edit、Rerun（重跑）或 Fork（分叉成新会话）。就像使用 Git 一样管理多条对话分支。</p>
+                <h3>{t("home.bento.timeline.title")}</h3>
+                <p>{t("home.bento.timeline.copy")}</p>
              </div>
           </article>
 
@@ -325,8 +381,8 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
           <article className="bento-card spotlight-card">
              <div className="bento-card-content">
                 <div className="bento-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="16" rx="2"></rect><polyline points="7 9 10 12 7 15"></polyline><line x1="12" y1="15" x2="17" y2="15"></line></svg></div>
-                <h3>沙箱与命令执行</h3>
-                <p>每个会话配备物理隔离的 Docker 容器。AI 可以直接编写、运行 Python/Bash 脚本，执行复杂数据处理或运维命令。</p>
+                <h3>{t("home.bento.sandbox.title")}</h3>
+                <p>{t("home.bento.sandbox.copy")}</p>
              </div>
           </article>
 
@@ -334,8 +390,8 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
           <article className="bento-card spotlight-card">
              <div className="bento-card-content">
                 <div className="bento-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"></path></svg></div>
-                <h3>智能任务看板 (Workboard)</h3>
-                <p>遇到复杂任务？AI 会自动拆解生成 To-Do List。当需要人工决策时，AI 会主动发起问卷 (Elicitation) 阻断执行。</p>
+                <h3>{t("home.bento.workboard.title")}</h3>
+                <p>{t("home.bento.workboard.copy")}</p>
              </div>
           </article>
 
@@ -343,8 +399,8 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
           <article className="bento-card spotlight-card">
              <div className="bento-card-content">
                 <div className="bento-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg></div>
-                <h3>上下文与动态压缩</h3>
-                <p>内置精准的 Token 计算器。当对话过长时，系统会自动执行上下文压缩或截断策略，保证 LLM 永远在最佳窗口内运行。</p>
+                <h3>{t("home.bento.context.title")}</h3>
+                <p>{t("home.bento.context.copy")}</p>
              </div>
           </article>
 
@@ -353,8 +409,8 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
              <div className="bento-card-content row-layout">
                 <div className="card-text">
                   <div className="bento-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg></div>
-                  <h3>文件系统与业务技能 (Skills)</h3>
-                  <p>平台可为 Agent 预置“技能包(SKILL.md)”。用户与 AI 共享会话工作区，自由上传附件，AI 处理后的产物可直接下载预览。</p>
+                  <h3>{t("home.bento.files.title")}</h3>
+                  <p>{t("home.bento.files.copy")}</p>
                 </div>
                 <div className="card-visual mini-files">
                    <div className="file-chip">data_clean.py</div>
@@ -370,25 +426,25 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
       {/* ================= 4. 四大应用场景 (Scenarios) ================= */}
       <section className="scenarios-section reveal-on-scroll">
         <div className="section-header text-center">
-          <div className="feature-eyebrow">Scenarios</div>
-          <h2>赋予业务系统“自动驾驶”的能力</h2>
+          <div className="feature-eyebrow">{t("home.scenarios.eyebrow")}</div>
+          <h2>{t("home.scenarios.title")}</h2>
         </div>
         <div className="scenarios-grid">
           <div className="scenario-card spotlight-card">
-             <h3>自动化运维 (AIOps)</h3>
-             <p>接入云平台或内网监控系统，Agent 可在沙箱内自动拉取日志、分析异常、生成排障脚本并直接执行，将 MTTR 缩短 80%。</p>
+             <h3>{t("home.scenario.aiops.title")}</h3>
+             <p>{t("home.scenario.aiops.copy")}</p>
           </div>
           <div className="scenario-card spotlight-card">
-             <h3>内部 SaaS 领航员 (Copilot)</h3>
-             <p>嵌入 CRM、ERP 等业务后台。销售或运营只需用自然语言说话，Agent 调用宿主 API 完成“查询客户、创建工单、发送邮件”的连串操作。</p>
+             <h3>{t("home.scenario.copilot.title")}</h3>
+             <p>{t("home.scenario.copilot.copy")}</p>
           </div>
           <div className="scenario-card spotlight-card">
-             <h3>数据分析与可视化</h3>
-             <p>丢给 AI 一份海量业务数据表格，Agent 自动编写 Python Pandas 脚本清洗数据，运行得出结论并直接生成图表文件供你下载。</p>
+             <h3>{t("home.scenario.data.title")}</h3>
+             <p>{t("home.scenario.data.copy")}</p>
           </div>
           <div className="scenario-card spotlight-card">
-             <h3>企业级智能客服</h3>
-             <p>挂载企业的知识库基线 (Baseline)，利用主动反问 (Elicitation) 机制澄清客户模糊意图，提供零幻觉的精准技术支持。</p>
+             <h3>{t("home.scenario.support.title")}</h3>
+             <p>{t("home.scenario.support.copy")}</p>
           </div>
         </div>
       </section>
@@ -397,13 +453,13 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
       <section className="governance-section reveal-on-scroll">
          <div className="governance-box spotlight-card">
             <div className="gov-text">
-               <div className="feature-eyebrow">Administration</div>
-               <h2>完善的后台治理，满足合规要求</h2>
-               <p>AetherCore 不仅提供前台交互，更为管理员准备了强大的后台管控中心。一切尽在掌握。</p>
+               <div className="feature-eyebrow">{t("home.governance.eyebrow")}</div>
+               <h2>{t("home.governance.title")}</h2>
+               <p>{t("home.governance.copy")}</p>
                <ul className="feature-list gov-list">
-                 <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg> <strong>全量审计回放：</strong> 记录每一次思考、每一次工具调用的入参出参。</li>
-                 <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg> <strong>细粒度权限管控：</strong> 多平台隔离，独立的负责人审批与资源基线管理。</li>
-                 <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /></svg> <strong>统一模型策略：</strong> 全局配置 LLM 网关、网络搜索白名单与统一系统提示词。</li>
+                 <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg> <strong>{t("home.governance.audit")}</strong> {t("home.governance.auditCopy")}</li>
+                 <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg> <strong>{t("home.governance.permission")}</strong> {t("home.governance.permissionCopy")}</li>
+                 <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /></svg> <strong>{t("home.governance.policy")}</strong> {t("home.governance.policyCopy")}</li>
                </ul>
             </div>
             <div className="gov-visual">
@@ -421,24 +477,24 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
       <section className="developer-section reveal-on-scroll">
          <div className="developer-box spotlight-card">
             <div className="dev-text">
-               <div className="feature-eyebrow">Developer Experience</div>
-               <h2>极简 SDK，无痛接入</h2>
-               <p>你的平台无需重构。只需引入 AetherCore SDK，传入业务上下文与你希望暴露的工具接口，剩下的全部交给我们。</p>
+               <div className="feature-eyebrow">{t("home.developer.eyebrow")}</div>
+               <h2>{t("home.developer.title")}</h2>
+               <p>{t("home.developer.copy")}</p>
             </div>
             <div className="dev-code">
                <pre>
                   <code>
-<span className="code-comment">{"// 1. 在你的业务系统前端引入 SDK"}</span><br/>
+<span className="code-comment">{t("home.code.commentImport")}</span><br/>
 <span className="code-keyword">import</span> {"{ initAetherCore }"} <span className="code-keyword">from</span> <span className="code-string">'@aethercore/sdk'</span>;<br/>
 <br/>
 <span className="code-func">initAetherCore</span>{"({"}<br/>
 {"  "}platformKey: <span className="code-string">'my-crm-system'</span>,<br/>
-{"  "}bindApi: <span className="code-string">'/api/aethercore/bind'</span>, <span className="code-comment">{"// 后端代理，保障安全"}</span><br/>
+{"  "}bindApi: <span className="code-string">'/api/aethercore/bind'</span>, <span className="code-comment">{t("home.code.commentProxy")}</span><br/>
 {"  "}context: {"{ user_id: currentUser.id }"},<br/>
 {"  "}hostTools: [<br/>
 {"    {"}<br/>
 {"      "}name: <span className="code-string">'query_customer'</span>,<br/>
-{"      "}description: <span className="code-string">'查询客户详细信息'</span>,<br/>
+{"      "}description: <span className="code-string">'{t("home.code.toolDescription")}'</span>,<br/>
 {"      "}endpoint: <span className="code-string">'/api/internal/customer'</span><br/>
 {"    }"}<br/>
 {"  ]"}<br/>
@@ -452,14 +508,14 @@ export function HomePage({ authed, onOpenChat, onOpenPlatforms }: HomePageProps)
       {/* ================= 7. 底部 CTA ================= */}
       <section className="cta-section reveal-on-scroll">
         <div className="cta-box spotlight-card">
-          <h2>即刻释放 AI 生产力</h2>
-          <p>无需从零构建繁琐的 AI 基础设施。现在进入工作台，感受下一代 Agent 的真实执行力。</p>
+          <h2>{t("home.cta.title")}</h2>
+          <p>{t("home.cta.copy")}</p>
           <div className="hero-actions" style={{ marginTop: '32px' }}>
             <button type="button" className="btn-primary-epic" onClick={onOpenChat}>
-              {authed ? "回到 AI 工作台" : "登录并开始体验"}
+              {authed ? t("home.cta.authed") : t("home.cta.guest")}
             </button>
             <button type="button" className="btn-secondary-epic" onClick={onOpenPlatforms}>
-              进入管理后台
+              {t("home.cta.admin")}
             </button>
           </div>
         </div>

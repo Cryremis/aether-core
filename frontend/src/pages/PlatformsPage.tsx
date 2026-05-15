@@ -113,11 +113,11 @@ export function PlatformsPage({ currentUser }: PlatformsPageProps) {
               </div>
               <span>{platform.host_type || "embedded"}</span>
             </div>
-            <p className="platform-entry-card__desc">{platform.description || "未填写平台说明"}</p>
+            <p className="platform-entry-card__desc">{platform.description || t("platforms.noDescription")}</p>
             <div className="platform-entry-card__meta">
               <div>
                 <span>{t("platforms.owner")}</span>
-                <strong>{platform.owner_name || "未记录"}</strong>
+                <strong>{platform.owner_name || t("platforms.unknownOwner")}</strong>
               </div>
               <div>
                 <span>{t("platforms.runtimeImage")}</span>
@@ -136,12 +136,12 @@ export function PlatformsPage({ currentUser }: PlatformsPageProps) {
 
       <section className="platform-registration-entry">
         <div>
-          <span>Platform Registration</span>
-          <strong>需要接入新的业务平台？</strong>
-          <p>提交申请后，管理员审批通过会自动开通平台，并保留完整申请记录。</p>
+          <span>{t("platforms.registration.eyebrow")}</span>
+          <strong>{t("platforms.registration.title")}</strong>
+          <p>{t("platforms.registration.copy")}</p>
         </div>
         <button type="button" className="home-button home-button--primary" onClick={() => void openRegistrationDialog()}>
-          注册新接入平台
+          {t("platforms.registration.action")}
         </button>
       </section>
 

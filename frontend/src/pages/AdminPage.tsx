@@ -2,6 +2,7 @@
 // frontend/src/pages/AdminPage.tsx
 import type { CurrentUserProfile } from "../api/client";
 import { ManagementConsole } from "../components/ManagementConsole";
+import { useAppPreferences } from "../i18n";
 
 type AdminPageProps = {
   currentUser: CurrentUserProfile;
@@ -10,6 +11,7 @@ type AdminPageProps = {
 };
 
 export function AdminPage({ currentUser, onBack, scope = "all" }: AdminPageProps) {
+  const { t } = useAppPreferences();
   return (
     <main className="admin-page">
       <div className="admin-page__bg-mesh" />
@@ -18,7 +20,7 @@ export function AdminPage({ currentUser, onBack, scope = "all" }: AdminPageProps
           {onBack ? (
             <button type="button" className="admin-page__back" onClick={onBack}>
               <span className="admin-page__back-arrow">‹</span>
-              <span>返回工作台</span>
+              <span>{t("admin.backWorkbench")}</span>
             </button>
           ) : null}
           <div className="admin-page__title-group">
@@ -28,8 +30,8 @@ export function AdminPage({ currentUser, onBack, scope = "all" }: AdminPageProps
               </svg>
             </div>
             <div>
-              <h1>{scope === "system" ? "系统管理" : "管理控制台"}</h1>
-              <p>{scope === "system" ? "统一处理平台注册审批、用户授权和平台负责人治理。" : "统一处理平台注册审批、负责人治理、平台审计、runtime 管理，以及平台基线与模型配置。"}</p>
+              <h1>{scope === "system" ? t("system.title") : t("admin.console.title")}</h1>
+              <p>{scope === "system" ? t("admin.system.subtitle") : t("admin.console.subtitle")}</p>
             </div>
           </div>
         </div>

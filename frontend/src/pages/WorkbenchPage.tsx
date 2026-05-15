@@ -4,7 +4,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   abortSession,
   bootstrapAdminSession,
-  createPlatformRegistrationRequest,
   deleteUserLlmConfig,
   editSessionTimeline,
   type ElicitationRequest,
@@ -13,8 +12,6 @@ import {
   forkSessionTimeline,
   getDownloadUrl,
   getUserLlmConfig,
-  listMyPlatformRegistrationRequests,
-  type PlatformRegistrationRequestSummary,
   getSessionSummary,
   listFiles,
   listSkills,
@@ -40,9 +37,10 @@ import { ChatTimeline } from "../components/workbench/ChatTimeline";
 import { Composer } from "../components/workbench/Composer";
 import { ContextStatusPill } from "../components/workbench/ContextStatusPill";
 import { LlmConfigDialog } from "../components/workbench/LlmConfigDialog";
-import { PlatformRegistrationDialog } from "../components/workbench/PlatformRegistrationDialog";
+import { PersonalSettingsDialog } from "../components/workbench/PersonalSettingsDialog";
 import { WorkbenchIcons as Icons } from "../components/workbench/WorkbenchIcons";
 import { WorkbenchSidebar } from "../components/workbench/WorkbenchSidebar";
+import { useAppPreferences } from "../i18n";
 import { formatTokenCount } from "./workbench/markdown";
 import type {
   AssistantBlock,
@@ -252,6 +250,7 @@ export function WorkbenchPage({
   onSessionRefresh,
   onSessionSelect,
 }: WorkbenchPageProps) {
+  const { t } = useAppPreferences();
   const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>([]);
   const [pendingUserEcho, setPendingUserEcho] = useState<PendingUserEcho | null>(null);
   const [skills, setSkills] = useState<SkillItem[]>([]);
@@ -270,12 +269,9 @@ export function WorkbenchPage({
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [showLlmDialog, setShowLlmDialog] = useState(false);
+  const [showPersonalSettingsDialog, setShowPersonalSettingsDialog] = useState(false);
   const [llmBusy, setLlmBusy] = useState(false);
   const [llmError, setLlmError] = useState("");
-  const [showPlatformRegistrationDialog, setShowPlatformRegistrationDialog] = useState(false);
-  const [platformRegistrationBusy, setPlatformRegistrationBusy] = useState(false);
-  const [platformRegistrationError, setPlatformRegistrationError] = useState("");
-  const [platformRegistrationRequests, setPlatformRegistrationRequests] = useState<PlatformRegistrationRequestSummary[]>([]);
   const [llmState, setLlmState] = useState<LlmDialogState>({
     enabled: true,
     base_url: "",
@@ -642,11 +638,6 @@ window.addEventListener("resize", handleResize);
     return parsed as Record<string, unknown>;
   };
 
-  const loadPlatformRegistrationRequests = async () => {
-    const result = await listMyPlatformRegistrationRequests();
-    setPlatformRegistrationRequests((result.data ?? []) as PlatformRegistrationRequestSummary[]);
-  };
-
   const openLlmDialog = async () => {
     try {
       setLlmError("");
@@ -654,17 +645,6 @@ window.addEventListener("resize", handleResize);
       await loadUserLlmConfig();
     } catch (err) {
       setLlmError(err instanceof Error ? err.message : "加载个人 LLM 配置失败");
-    }
-  };
-
-  const openPlatformRegistrationDialog = async () => {
-    try {
-      setPlatformRegistrationError("");
-      await loadPlatformRegistrationRequests();
-    } catch (err) {
-      setPlatformRegistrationError(err instanceof Error ? err.message : "加载平台注册申请失败");
-    } finally {
-      setShowPlatformRegistrationDialog(true);
     }
   };
 
@@ -699,25 +679,6 @@ window.addEventListener("resize", handleResize);
       setLlmError(err instanceof Error ? err.message : "删除个人 LLM 配置失败");
     } finally {
       setLlmBusy(false);
-    }
-  };
-
-  const submitPlatformRegistrationRequest = async (payload: {
-    platform_key: string;
-    display_name: string;
-    description: string;
-    justification: string;
-  }) => {
-    try {
-      setPlatformRegistrationBusy(true);
-      setPlatformRegistrationError("");
-      await createPlatformRegistrationRequest(payload);
-      await loadPlatformRegistrationRequests();
-    } catch (err) {
-      setPlatformRegistrationError(err instanceof Error ? err.message : "提交平台注册申请失败");
-      throw err;
-    } finally {
-      setPlatformRegistrationBusy(false);
     }
   };
 
@@ -1961,9 +1922,9 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         onDeleteSession={onDeleteSession}
         onUploadFile={handleUpload}
         onUploadSkill={handleUploadSkill}
+        onOpenPersonalSettings={() => setShowPersonalSettingsDialog(true)}
         onOpenLlmDialog={() => void openLlmDialog()}
         adminEntryHref={adminEntryHref}
-        onOpenPlatformRegistration={() => void openPlatformRegistrationDialog()}
         onLogout={onLogout}
         onSidebarResizeStart={handleSidebarResizeStart}
         getDownloadUrl={(fileId) => getDownloadUrl(sessionId, fileId)}
@@ -2023,13 +1984,11 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         onChange={(updater) => setLlmState(updater)}
       />
 
-      <PlatformRegistrationDialog
-        open={showPlatformRegistrationDialog}
-        busy={platformRegistrationBusy}
-        error={platformRegistrationError}
-        recentRequests={platformRegistrationRequests}
-        onClose={() => setShowPlatformRegistrationDialog(false)}
-        onSubmit={submitPlatformRegistrationRequest}
+      <PersonalSettingsDialog
+        currentUser={currentUser}
+        open={showPersonalSettingsDialog}
+        onClose={() => setShowPersonalSettingsDialog(false)}
+        onLogout={onLogout}
       />
 
       <section className="main-content">
@@ -2038,7 +1997,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             <button className="icon-button subtle nav-trigger" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
               {isSidebarOpen ? <Icons.SidebarClose /> : <Icons.Menu />}
             </button>
-            <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? "新会话" : `Session ID: ${sessionId || localSessionId || "Initializing..."}`}</span>
+            <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? t("workbench.session.new") : `Session ID: ${sessionId || localSessionId || t("workbench.session.initializing")}`}</span>
           </div>
           <div className="nav-right">
             <ThemeIconButton className="workbench-theme-toggle" />

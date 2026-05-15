@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { PlatformIntegrationGuide } from "../../api/client";
+import { useAppPreferences } from "../../i18n";
 
 type IntegrationGuideModalProps = {
   integrationGuide: PlatformIntegrationGuide | null;
@@ -43,6 +44,7 @@ function CollapsibleSnippetCard({
   onCopy: (value: string) => void;
   defaultExpanded?: boolean;
 }) {
+  const { t } = useAppPreferences();
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   return (
@@ -54,14 +56,14 @@ function CollapsibleSnippetCard({
         </div>
         <div className="guide-snippet-card__actions">
           <button type="button" className="action-button small" onClick={() => onCopy(content)}>
-            复制
+            {t("guide.copy")}
           </button>
           <button
             type="button"
             className="action-button small primary"
             onClick={() => setExpanded((prev) => !prev)}
           >
-            {expanded ? "收起" : "展开"}
+            {expanded ? t("guide.collapse") : t("guide.expand")}
           </button>
         </div>
       </div>
@@ -81,33 +83,33 @@ function CollapsibleSnippetCard({
 
 const STAGE_OPTIONS: Array<{
   id: AccessStage;
-  title: string;
+  titleKey: string;
   badge: string;
-  summary: string;
+  summaryKey: string;
 }> = [
   {
     id: "production",
-    title: "生产接入",
+    titleKey: "guide.production.title",
     badge: "Production",
-    summary: "宿主后端保管密钥并代理 bind，适合正式上线和后续能力扩展。",
+    summaryKey: "guide.production.summary",
   },
 ];
 
-const IDENTITY_META: Record<IdentityScenario, { title: string; visuals: string[]; description: string }> = {
+const IDENTITY_META: Record<IdentityScenario, { titleKey: string; visuals: string[]; descriptionKey: string }> = {
   authenticated_user: {
-    title: "登录用户",
-    visuals: ["有登录体系", "稳定用户 ID", "完整权限控制"],
-    description: "适合已有用户系统的平台。",
+    titleKey: "guide.identity.authenticated",
+    visuals: ["guide.identity.hasLogin", "guide.identity.stableUser", "guide.identity.fullPermission"],
+    descriptionKey: "guide.identity.authenticatedDesc",
   },
   browser_guest: {
-    title: "匿名访客",
-    visuals: ["无登录可用", "浏览器级续接", "低风险优先"],
-    description: "适合没有登录体系但有宿主后端的平台。",
+    titleKey: "guide.identity.browserGuest",
+    visuals: ["guide.identity.noLogin", "guide.identity.browserResume", "guide.identity.lowRisk"],
+    descriptionKey: "guide.identity.browserGuestDesc",
   },
   ephemeral: {
-    title: "临时访客",
-    visuals: ["无身份依赖", "临时会话", "只做验证"],
-    description: "适合最快体验验证，不承诺跨会话连续性。",
+    titleKey: "guide.identity.ephemeral",
+    visuals: ["guide.identity.noIdentity", "guide.identity.ephemeralSession", "guide.identity.validation"],
+    descriptionKey: "guide.identity.ephemeralDesc",
   },
 };
 
@@ -126,6 +128,7 @@ function IntegrationGuideContent({
   renderHighlightedSnippet,
   onCopy,
 }: Omit<IntegrationGuideModalProps, "onClose">) {
+  const { t } = useAppPreferences();
   const modes = integrationGuide?.modes ?? [];
   const [selectedStage, setSelectedStage] = useState<AccessStage>("production");
   const [selectedIdentity, setSelectedIdentity] = useState<IdentityScenario>("authenticated_user");
@@ -217,7 +220,7 @@ function IntegrationGuideContent({
 
   const body = (
     <>
-      {integrationGuideBusy ? <div className="admin-panel__empty">接入教程加载中...</div> : null}
+      {integrationGuideBusy ? <div className="admin-panel__empty">{t("guide.loading")}</div> : null}
       {integrationGuideError ? <div className="admin-panel__error">{integrationGuideError}</div> : null}
 
       {integrationGuide ? (
@@ -232,8 +235,8 @@ function IntegrationGuideContent({
                     onClick={() => setSelectedStage(stage.id)}
                   >
                     <span className="guide-path-card__badge">{stage.badge}</span>
-                    <strong>{stage.title}</strong>
-                    <p>{stage.summary}</p>
+                    <strong>{t(stage.titleKey)}</strong>
+                    <p>{t(stage.summaryKey)}</p>
                   </button>
                 ))}
               </section>
@@ -251,12 +254,12 @@ function IntegrationGuideContent({
                       onClick={() => setSelectedIdentity(identity)}
                     >
                       <div className="guide-path-card__top">
-                        <strong>{meta.title}</strong>
+                        <strong>{t(meta.titleKey)}</strong>
                       </div>
-                      <p>{meta.description}</p>
+                      <p>{t(meta.descriptionKey)}</p>
                       <div className="guide-path-card__visuals">
                         {meta.visuals.map((item) => (
-                          <span key={item} className="guide-path-pill">{item}</span>
+                          <span key={item} className="guide-path-pill">{t(item)}</span>
                         ))}
                       </div>
                     </button>
@@ -282,14 +285,14 @@ function IntegrationGuideContent({
                       className={`guide-template-switcher__item${selectedDeployScope === "same_origin" ? " is-active" : ""}`}
                       onClick={() => setSelectedDeployScope("same_origin")}
                     >
-                      同域部署
+                      {t("guide.sameOrigin")}
                     </button>
                     <button
                       type="button"
                       className={`guide-template-switcher__item${selectedDeployScope === "cross_origin" ? " is-active" : ""}`}
                       onClick={() => setSelectedDeployScope("cross_origin")}
                     >
-                      跨域部署
+                      {t("guide.crossOrigin")}
                     </button>
                   </div>
 
@@ -354,13 +357,13 @@ function IntegrationGuideContent({
 
               <aside className="guide-side-panel">
                 <div className="guide-side-panel__item">
-                  <strong>官方前端加载器</strong>
+                  <strong>{t("guide.frontendLoader")}</strong>
                   <p>{integrationGuide.frontend_script_url}</p>
                 </div>
 
                 {integrationGuide.placeholders.length ? (
                   <div className="guide-side-panel__item">
-                    <strong>需要替换</strong>
+                    <strong>{t("guide.placeholders")}</strong>
                     <div className="guide-note-list">
                       {integrationGuide.placeholders.map((item) => (
                         <div key={item.key} className="guide-note-item">
@@ -370,7 +373,7 @@ function IntegrationGuideContent({
                       ))}
                     </div>
                     <div className="guide-callout">
-                      <strong>用户解析示例</strong>
+                      <strong>{t("guide.userResolveExample")}</strong>
                       <p>FastAPI: <code>request.state.user</code></p>
                       <p>Express: <code>req.user</code></p>
                     </div>
@@ -379,7 +382,7 @@ function IntegrationGuideContent({
 
                 {activeMode?.steps?.length ? (
                   <div className="guide-side-panel__item">
-                    <strong>接入步骤</strong>
+                    <strong>{t("guide.steps")}</strong>
                     <div className="guide-note-list">
                       {activeMode.steps.map((item, index) => (
                         <div key={`${index}-${item}`} className="guide-note-item">
@@ -392,7 +395,7 @@ function IntegrationGuideContent({
 
                 {integrationGuide.notes.length ? (
                   <div className="guide-side-panel__item">
-                    <strong>接入建议</strong>
+                    <strong>{t("guide.notes")}</strong>
                     <div className="guide-note-list">
                       {integrationGuide.notes.map((item) => (
                         <div key={item} className="guide-note-item">
@@ -405,7 +408,7 @@ function IntegrationGuideContent({
 
                 {activeMode?.warnings?.length ? (
                   <div className="guide-side-panel__item">
-                    <strong>风险提醒</strong>
+                    <strong>{t("guide.warnings")}</strong>
                     <div className="guide-note-list">
                       {activeMode.warnings.map((item) => (
                         <div key={item} className="guide-note-item">
@@ -429,6 +432,7 @@ function IntegrationGuideContent({
 
 export function IntegrationGuideModal(props: IntegrationGuideModalProps) {
   const { integrationGuide, integrationGuideBusy, integrationGuideError, integrationGuidePlatformName, onClose } = props;
+  const { t } = useAppPreferences();
   if (!(integrationGuide || integrationGuideBusy || integrationGuideError)) return null;
 
   return (
@@ -436,10 +440,10 @@ export function IntegrationGuideModal(props: IntegrationGuideModalProps) {
       <div className="guide-modal" onClick={(e) => e.stopPropagation()}>
         <div className="guide-modal__header">
           <div>
-            <h4>接入教程</h4>
-            <p>{integrationGuidePlatformName || integrationGuide?.display_name || "平台接入说明"}</p>
+            <h4>{t("guide.title")}</h4>
+            <p>{integrationGuidePlatformName || integrationGuide?.display_name || t("guide.platformFallback")}</p>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭接入教程">
+          <button type="button" className="icon-button" onClick={onClose} aria-label={t("guide.close")}>
             ×
           </button>
         </div>
@@ -451,12 +455,13 @@ export function IntegrationGuideModal(props: IntegrationGuideModalProps) {
 }
 
 export function IntegrationGuidePanel(props: Omit<IntegrationGuideModalProps, "onClose">) {
+  const { t } = useAppPreferences();
   return (
     <section className="guide-panel-embedded">
       <div className="guide-modal__header">
         <div>
-          <h4>接入教程</h4>
-          <p>{props.integrationGuidePlatformName || props.integrationGuide?.display_name || "平台接入说明"}</p>
+          <h4>{t("guide.title")}</h4>
+          <p>{props.integrationGuidePlatformName || props.integrationGuide?.display_name || t("guide.platformFallback")}</p>
         </div>
       </div>
       <IntegrationGuideContent {...props} />

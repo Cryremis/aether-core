@@ -1,4 +1,5 @@
 import type { PlatformRuntimeImageFormState } from "./types";
+import { useAppPreferences } from "../../i18n";
 
 type PlatformRuntimeImagePanelProps = {
   platformName: string;
@@ -21,25 +22,26 @@ export function PlatformRuntimeImagePanel({
   onReset,
   onUpload,
 }: PlatformRuntimeImagePanelProps) {
+  const { t } = useAppPreferences();
   const guide = runtimeImageForm.guide;
   const hasCustomImage = Boolean(runtimeImageForm.image.trim());
 
   return (
     <div className="epic-llm-panel">
       <div className="manager-header__info">
-        <h4>平台运行镜像</h4>
-        <p>为 {platformName} 构建并发布当前 sandbox 运行镜像。上传成功后会自动启用并回收旧 runtime。</p>
+        <h4>{t("runtimeImage.title")}</h4>
+        <p>{t("runtimeImage.description").replace("{platform}", platformName)}</p>
       </div>
       {runtimeImageError ? <div className="admin-panel__error">{runtimeImageError}</div> : null}
 
       <div className="platform-runtime-image__hint">
-        <strong>当前生效：</strong>
+        <strong>{t("runtimeImage.current")}</strong>
         <code>{runtimeImageForm.resolvedImage}</code>
       </div>
       {runtimeImageForm.recycledRuntimeCount !== null ? (
         <div className="platform-runtime-image__hint">
-          <strong>最近一次回收：</strong>
-          <span>{runtimeImageForm.recycledRuntimeCount} 个 runtime</span>
+          <strong>{t("runtimeImage.lastRecycle")}</strong>
+          <span>{t("runtimeImage.runtimeCount").replace("{count}", String(runtimeImageForm.recycledRuntimeCount))}</span>
         </div>
       ) : null}
 
@@ -47,15 +49,15 @@ export function PlatformRuntimeImagePanel({
         <div className="platform-runtime-spec">
           <div className="platform-runtime-spec__grid">
             <div>
-              <span>目标系统</span>
+              <span>{t("runtimeImage.targetOs")}</span>
               <code>{guide.build_spec.target_os}</code>
             </div>
             <div>
-              <span>目标架构</span>
+              <span>{t("runtimeImage.targetArch")}</span>
               <code>{guide.build_spec.target_arch}</code>
             </div>
             <div>
-              <span>镜像格式</span>
+              <span>{t("runtimeImage.imageFormat")}</span>
               <code>{guide.build_spec.image_format}</code>
             </div>
             <div>
@@ -65,14 +67,14 @@ export function PlatformRuntimeImagePanel({
           </div>
 
           <div className="platform-runtime-spec__section">
-            <strong>构建要求</strong>
+            <strong>{t("runtimeImage.buildRequirements")}</strong>
             {guide.build_spec.build_steps.map((item) => (
               <p key={item}>{item}</p>
             ))}
           </div>
 
           <div className="platform-runtime-spec__section">
-            <strong>目录契约</strong>
+            <strong>{t("runtimeImage.directoryContract")}</strong>
             <div className="platform-runtime-spec__chips">
               {guide.build_spec.required_directories.map((item) => (
                 <code key={item}>{item}</code>
@@ -81,7 +83,7 @@ export function PlatformRuntimeImagePanel({
           </div>
 
           <div className="platform-runtime-spec__section">
-            <strong>环境变量契约</strong>
+            <strong>{t("runtimeImage.envContract")}</strong>
             <div className="platform-runtime-spec__chips">
               {guide.build_spec.required_env_vars.map((item) => (
                 <code key={item}>{item}</code>
@@ -90,14 +92,14 @@ export function PlatformRuntimeImagePanel({
           </div>
 
           <div className="platform-runtime-spec__section">
-            <strong>资源与运行约束</strong>
+            <strong>{t("runtimeImage.resourceLimits")}</strong>
             {guide.build_spec.resource_limits.map((item) => (
               <p key={item}>{item}</p>
             ))}
           </div>
 
           <div className="platform-runtime-spec__section">
-            <strong>示例 Dockerfile</strong>
+            <strong>{t("runtimeImage.sampleDockerfile")}</strong>
             <pre className="platform-runtime-spec__code"><code>{guide.build_spec.sample_dockerfile}</code></pre>
           </div>
         </div>
@@ -105,12 +107,12 @@ export function PlatformRuntimeImagePanel({
 
       <div className="platform-runtime-upload">
         <div className="platform-runtime-upload__content">
-          <span className="platform-runtime-upload__eyebrow">镜像归档上传</span>
-          <strong>上传后自动切换为当前镜像</strong>
-          <p>支持 `.tar` / `.tgz` / `.tar.gz`，启用新镜像后旧镜像归档会由平台侧清理。</p>
+          <span className="platform-runtime-upload__eyebrow">{t("runtimeImage.uploadEyebrow")}</span>
+          <strong>{t("runtimeImage.uploadTitle")}</strong>
+          <p>{t("runtimeImage.uploadHint")}</p>
         </div>
         <label className={`fm-btn primary platform-runtime-upload__button${runtimeImageBusy ? " is-disabled" : ""}`}>
-          <span>{runtimeImageBusy ? "上传处理中..." : "选择镜像文件"}</span>
+          <span>{runtimeImageBusy ? t("runtimeImage.uploadBusy") : t("runtimeImage.chooseFile")}</span>
           <input
             type="file"
             accept=".tar,.tgz,.tar.gz"
@@ -121,13 +123,13 @@ export function PlatformRuntimeImagePanel({
       </div>
 
       <label className="admin-panel__field">
-        <span>手动指定镜像引用</span>
+        <span>{t("runtimeImage.manualRef")}</span>
         <input
           value={runtimeImageForm.image}
           onChange={(e) => onChange((current) => ({ ...current, image: e.target.value }))}
           autoComplete="off"
           name="platform-runtime-image"
-          placeholder="例如 registry.example.com/aether/platform:2026.05.12"
+          placeholder={t("runtimeImage.placeholder")}
         />
       </label>
 
@@ -138,7 +140,7 @@ export function PlatformRuntimeImagePanel({
           onClick={onSave}
           disabled={runtimeImageBusy || !hasCustomImage}
         >
-          {runtimeImageBusy ? "处理中..." : "保存并回收旧 runtime"}
+          {runtimeImageBusy ? t("runtimeImage.saveBusy") : t("runtimeImage.saveAndRecycle")}
         </button>
         <button
           type="button"
@@ -146,7 +148,7 @@ export function PlatformRuntimeImagePanel({
           onClick={onReset}
           disabled={runtimeImageBusy}
         >
-          恢复全局默认
+          {t("runtimeImage.resetGlobal")}
         </button>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import type { PlatformItem } from "./types";
+import { useAppPreferences } from "../../i18n";
 
 type PlatformListProps = {
   platforms: PlatformItem[];
@@ -8,11 +9,13 @@ type PlatformListProps = {
 };
 
 export function PlatformList({ platforms, activePlatformId, onSelect, onOpenGuide }: PlatformListProps) {
+  const { t } = useAppPreferences();
+
   return (
     <div className="admin-panel__list">
-      <h4>管理的平台</h4>
+      <h4>{t("platforms.title")}</h4>
       <div className="platform-grid">
-        {platforms.length === 0 ? <div className="admin-panel__empty">当前没有可管理的平台。</div> : null}
+        {platforms.length === 0 ? <div className="admin-panel__empty">{t("platforms.empty")}</div> : null}
         {platforms.map((item) => (
           <article key={item.platform_id} className={`admin-panel__card ${activePlatformId === item.platform_id ? "is-active" : ""}`} onClick={() => onSelect(item.platform_id)}>
             <div className="platform-card__head">
@@ -25,13 +28,13 @@ export function PlatformList({ platforms, activePlatformId, onSelect, onOpenGuid
                   onOpenGuide(item);
                 }}
               >
-                接入教程
+                {t("guide.title")}
               </button>
             </div>
             <p>{item.platform_key}</p>
-            <p className="desc">{item.description || "未填写平台说明"}</p>
+            <p className="desc">{item.description || t("platforms.noDescription")}</p>
             <div className="platform-card__meta">
-              <span>运行镜像</span>
+              <span>{t("platforms.runtimeImage")}</span>
               <code>{item.resolved_sandbox_image}</code>
             </div>
             <div className="secret-code"><code>{item.host_secret}</code></div>
