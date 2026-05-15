@@ -15,6 +15,7 @@ import {
 } from "./api/client";
 import { AppChrome } from "./components/AppChrome";
 import { AuthModal } from "./components/AuthModal";
+import { PersonalSettingsDialog } from "./components/workbench/PersonalSettingsDialog";
 import { HomePage } from "./pages/HomePage";
 import { PlatformDetailPage } from "./pages/PlatformDetailPage";
 import { PlatformsPage } from "./pages/PlatformsPage";
@@ -42,6 +43,7 @@ export default function App() {
   const [isNewSession, setIsNewSession] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState("/workbench");
+  const [showPersonalSettingsDialog, setShowPersonalSettingsDialog] = useState(false);
 
   const updateWorkbenchQuery = (nextSessionId: string, nextIsNewSession: boolean) => {
     const params = new URLSearchParams(new URL(window.location.href).searchParams);
@@ -251,6 +253,7 @@ export default function App() {
     setCurrentUser(null);
     setIsEmbedMode(false);
     setIsNewSession(false);
+    setShowPersonalSettingsDialog(false);
     navigate("/", { replace: true });
   };
 
@@ -273,7 +276,13 @@ export default function App() {
   return (
     <div className={shellClassName}>
       {!isEmbedMode && !location.pathname.startsWith("/workbench") ? (
-        <AppChrome currentUser={currentUser} authed={authed} onRequireAuth={requireAuth} onLogout={handleLogout} />
+        <AppChrome
+          currentUser={currentUser}
+          authed={authed}
+          onRequireAuth={requireAuth}
+          onOpenPersonalSettings={() => setShowPersonalSettingsDialog(true)}
+          onLogout={handleLogout}
+        />
       ) : null}
 
       <section className="workspace-shell__main">
@@ -333,6 +342,13 @@ export default function App() {
           </Routes>
         </Suspense>
       </section>
+
+      <PersonalSettingsDialog
+        currentUser={currentUser}
+        open={showPersonalSettingsDialog}
+        onClose={() => setShowPersonalSettingsDialog(false)}
+        onLogout={handleLogout}
+      />
 
       <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} onLoggedIn={() => void handleLoggedIn()} />
     </div>

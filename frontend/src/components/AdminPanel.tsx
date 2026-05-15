@@ -805,11 +805,6 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
                   <h4>{t("admin.platformWorkbench.title")}</h4>
                   <p>{t("admin.platformWorkbench.copy")}</p>
                 </div>
-                <div className="platform-settings-workbench__platform">
-                  <span>{t("admin.platformWorkbench.current")}</span>
-                  <strong>{activePlatform.display_name}</strong>
-                  <code>{activePlatform.platform_key}</code>
-                </div>
               </div>
 
               <div className="platform-settings-tabs" role="tablist" aria-label={t("admin.platformWorkbench.tabsLabel")}>

@@ -31,7 +31,6 @@ import {
   type TranscriptChatMessage,
 } from "../api/client";
 import { ElicitationPanel } from "../components/ElicitationPanel";
-import { ThemeIconButton } from "../components/ThemeIconButton";
 import { WorkboardDock } from "../components/WorkboardDock";
 import { ChatTimeline } from "../components/workbench/ChatTimeline";
 import { Composer } from "../components/workbench/Composer";
@@ -2000,7 +1999,6 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? t("workbench.session.new") : `Session ID: ${sessionId || localSessionId || t("workbench.session.initializing")}`}</span>
           </div>
           <div className="nav-right">
-            <ThemeIconButton className="workbench-theme-toggle" />
             <ContextStatusPill contextStatus={contextStatus} />
           </div>
         </header>
@@ -2017,24 +2015,6 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             onRerunFromMessage={(messageId) => void handleRerunFromMessage(messageId)}
             onEditUserMessage={(messageId, content) => void handleEditUserMessage(messageId, content)}
           />
-        </div>
-
-        <div className="runtime-panels">
-          <WorkboardDock
-            workboard={displayedWorkboard}
-            visible={workboardVisible}
-            busy={busy || loading}
-            onToggle={() =>
-              activeSessionId
-                ? setWorkboardVisibilityBySession((current) => ({
-                    ...current,
-                    [activeSessionId]: !(current[activeSessionId] ?? false),
-                  }))
-                : undefined
-            }
-            onApplyOps={(ops) => handleWorkboardOps(ops)}
-          />
-          <ElicitationPanel request={elicitation?.pending ?? null} busy={busy || elicitationBusy} onSubmit={(responses) => void handleElicitationSubmit(responses)} />
         </div>
 
         <Composer

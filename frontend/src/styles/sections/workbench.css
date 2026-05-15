@@ -814,25 +814,6 @@ details[open]::details-content {
   display: block;
 }
 
-.runtime-panels {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 0 20px 10px;
-}
-
-.runtime-panels > * {
-  max-width: 780px;
-  width: 100%;
-}
-
-@media (max-width: 1024px) {
-  .runtime-panels {
-    padding: 0 14px 10px;
-  }
-}
-
 .workboard-dock,
 .elicitation-panel {
   border-radius: 16px;
@@ -1145,13 +1126,42 @@ details[open]::details-content {
 
 .account-menu-trigger__avatar,
 .personal-settings-dialog__avatar {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 14px;
-  background: linear-gradient(135deg, var(--accent), var(--brand-green));
-  color: #fff;
+  overflow: hidden;
+  background: #dff7ff;
+  border: 1px solid #7dd3fc;
+  color: #075985;
   font-weight: 800;
+  letter-spacing: 0;
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 249, 255, 0.9),
+    0 10px 18px -16px rgba(2, 132, 199, 0.42);
+}
+
+.account-menu-trigger__avatar::before,
+.personal-settings-dialog__avatar::before {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border: 1px solid rgba(14, 165, 233, 0.52);
+  border-radius: 7px;
+  clip-path: polygon(0 0, 100% 0, 100% 38%, 72% 38%, 72% 100%, 0 100%);
+}
+
+.account-menu-trigger__avatar::after,
+.personal-settings-dialog__avatar::after {
+  content: "";
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #0284c7;
 }
 
 .account-menu-trigger__avatar {
@@ -1205,6 +1215,7 @@ details[open]::details-content {
 }
 
 .account-menu__item {
+  width: 100%;
   min-height: 40px;
   display: flex;
   align-items: center;
