@@ -40,6 +40,14 @@ function formatTime(value?: string | null) {
   return parsed.toLocaleString();
 }
 
+function formatAuditOwnerLabel(item: {
+  owner_user_name?: string | null;
+  external_user_name?: string | null;
+  external_user_id?: string | null;
+}) {
+  return item.owner_user_name || item.external_user_name || item.external_user_id || "未知";
+}
+
 export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
   const { t } = useAppPreferences();
   const params = useParams();
@@ -266,9 +274,23 @@ export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
                   <div className="management-console__card-head">
                     <div>
                       <strong>{item.title || "新对话"}</strong>
-                      <p>{item.owner_user_name || item.external_user_name || item.external_user_id || t("common.unknown")}</p>
+                      <p>{item.platform_display_name || item.host_name}</p>
                     </div>
                     <span className="request-status request-status--returned">{item.message_count} {t("platformDetail.messages")}</span>
+                  </div>
+                  <div className="management-console__audit-card-meta">
+                    <span className="audit-meta-item">
+                      <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                      {formatAuditOwnerLabel(item)}
+                    </span>
+                    <span className="audit-meta-item">
+                      <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                      创建 {formatTime(item.created_at) || t("common.notRecorded")}
+                    </span>
+                    <span className="audit-meta-item">
+                      <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                      更新 {formatTime(item.updated_at || item.last_message_at) || t("common.notRecorded")}
+                    </span>
                   </div>
                   <div className="management-console__audit-card-session"><code>{item.session_id.slice(0, 12)}...</code></div>
                 </button>
@@ -276,9 +298,35 @@ export function PlatformDetailPage({ currentUser }: PlatformDetailPageProps) {
             </div>
             <div className="management-console__audit-detail">
               {selectedAuditDetail ? (
-                <div className="management-console__audit-timeline-wrapper">
-                  <ChatTimeline loading={busy} messages={convertAuditDetailToChatMessages(selectedAuditDetail)} actionsDisabled={true} />
-                </div>
+                <>
+                  <div className="management-console__audit-detail-header">
+                    <div className="management-console__card-head">
+                      <div>
+                        <strong>{selectedAuditDetail.audit.title || "新对话"}</strong>
+                        <p>{selectedAuditDetail.audit.platform_display_name || selectedAuditDetail.host_name}</p>
+                      </div>
+                      <span className="request-status request-status--approved">{selectedAuditDetail.message_count} {t("platformDetail.messages")}</span>
+                    </div>
+                    <div className="management-console__audit-detail-meta">
+                      <span>用户：{formatAuditOwnerLabel(selectedAuditDetail.audit)}</span>
+                      <span>Session：{selectedAuditDetail.session_id}</span>
+                      <span>创建：{formatTime(selectedAuditDetail.created_at) || t("common.notRecorded")}</span>
+                      <span>更新：{formatTime(selectedAuditDetail.audit.updated_at) || t("common.notRecorded")}</span>
+                      <span>最后消息：{formatTime(selectedAuditDetail.audit.last_message_at) || t("common.notRecorded")}</span>
+                      <span>网络：{selectedAuditDetail.allow_network ? "允许" : "受限"}</span>
+                      {selectedAuditDetail.runtime ? (
+                        <span className={`runtime-status runtime-status--${getRuntimeStatusClass(selectedAuditDetail.runtime.status)}`}>
+                          Runtime：{getRuntimeStatusLabel(selectedAuditDetail.runtime.status)}
+                        </span>
+                      ) : (
+                        <span className="runtime-status runtime-status--none">Runtime：尚未创建</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="management-console__audit-timeline-wrapper">
+                    <ChatTimeline loading={busy} messages={convertAuditDetailToChatMessages(selectedAuditDetail)} actionsDisabled={true} />
+                  </div>
+                </>
               ) : (
                 <div className="admin-panel__empty management-console__audit-empty-detail">{t("platformDetail.selectAudit")}</div>
               )}

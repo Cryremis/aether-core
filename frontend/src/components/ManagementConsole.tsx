@@ -69,6 +69,14 @@ function formatTime(value?: string | null) {
   return parsed.toLocaleString();
 }
 
+function formatAuditOwnerLabel(item: {
+  owner_user_name?: string | null;
+  external_user_name?: string | null;
+  external_user_id?: string | null;
+}) {
+  return item.owner_user_name || item.external_user_name || item.external_user_id || "未知";
+}
+
 export function isRuntimeActive(status: string) {
   return ["provisioning", "running", "busy"].includes(status);
 }
@@ -826,11 +834,15 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                       <div className="management-console__audit-card-meta">
                         <span className="audit-meta-item">
                           <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                          {item.owner_user_name || item.external_user_name || item.external_user_id || "未知"}
+                          {formatAuditOwnerLabel(item)}
+                        </span>
+                        <span className="audit-meta-item">
+                          <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                          创建 {formatTime(item.created_at)}
                         </span>
                         <span className="audit-meta-item">
                           <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                          {formatTime(item.updated_at || item.last_message_at)}
+                          更新 {formatTime(item.updated_at || item.last_message_at)}
                         </span>
                       </div>
                       <div className="management-console__audit-card-session">
@@ -852,10 +864,12 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                         <span className="request-status request-status--approved">{selectedAuditDetail.message_count} 条消息</span>
                       </div>
                       <div className="management-console__audit-detail-meta">
-                        <span>用户：{selectedAuditDetail.audit.owner_user_name || selectedAuditDetail.audit.external_user_name || selectedAuditDetail.audit.external_user_id || "未知"}</span>
+                        <span>用户：{formatAuditOwnerLabel(selectedAuditDetail.audit)}</span>
                         <span>Session：{selectedAuditDetail.session_id}</span>
                         <span>创建：{formatTime(selectedAuditDetail.created_at)}</span>
                         <span>更新：{formatTime(selectedAuditDetail.audit.updated_at)}</span>
+                        <span>最后消息：{formatTime(selectedAuditDetail.audit.last_message_at)}</span>
+                        <span>网络：{selectedAuditDetail.allow_network ? "允许" : "受限"}</span>
                         {selectedAuditDetail.runtime ? (
                           <span className={`runtime-status runtime-status--${getRuntimeStatusClass(selectedAuditDetail.runtime.status)}`}>
                             Runtime：{getRuntimeStatusLabel(selectedAuditDetail.runtime.status)}

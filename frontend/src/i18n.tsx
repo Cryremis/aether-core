@@ -54,7 +54,7 @@ const messages = {
     "home.hero.title": "AetherCore",
     "home.hero.subtitle": "一套面向企业级 AI 应用的运行、接入与治理平台：安全沙箱执行、平台级策略、资源基线、会话审计和多系统接入一次配齐。",
     "home.hero.badge": "Agent Runtime / Workbench / Sandbox",
-    "home.hero.titleMain": "快速为你的产品注入 AI Agent 能力",
+    "home.hero.titleMain": "5分钟快速为你的产品注入 AI Agent 能力",
     "home.hero.titleGradient": "",
     "home.hero.longSubtitle": "AetherCore 把共享 Agent Runtime、嵌入式 Workbench、沙箱执行、宿主接入层、文件与技能系统，以及长上下文编排整合成一套可部署的基础设施。",
     "home.hero.primary": "体验 AI 工作台",
