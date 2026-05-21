@@ -2138,12 +2138,14 @@
 .management-console__audit-layout {
   display: grid;
   gap: 18px;
+  min-width: 0;
 }
 
 @media (min-width: 1100px) {
   .management-console__audit-layout {
-    grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.4fr);
-    align-items: start;
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    align-items: stretch;
+    height: min(72vh, 980px);
   }
 }
 
@@ -2151,6 +2153,7 @@
 .management-console__audit-detail {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .management-console__audit-card,
@@ -2168,6 +2171,32 @@
   cursor: pointer;
 }
 
+.management-console__audit-list {
+  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.management-console__audit-list-scroll {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  align-content: start;
+}
+
+@media (min-width: 1100px) {
+  .management-console__audit-list,
+  .management-console__audit-detail {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .management-console__audit-list-scroll {
+    height: 100%;
+    max-height: none;
+    overflow-y: auto;
+  }
+}
+
 .management-console__audit-card:hover,
 .management-console__audit-card.is-active,
 .management-console__audit-detail {
@@ -2181,25 +2210,67 @@
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08), 0 16px 32px -16px rgba(15, 23, 42, 0.1);
 }
 
+.management-console__audit-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.management-console__audit-card-top strong {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: 15px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
 .management-console__audit-timeline {
   display: grid;
   gap: 12px;
 }
 
 .management-console__audit-timeline-wrapper {
-  flex: 1;
   min-height: 400px;
-  max-height: 70vh;
-  overflow-y: auto;
   background: linear-gradient(180deg, rgba(248, 250, 252, 0.6) 0%, rgba(255, 255, 255, 0.8) 100%);
   border-radius: 16px;
   border: 1px solid rgba(226, 232, 240, 0.7);
   margin-top: 16px;
+  min-width: 0;
+}
+
+.management-console__audit-detail {
+  align-content: start;
+}
+
+@media (min-width: 1100px) {
+  .management-console__audit-list,
+  .management-console__audit-detail {
+    overflow: hidden;
+  }
+
+  .management-console__audit-detail {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .management-console__audit-timeline-wrapper {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    margin-top: 0;
+    overflow-y: auto;
+  }
 }
 
 .management-console__audit-timeline-wrapper .chat-container {
   max-width: 100%;
   padding: 24px 20px 32px;
+  min-width: 0;
 }
 
 .management-console__audit-message {
@@ -2318,19 +2389,6 @@
 
 .management-console__audit-card-meta .audit-meta-item svg {
   color: var(--text-tertiary);
-}
-
-.management-console__audit-card-session {
-  margin-top: 8px;
-  padding: 6px 10px;
-  background: rgba(241, 245, 249, 0.6);
-  border-radius: 8px;
-}
-
-.management-console__audit-card-session code {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 /* --- 审计详情头部 --- */

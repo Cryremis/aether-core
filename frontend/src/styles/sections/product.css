@@ -551,7 +551,6 @@
 :root[data-theme="dark"] .management-console__toolbar,
 :root[data-theme="dark"] .management-console__audit-platform-card,
 :root[data-theme="dark"] .management-console__audit-timeline-wrapper,
-:root[data-theme="dark"] .management-console__audit-card-session,
 :root[data-theme="dark"] .management-console__audit-message,
 :root[data-theme="dark"] .management-console__audit-list-header,
 :root[data-theme="dark"] .management-console__audit-detail-header {
@@ -561,8 +560,7 @@
 :root[data-theme="dark"] .platform-settings-tab,
 :root[data-theme="dark"] .management-console__toolbar,
 :root[data-theme="dark"] .management-console__audit-platform-card,
-:root[data-theme="dark"] .management-console__audit-message,
-:root[data-theme="dark"] .management-console__audit-card-session {
+:root[data-theme="dark"] .management-console__audit-message {
   background: color-mix(in srgb, var(--surface-1) 88%, transparent) !important;
   color: var(--text-secondary) !important;
 }
@@ -577,8 +575,7 @@
 }
 
 :root[data-theme="dark"] .management-console__audit-card-meta .audit-meta-item svg,
-:root[data-theme="dark"] .management-console__audit-detail-meta .runtime-status--none,
-:root[data-theme="dark"] .management-console__audit-card-session code {
+:root[data-theme="dark"] .management-console__audit-detail-meta .runtime-status--none {
   color: var(--text-tertiary) !important;
 }
 

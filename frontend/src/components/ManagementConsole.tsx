@@ -77,6 +77,14 @@ function formatAuditOwnerLabel(item: {
   return item.owner_user_name || item.external_user_name || item.external_user_id || "未知";
 }
 
+function getAuditListTimestamp(item: {
+  updated_at?: string | null;
+  last_message_at?: string | null;
+  created_at?: string | null;
+}) {
+  return formatTime(item.updated_at || item.last_message_at || item.created_at);
+}
+
 export function isRuntimeActive(status: string) {
   return ["provisioning", "running", "busy"].includes(status);
 }
@@ -814,43 +822,35 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                     {auditBusy ? "刷新中..." : "刷新"}
                   </button>
                 </div>
-                {auditConversations.length === 0 ? (
-                  <div className="admin-panel__empty">当前平台还没有可审计会话。</div>
-                ) : (
-                  auditConversations.map((item) => (
-                    <button
-                      key={item.session_id}
-                      type="button"
-                      className={`management-console__audit-card ${selectedAuditSessionId === item.session_id ? "is-active" : ""}`}
-                      onClick={() => setSelectedAuditSessionId(item.session_id)}
-                    >
-                      <div className="management-console__card-head">
-                        <div>
+                <div className="management-console__audit-list-scroll">
+                  {auditConversations.length === 0 ? (
+                    <div className="admin-panel__empty">当前平台还没有可审计会话。</div>
+                  ) : (
+                    auditConversations.map((item) => (
+                      <button
+                        key={item.session_id}
+                        type="button"
+                        className={`management-console__audit-card ${selectedAuditSessionId === item.session_id ? "is-active" : ""}`}
+                        onClick={() => setSelectedAuditSessionId(item.session_id)}
+                      >
+                        <div className="management-console__audit-card-top">
                           <strong>{item.title || "新对话"}</strong>
-                          <p>{item.platform_display_name || item.host_name}</p>
+                          <span className="request-status request-status--returned">{item.message_count} 条</span>
                         </div>
-                        <span className="request-status request-status--returned">{item.message_count} 条</span>
-                      </div>
-                      <div className="management-console__audit-card-meta">
-                        <span className="audit-meta-item">
-                          <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                          {formatAuditOwnerLabel(item)}
-                        </span>
-                        <span className="audit-meta-item">
-                          <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                          创建 {formatTime(item.created_at)}
-                        </span>
-                        <span className="audit-meta-item">
-                          <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                          更新 {formatTime(item.updated_at || item.last_message_at)}
-                        </span>
-                      </div>
-                      <div className="management-console__audit-card-session">
-                        <code>{item.session_id.slice(0, 12)}...</code>
-                      </div>
-                    </button>
-                  ))
-                )}
+                        <div className="management-console__audit-card-meta">
+                          <span className="audit-meta-item">
+                            <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                            {formatAuditOwnerLabel(item)}
+                          </span>
+                          <span className="audit-meta-item">
+                            <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            {getAuditListTimestamp(item)}
+                          </span>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
               </div>
               <div className="management-console__audit-detail">
                 {selectedAuditDetail ? (
