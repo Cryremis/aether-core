@@ -3,9 +3,7 @@
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  width: 100vw;
-  overflow-x: hidden;
-  overflow-y: visible;
+  width: 100%;
   background:
     radial-gradient(circle at 50% -10%, color-mix(in srgb, var(--brand-cyan) 18%, transparent), transparent 34rem),
     radial-gradient(circle at 95% 12%, color-mix(in srgb, var(--brand-green) 14%, transparent), transparent 28rem),
@@ -989,7 +987,7 @@
 /* --- 全局布局与背景特效 --- */
 .landing-page {
   position: relative; width: 100%; min-height: 100vh; display: flex; flex-direction: column; align-items: center;
-  padding-top: 140px; overflow-x: hidden; background: var(--bg-body);
+  padding-top: 140px; background: var(--bg-body);
 }
 
 .landing-bg-glows {

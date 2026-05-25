@@ -78,12 +78,13 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { 
+html {
   background-color: var(--bg-body); 
   color: var(--text-primary); 
-  overflow-x: hidden;
-  overflow-y: auto;
   -webkit-font-smoothing: antialiased; 
+}
+body { 
+  min-height: 100vh;
 }
 button, input, textarea, a { font: inherit; outline: none; }
 a { text-decoration: none; color: var(--accent); }
