@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AetherCore - Embeddable Agent Runtime Platform</title>
+  <meta name="description" content="Agent-as-a-Service platform that gives your products a shared agent runtime, embedded workbench, sandboxed execution, host integration, and long-context orchestration." />
+  <meta property="og:title" content="AetherCore - Embeddable Agent Runtime" />
+  <meta property="og:description" content="Agent-as-a-Service platform for teams that want to embed powerful AI agents into multiple products." />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="https://cryremis.github.io/aether-core/assets/social-preview.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="AetherCore" />
+  <meta name="twitter:description" content="Embeddable agent runtime for teams that need sandboxed execution, host integration, and reusable AI infrastructure." />
+  <meta name="twitter:image" content="https://cryremis.github.io/aether-core/assets/social-preview.png" />
+  <link rel="stylesheet" href="./styles-landing.css" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+</head>
+<body>
+  <!-- Navigation -->
+  <nav class="product-nav">
+    <a class="product-nav__brand" href="./">
+      <div class="product-nav__mark">⚡</div>
+      <span>AetherCore</span>
+    </a>
+    <div class="product-nav__center">
+      <div class="product-nav__links">
+        <a href="https://github.com/Cryremis/aether-core" target="_blank">GitHub</a>
+        <a href="https://github.com/Cryremis/aether-core/blob/master/README.md" target="_blank">Docs</a>
+        <a href="https://github.com/Cryremis/aether-core/blob/master/README.zh-CN.md" target="_blank">中文</a>
+      </div>
+    </div>
+    <div class="product-nav__actions">
+      <a href="https://github.com/Cryremis/aether-core" class="nav-primary-button">View on GitHub</a>
+    </div>
+  </nav>
+
+  <!-- Main Landing Page -->
+  <main class="landing-page" id="spotlight-container">
+    <!-- Background Glows -->
+    <div class="landing-bg-glows" aria-hidden="true">
+      <div class="glow glow-1"></div>
+      <div class="glow glow-2"></div>
+      <div class="glow glow-3"></div>
+      <div class="grid-overlay"></div>
+    </div>
+
+    <!-- Hero Section -->
+    <section class="hero-section">
+      <div class="hero-badge animate-fade-in-up" style="animation-delay: 0.1s;">
+        <span class="hero-badge-dot"></span>
+        Agent Runtime / Workbench / Sandbox
+      </div>
+      
+      <h1 class="hero-title animate-fade-in-up" style="animation-delay: 0.2s;">
+        The embeddable agent runtime
+      </h1>
+      
+      <p class="hero-subtitle animate-fade-in-up" style="animation-delay: 0.3s;">
+        AetherCore brings a shared agent runtime, embedded workbench, sandboxed execution, host integration, files, skills, and long-context orchestration into one deployable stack.
+      </p>
+      
+      <div class="hero-actions animate-fade-in-up" style="animation-delay: 0.4s;">
+        <a href="https://github.com/Cryremis/aether-core" class="btn-primary-epic">
+          Open Repository
+          <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none">
+            <path d="M5 12h14m-6-6 6 6-6 6" />
+          </svg>
+        </a>
+        <a href="https://github.com/Cryremis/aether-core/blob/master/README.md" class="btn-secondary-epic">
+          Read the Docs
+        </a>
+      </div>
+
+      <!-- Hero Visual Mockup -->
+      <div class="hero-visual-wrapper animate-fade-in-up" style="animation-delay: 0.6s;" id="hero-tilt-wrapper">
+        <div class="hero-embedded-mockup">
+          <!-- Host System UI -->
+          <div class="host-system-ui">
+            <div class="host-sidebar">
+              <div class="host-logo"></div>
+              <div class="host-nav-item"></div>
+              <div class="host-nav-item active"></div>
+              <div class="host-nav-item"></div>
+            </div>
+            <div class="host-main">
+              <div class="host-header">
+                <div class="host-breadcrumb"></div>
+                <div class="host-avatar"></div>
+              </div>
+              <div class="host-content">
+                <div class="host-card-row">
+                  <div class="host-stat-card"></div>
+                  <div class="host-stat-card"></div>
+                  <div class="host-stat-card"></div>
+                </div>
+                <div class="host-table">
+                  <div class="host-table-header"></div>
+                  <div class="host-table-row"></div>
+                  <div class="host-table-row"></div>
+                  <div class="host-table-row"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Embedded Agent Panel -->
+          <div class="embedded-agent-panel">
+            <div class="agent-panel-header">
+              <div class="agent-title">
+                <span class="live-dot"></span> AI Copilot
+              </div>
+              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </div>
+            
+            <div class="agent-panel-body">
+              <!-- User Message -->
+              <div class="mock-msg user visible">
+                <div class="skeleton-block w-80"></div>
+                <div class="skeleton-block w-60"></div>
+              </div>
+              
+              <!-- AI Response -->
+              <div class="mock-msg assistant visible">
+                <div class="skeleton-block w-40"></div>
+              </div>
+
+              <!-- Tool Call -->
+              <div class="mock-msg assistant visible">
+                <div class="mock-tool-card done">
+                  <div class="tool-card-header">
+                    <span>
+                      <svg viewBox="0 0 24 24" width="12" height="12" stroke="#10b981" stroke-width="3" fill="none">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
+                    </span>
+                    <div class="skeleton-block w-40" style="marginBottom: 0; height: 8px;"></div>
+                  </div>
+                  <div class="tool-card-body">
+                    <div class="skeleton-block w-80" style="height: 8px;"></div>
+                    <div class="skeleton-block w-60" style="height: 8px;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- AI Large Output -->
+              <div class="mock-msg assistant visible">
+                <div class="skeleton-block w-100"></div>
+                <div class="skeleton-block w-100"></div>
+                <div class="skeleton-block w-80"></div>
+                <div class="skeleton-block w-60"></div>
+              </div>
+            </div>
+            
+            <div class="agent-panel-footer">
+              <div class="fake-input">
+                <div class="skeleton-block w-40" style="marginBottom: 0;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Data Beams -->
+          <div class="data-beams">
+            <div class="beam beam--intent is-active is-once"><div class="beam-label">Intent</div></div>
+            <div class="beam beam--plan is-active"><div class="beam-label">Plan</div></div>
+            <div class="beam beam--tool-call is-active"><div class="beam-label">Tool Call</div></div>
+            <div class="beam beam--tool-result is-active"><div class="beam-label">Tool Result</div></div>
+            <div class="beam beam--stream is-active"><div class="beam-label">AI Stream</div></div>
+            <div class="beam beam--audit is-active"><div class="beam-label">Audit Sync</div></div>
+          </div>
+
+          <!-- AetherCore Engine -->
+          <div class="aether-engine">
+            <div class="engine-core">
+              <div class="engine-aura"></div>
+              <div class="engine-ring ring-1"></div>
+              <div class="engine-ring ring-2"></div>
+              <div class="engine-ring ring-3"></div>
+              <div class="engine-orbit orbit-1"><span></span></div>
+              <div class="engine-orbit orbit-2"><span></span></div>
+              <div class="engine-center">
+                <span class="engine-core-mark"></span>
+                <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M7 12h10"></path>
+                  <path d="M12 7v10"></path>
+                  <path d="M8.5 8.5 15.5 15.5"></path>
+                  <path d="m15.5 8.5-7 7"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="engine-label">AetherCore Engine</div>
+            <div class="engine-status">
+              <span class="live-dot"></span> Sandbox Ready
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Synergy Section -->
+    <section class="synergy-section reveal-on-scroll">
+      <div class="section-header text-center">
+        <div class="feature-eyebrow">The Paradigm</div>
+        <h2>You expose tools. We provide the intelligent brain.</h2>
+        <p>Break the "model does not understand the business" silo. Host systems expose capabilities through the SDK, while AetherCore agents read interface docs, plan tasks, and call your APIs inside a secure sandbox.</p>
+      </div>
+
+      <div class="synergy-diagram">
+        <!-- Host Side -->
+        <div class="synergy-box host-box spotlight-card">
+          <div class="synergy-box-header">
+            <div class="icon-wrap host">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+            </div>
+            <h3>Your business system (Host)</h3>
+          </div>
+          <ul class="synergy-list">
+            <li><span class="check"></span> Expose REST API / RPC interfaces</li>
+            <li><span class="check"></span> Provide business data and context</li>
+            <li><span class="check"></span> Mount the 5-minute frontend SDK</li>
+          </ul>
+        </div>
+
+        <!-- Connection -->
+        <div class="synergy-connection">
+          <div class="conn-line forward">
+            <span class="conn-line__text">Host Secret Handshake</span>
+            <span class="pulse-dot"></span>
+          </div>
+          <div class="conn-label">Secure two-way binding</div>
+          <div class="conn-line backward">
+            <span class="conn-line__text">Tool Auth Token</span>
+            <span class="pulse-dot"></span>
+          </div>
+          <div class="conn-security-note">Identity check · Authorized calls · Audit trail</div>
+        </div>
+
+        <!-- AetherCore Side -->
+        <div class="synergy-box agent-box spotlight-card">
+          <div class="synergy-box-header">
+            <div class="icon-wrap agent">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>
+              </svg>
+            </div>
+            <h3>AetherCore Engine (Agent)</h3>
+          </div>
+          <ul class="synergy-list">
+            <li><span class="check"></span> Intent understanding and workboard planning</li>
+            <li><span class="check"></span> Secure code sandbox and command execution</li>
+            <li><span class="check"></span> Multi-turn context and memory management</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Capabilities Section -->
+    <section class="capabilities-section reveal-on-scroll">
+      <div class="section-header text-center">
+        <div class="feature-eyebrow">Out of the Box</div>
+        <h2>All the hard agent plumbing, already built</h2>
+        <p>No more hand-rolled prompt loops. AetherCore includes frontier agent interaction patterns so your AI product feels polished from day one.</p>
+      </div>
+
+      <div class="bento-grid capabilities-grid">
+        <!-- Timeline -->
+        <article class="bento-card spotlight-card">
+          <div class="bento-card-content">
+            <div class="bento-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M2 12h11c2 0 3-1.5 4-3l4-4M17 5h4v4M15 15c1 1 2.5 2.5 4 4l2 2M17 21h4v-4"></path>
+              </svg>
+            </div>
+            <h3>Conversation timeline</h3>
+            <p>Edit, rerun, or fork any historical user message. Manage conversation branches with the same confidence you expect from Git.</p>
+          </div>
+        </article>
+
+        <!-- Sandbox -->
+        <article class="bento-card spotlight-card">
+          <div class="bento-card-content">
+            <div class="bento-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                <polyline points="7 9 10 12 7 15"></polyline>
+                <line x1="12" y1="15" x2="17" y2="15"></line>
+              </svg>
+            </div>
+            <h3>Sandbox and command execution</h3>
+            <p>Every session gets an isolated Docker runtime. Agents can write and run Python/Bash scripts for data processing, automation, and operations.</p>
+          </div>
+        </article>
+
+        <!-- Workboard -->
+        <article class="bento-card spotlight-card">
+          <div class="bento-card-content">
+            <div class="bento-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 11l3 3L22 4"></path>
+                <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"></path>
+              </svg>
+            </div>
+            <h3>Intelligent workboard</h3>
+            <p>For complex tasks, the agent decomposes work into a to-do list. When human judgment is needed, elicitation pauses execution and asks clearly.</p>
+          </div>
+        </article>
+
+        <!-- Context -->
+        <article class="bento-card spotlight-card">
+          <div class="bento-card-content">
+            <div class="bento-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+            </div>
+            <h3>Context and dynamic compaction</h3>
+            <p>A precise token calculator keeps long conversations healthy through automatic compaction or truncation policies.</p>
+          </div>
+        </article>
+
+        <!-- Files & Skills -->
+        <article class="bento-card spotlight-card wide-col-2">
+          <div class="bento-card-content row-layout">
+            <div class="card-text">
+              <div class="bento-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                  <polyline points="13 2 13 9 20 9"></polyline>
+                </svg>
+              </div>
+              <h3>Files and business skills</h3>
+              <p>Platforms can preload SKILL.md packages. Users and agents share a workspace, upload files, and download generated artifacts directly.</p>
+            </div>
+            <div class="card-visual mini-files">
+              <div class="file-chip">data_clean.py</div>
+              <div class="file-chip">CRM_API_SKILL.md</div>
+              <div class="file-chip highlight">report.csv (Output)</div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- Scenarios Section -->
+    <section class="scenarios-section reveal-on-scroll">
+      <div class="section-header text-center">
+        <div class="feature-eyebrow">Scenarios</div>
+        <h2>Give business systems autopilot powers</h2>
+      </div>
+      <div class="scenarios-grid">
+        <div class="scenario-card spotlight-card">
+          <h3>AIOps automation</h3>
+          <p>Connect cloud or internal monitoring systems so agents can fetch logs, diagnose incidents, generate remediation scripts, and reduce MTTR.</p>
+        </div>
+        <div class="scenario-card spotlight-card">
+          <h3>Internal SaaS copilot</h3>
+          <p>Embed into CRM, ERP, and back-office tools. Sales and operations teams can complete multi-step workflows with natural language.</p>
+        </div>
+        <div class="scenario-card spotlight-card">
+          <h3>Data analysis and visualization</h3>
+          <p>Drop in large business spreadsheets. Agents write Pandas scripts, clean data, derive insights, and generate chart files for download.</p>
+        </div>
+        <div class="scenario-card spotlight-card">
+          <h3>Enterprise support agent</h3>
+          <p>Mount knowledge baselines and use elicitation to clarify ambiguous customer intent for accurate, low-hallucination support.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Governance Section -->
+    <section class="governance-section reveal-on-scroll">
+      <div class="governance-box spotlight-card">
+        <div class="gov-text">
+          <div class="feature-eyebrow">Administration</div>
+          <h2>Governance built for compliance</h2>
+          <p>AetherCore provides not just the user-facing workbench, but a powerful control plane for administrators.</p>
+          <ul class="feature-list gov-list">
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              <strong>Full audit replay:</strong> Record every reasoning step and every tool input/output.
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+              <strong>Fine-grained access:</strong> Separate platforms, owners, approvals, and resource baselines.
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                <polyline points="2 17 12 22 22 17"></polyline>
+              </svg>
+              <strong>Unified model policy:</strong> Configure LLM gateways, web allowlists, and system prompts centrally.
+            </li>
+          </ul>
+        </div>
+        <div class="gov-visual">
+          <div class="gov-dash-mock">
+            <div class="mock-header">Admin Console</div>
+            <div class="mock-row"><span>Session: a83j2x</span><span class="badge green">Running</span></div>
+            <div class="mock-row"><span>Policy: Default GPT-4o</span><span class="badge gray">Active</span></div>
+            <div class="mock-row"><span>Audit: Tool invoked [CRM_Query]</span><span class="badge blue">Log</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Developer Section -->
+    <section class="developer-section reveal-on-scroll">
+      <div class="developer-box spotlight-card">
+        <div class="dev-text">
+          <div class="feature-eyebrow">Developer Experience</div>
+          <h2>Minimal SDK, painless integration</h2>
+          <p>No platform rewrite required. Import the AetherCore SDK, pass business context and exposed tools, and let the platform handle the rest.</p>
+        </div>
+        <div class="dev-code">
+          <pre>
+            <code>
+<span class="code-comment">// 1. Import the SDK in your business frontend</span><br/>
+<span class="code-keyword">import</span> { initAetherCore } <span class="code-keyword">from</span> <span class="code-string">'@aethercore/sdk'</span>;<br/>
+<br/>
+<span class="code-func">initAetherCore</span>({<br/>
+  platformKey: <span class="code-string">'my-crm-system'</span>,<br/>
+  bindApi: <span class="code-string">'/api/aethercore/bind'</span>, <span class="code-comment">// backend proxy keeps secrets safe</span><br/>
+  context: { user_id: currentUser.id },<br/>
+  hostTools: [<br/>
+    {<br/>
+      name: <span class="code-string">'query_customer'</span>,<br/>
+      description: <span class="code-string">'Query detailed customer information'</span>,<br/>
+      endpoint: <span class="code-string">'/api/internal/customer'</span><br/>
+    }<br/>
+  ]<br/>
+});
+            </code>
+          </pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta-section reveal-on-scroll">
+      <div class="cta-box spotlight-card">
+        <h2>Unlock AI productivity now</h2>
+        <p>Skip the AI infrastructure slog. Open the repository and feel what a real execution agent can do.</p>
+        <div class="hero-actions" style="margin-top: 32px;">
+          <a href="https://github.com/Cryremis/aether-core" class="btn-primary-epic">
+            View on GitHub
+          </a>
+          <a href="https://github.com/Cryremis/aether-core/blob/master/README.md" class="btn-secondary-epic">
+            Read the Docs
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="landing-footer">
+    <div class="footer-content">
+      <p>Apache 2.0 License · Built with ❤️ by the AetherCore team</p>
+      <div class="footer-links">
+        <a href="https://github.com/Cryremis/aether-core">GitHub</a>
+        <a href="https://github.com/Cryremis/aether-core/issues">Issues</a>
+        <a href="https://github.com/Cryremis/aether-core/blob/master/README.md">Documentation</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="./landing-interactions.js"></script>
+</body>
+</html>

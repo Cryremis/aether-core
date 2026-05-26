@@ -1,56 +1,74 @@
 # AetherCore
 
-[中文](./README.zh-CN.md)
+[🌐 Live Demo](https://cryremis.github.io/aether-core) | [中文说明](./README.zh-CN.md)
 
-> Agent infrastructure for teams that want to embed powerful AI agents into multiple products without rebuilding the runtime layer every time.
+> Agent infrastructure for multi-product integration scenarios, so teams do not have to rebuild an Agent Runtime from scratch for every product.
 
-AetherCore is an Agent-as-a-Service platform that gives your products a shared agent runtime, embedded workbench, sandboxed execution, host integration layer, file and skill system, and long-context orchestration in one deployable stack.
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-0f172a.svg)](./LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-2563eb.svg)](./backend/pyproject.toml)
+[![React 19](https://img.shields.io/badge/react-19-0ea5e9.svg)](./frontend/package.json)
+[![Docker sandbox](https://img.shields.io/badge/runtime-docker_sandbox-16a34a.svg)](./docker/sandbox/Dockerfile)
 
-Instead of rebuilding chat orchestration, tool execution, session storage, sandboxing, and embedded UX for every new product, you can plug them into AetherCore and reuse the same intelligence layer across projects.
+AetherCore is an Agent-as-a-Service platform that packages a shared Agent Runtime, an embedded Workbench, sandboxed execution, a host integration layer, files and skills, and long-context orchestration into one deployable foundation. Through an SDK-style integration path, teams can quickly embed a ready-made workbench into their own products.
 
-## Why AetherCore
+The goal of the project is to let multiple products reuse the same Agent capability layer, instead of rebuilding chat orchestration, tool execution, session storage, sandbox security, and embedded interaction flows over and over again.
 
-Most teams do not just need "a chatbot." They need a reusable agent platform that can:
+Whether you only want a chat surface or need a full AI Agent workbench, AetherCore can cover both.
 
-- run safely in a sandbox,
-- support long, tool-heavy sessions,
-- plug into existing products,
-- manage files, skills, and outputs,
-- expose both standalone and embedded workbench experiences.
+![preview](./site/assets/social-preview.gif)
 
-AetherCore is built for that layer.
+## What AetherCore Provides
 
-## Highlights
+- Admin login and standalone workbench access
+- Embedded workbench flows based on platform registration, bootstrap, and bind
+- Dynamically injected tools, files, skills, and other host-side capabilities for the Agent to use
+- User-level and platform-level LLM override configuration
+- Platform baselines for files, skills, and workspace content
+- Platform runtime image management and audit views
 
-- `Embed once, reuse everywhere`
-  Connect multiple products to the same agent runtime through platform registration and host bind flows.
+## Agent Capabilities
 
-- `Standalone + embedded workbench`
-  Use AetherCore directly as an internal workbench, or open it inside another product with an embed token.
+- Streaming long-context conversations
+- Asking follow-up questions proactively and presenting options to users
+- File upload and download
+- Planning lists
+- Skill upload and usage
+- Sandboxed command execution
+- Web search and retrieval
+- Automatic long-context compaction
+- Session branching, message editing, and rerunning conversations
 
-- `Sandbox-first execution`
-  Run commands in a Docker-first, fail-closed sandbox instead of relying on the host machine.
+## Product Preview
 
-- `Files, skills, and artifacts`
-  Upload working files, install reusable skills, and generate downloadable outputs inside a session.
+### Full Workbench
 
-- `Streaming runtime`
-  Stream reasoning, content, and tool events through the same agent loop.
+![Workbench](./site/assets/workbench-preview.png)
 
-- `Long-context protection`
-  Track token usage, compact history, and recover from context-overflow situations before sessions become unusable.
+### Embedded Workbench Inside a Host Product
 
-- `Platform baselines`
-  Preload per-platform files, skills, and workspace material into new sessions.
+![Embedded workbench](./site/assets/embed-preview.png)
 
-- `Host capability injection`
-  Let embedded agents call host-side APIs through bind-time tools, so your product can expose project search, business data lookup, workflow actions, and other controlled capabilities without moving product code into AetherCore.
+### Long-running Task Execution
 
-## What It Looks Like
+![AetherCore demo](./site/assets/demo-preview.gif)
+
+### Platform Governance and Runtime Control
+
+![Admin console](./site/assets/admin-preview.png)
+
+## Good Fit For
+
+- Teams that want to embed an Agent panel into an existing SaaS product or internal system
+- Teams that need the Agent to actually use tools, files, and command execution instead of only chatting
+- Teams that want multiple products to share one Runtime
+- Teams that need centralized model policy, platform baselines, and audit
+- Teams that care about sandbox isolation and execution boundaries early
+
+## Where It Sits In The System
 
 ```mermaid
 flowchart LR
-    A["Host Product"] --> B["AetherCore Host Bind"]
+    A["Host Product"] --> B["AetherCore Bind Flow"]
     B --> C["Session + Platform Context"]
     C --> D["Agent Runtime"]
     D --> E["LLM"]
@@ -61,13 +79,13 @@ flowchart LR
     A --> I
 ```
 
-## Core Use Cases
+## Typical Use Cases
 
-- Add an agent workbench to an existing SaaS or internal platform.
-- Centralize agent runtime infrastructure across multiple products.
-- Run tool-using agents with sandboxed command execution.
-- Support workflows that mix chat, files, reusable skills, and generated outputs.
-- Give each host platform its own baseline workspace and configuration.
+- Embed an Agent workbench into an existing SaaS or internal system.
+- Standardize Agent infrastructure for multiple products on one Runtime.
+- Run tool-using Agents while isolating command execution in a sandbox.
+- Support compound workflows that combine chat, files, skills, and generated artifacts.
+- Inject different default workspace content and configuration for different platforms.
 
 ## Quick Start
 
@@ -79,14 +97,14 @@ flowchart LR
 
 ### 1. Configure the backend
 
-Create `backend/.env` from [backend/.env.example](/C:/Work/AetherCore/backend/.env.example), then set at least:
+Create `backend/.env` from `backend/.env.example`, and set at least:
 
 - `LLM_BASE_URL`
 - `LLM_MODEL`
 - `LLM_API_KEY`
 - `AUTH_SECRET_KEY`
 
-For production-style configuration, start from [backend/.env.production.example](/C:/Work/AetherCore/backend/.env.production.example).
+If you want to prepare configuration in a more production-oriented way, start from `backend/.env.production.example`.
 
 ### 2. Install dependencies
 
@@ -106,7 +124,7 @@ npm install
 docker build -t aethercore-sandbox:latest -f docker/sandbox/Dockerfile .
 ```
 
-### 4. Start the dev stack
+### 4. Start the development environment
 
 ```bash
 python run_dev.py start
@@ -115,9 +133,17 @@ python run_dev.py start
 Useful commands:
 
 ```bash
-python run_dev.py restart
 python run_dev.py status
+python run_dev.py restart
 python run_dev.py build frontend
+```
+
+### 5. Start the production environment
+
+```bash
+python run.py status
+python run.py start
+python run.py health
 ```
 
 Default local ports:
@@ -125,85 +151,43 @@ Default local ports:
 - backend: `127.0.0.1:8100`
 - frontend: `127.0.0.1:5178`
 
-## Embed Into Your Product
+## How To Embed It Into Your Product
 
-AetherCore can be embedded into an existing product as a workbench, while still running on a shared backend runtime. A host product can bind its current user and page context into an AetherCore session, then optionally expose host-side capabilities as tools so the agent can call product APIs during a conversation.
+AetherCore can be embedded into an existing product as a workbench while still reusing the same backend Agent Runtime. A host product can bind the current user and page context into an AetherCore session, and can also expose host APIs as tools for the Agent to call when it needs product data or host-side actions.
 
-Typical integration flow:
+Recommended integration flow:
 
 1. Register a platform in AetherCore.
-2. Keep the `host_secret` on your backend only.
-3. Expose a host-side bind endpoint such as `/api/v1/aethercore/embed/bind`.
+2. Keep `host_secret` only on your backend.
+3. Provide a host-side bind endpoint, such as `/api/v1/aethercore/embed/bind`.
 4. Return `token` and `session_id` to the browser.
-5. Mount the embedded workbench with the universal adapter.
-6. Optionally add host tools when the agent should query product data or trigger product-side actions.
+5. Mount the embedded workbench through the universal adapter.
+6. If the Agent needs to call your product APIs, add host tools as needed.
 
-The admin console includes a generated integration guide for each registered platform. That guide is the canonical place for copyable snippets: it knows the platform key, host secret, same-origin or cross-origin deployment choice, authentication mode, and backend framework template.
+The admin console generates a dedicated integration guide for every registered platform. That is the main place to copy integration code, because it knows the current platform key, host secret, same-origin or cross-origin deployment mode, authentication mode, and backend framework template.
 
-For a plain embed, keep host capabilities empty and just open the workbench. When the host wants the agent to use product data, add host tools during bind so AetherCore can call controlled product APIs on behalf of the current user.
+If you only need an embedded workbench, keep host capabilities empty. If you want the Agent to use product data, add host tools during bind so AetherCore can call controlled product APIs on behalf of the current user.
 
-Related files:
+Relevant entry points:
 
-- [host-adapters/universal/aethercore-embed.js](/C:/Work/AetherCore/host-adapters/universal/aethercore-embed.js)
+- [host-adapters/universal/aethercore-embed.js](./host-adapters/universal/aethercore-embed.js)
+- [host-adapters/universal/README.md](./host-adapters/universal/README.md)
+- [docs/host-integration.md](./docs/host-integration.md)
+- [docs/host-integration-standard.md](./docs/host-integration-standard.md)
 
-## Repository Structure
+## Repository Layout
 
 ```text
 AetherCore/
   backend/          FastAPI runtime and APIs
   frontend/         React workbench
-  host-adapters/    Embed shells and host integration assets
-  docs/             Architecture and integration documents
+  host-adapters/    Host integration adapters and assets
+  docs/             Architecture and integration docs
   docker/           Sandbox image definitions
   ops/              Runtime and deployment notes
+  site/             Static GitHub Pages project site
 ```
 
-## Current Capabilities
+## License
 
-Today, the repository already includes:
-
-- admin login and standalone workbench access,
-- embedded workbench access with platform bootstrap/bind flows,
-- streaming agent chat via `/api/v1/agent/chat`,
-- session history, rename, clone/bootstrap, and delete flows,
-- file upload and artifact download,
-- skill upload and skill injection,
-- user-level and platform-level LLM overrides,
-- platform baselines,
-- sandbox command execution,
-- host tool injection,
-- token-aware context management and overflow recovery.
-
-## Important APIs
-
-- `/api/v1/auth`
-- `/api/v1/platforms`
-- `/api/v1/host`
-- `/api/v1/agent`
-- `/api/v1/agent/sessions`
-- `/api/v1/agent/files`
-- `/api/v1/agent/skills`
-- `/api/v1/llm`
-- `/api/v1/health`
-
-## Running In Production
-
-Production-oriented runtime helpers are included:
-
-```bash
-python run.py start
-python run.py status
-python run.py health
-```
-
-See also:
-
-- [run.py](/C:/Work/AetherCore/run.py)
-- [run_dev.py](/C:/Work/AetherCore/run_dev.py)
-- [process_control.py](/C:/Work/AetherCore/process_control.py)
-- [ops/production/README.md](/C:/Work/AetherCore/ops/production/README.md)
-
-## Documentation
-
-- [docs/architecture.md](/C:/Work/AetherCore/docs/architecture.md)
-- [docs/context_management_mechanism.md](/C:/Work/AetherCore/docs/context_management_mechanism.md)
+Apache-2.0. See [LICENSE](./LICENSE).

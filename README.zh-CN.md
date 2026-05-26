@@ -1,57 +1,75 @@
 # AetherCore
 
-[English](./README.md)
+[🌐 在线演示](https://cryremis.github.io/aether-core) | [English](./README.md)
 
 > 面向多产品接入场景的 Agent 基础设施平台，不用每个项目都从头重建 Agent Runtime。
 
-AetherCore 是一个 Agent-as-a-Service 平台，把共享 Agent Runtime、嵌入式 Workbench、沙箱执行、宿主接入层、文件与技能系统，以及长上下文编排能力整合成一套可部署的基础设施。
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-0f172a.svg)](./LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-2563eb.svg)](./backend/pyproject.toml)
+[![React 19](https://img.shields.io/badge/react-19-0ea5e9.svg)](./frontend/package.json)
+[![Docker sandbox](https://img.shields.io/badge/runtime-docker_sandbox-16a34a.svg)](./docker/sandbox/Dockerfile)
 
-它要解决的不是“做一个聊天框”，而是“让多个产品复用同一层 Agent 能力”，避免每个项目都重复搭建对话编排、工具执行、会话存储、沙箱安全和嵌入式交互层。
+AetherCore 是一个 Agent-as-a-Service 平台，把共享 Agent Runtime、嵌入式 Workbench、沙箱执行、宿主接入层、文件与技能系统，以及长上下文编排能力整合成一套可部署的基础设施，通过 SDK 的方式让用户可以快速植入一个现成的工作台到自己的产品里。
 
-## 为什么是 AetherCore
+项目目的是“让多个产品复用同一层 Agent 能力”，避免每个项目都重复搭建对话编排、工具执行、会话存储、沙箱安全和嵌入式交互层等。
 
-很多团队真正需要的并不是一个单独的 AI 对话页，而是一层可复用的 Agent 平台，这层平台需要同时具备：
+无论你是只想要一个聊天页，还是需要一个完整的 AI Agent 工作台，它都可以满足你的需求。
 
-- 安全的沙箱执行，
-- 支持长会话和重工具链路，
-- 能嵌入现有业务产品，
-- 能管理文件、技能和输出产物，
-- 同时支持独立工作台和嵌入式工作台。
+![preview](./site/assets/social-preview.gif)
 
-AetherCore 就是为这层基础设施设计的。
+## AetherCore 能提供什么
 
-## 核心亮点
+- 管理员登录与独立工作台访问
+- 基于平台注册、bootstrap、bind 的嵌入式工作台流程
+- 从宿主平台动态获取注入的工具、文件、技能等给 Agent 调用
+- 用户级和平台级 LLM 覆盖配置
+- 按平台注入文件、技能、工作区内容的基线能力
+- 平台运行镜像管理与审计视图
 
-- `一次接入，多处复用`
-  多个产品都可以通过平台注册和 host bind 流程接入同一套 Agent Runtime。
+## Agent 能力清单
 
-- `独立工作台 + 嵌入工作台`
-  既可以把 AetherCore 当成独立内部工作台使用，也可以以内嵌方式挂到其它系统中。
+- 流式的连续长上下文对话
+- 主动向用户提问并提供选项
+- 文件上传、下载
+- 计划列表
+- 技能上传与使用
+- 沙箱命令执行
+- 联网搜索与获取
+- 长上下文自动压缩
+- 会话分支、编辑消息、重跑对话
 
-- `沙箱优先`
-  默认通过 Docker fail-closed 模型执行命令，而不是直接依赖宿主机。
+## 产品预览
 
-- `文件、技能、产物一体化`
-  一个会话里可以上传文件、安装技能，并生成可下载输出。
+### 完整工作台
 
-- `流式 Runtime`
-  reasoning、正文和工具事件都走同一套流式 Agent 执行链路。
+![工作台](./site/assets/workbench-preview.png)
 
-- `长上下文保护`
-  持续跟踪 token 使用量，支持压缩和上下文溢出恢复。
+### 嵌入到宿主产品里的工作台
 
-- `平台基线`
-  不同宿主平台可以为新会话注入默认文件、技能和工作区内容。
+![嵌入式工作台](./site/assets/embed-preview.png)
 
-- `宿主能力注入`
-  嵌入式 Agent 可以通过 bind 时声明的工具调用宿主侧 API，让你的产品把项目搜索、业务数据查询、流程动作等能力安全地开放给 AetherCore，而不需要把业务代码搬进 AetherCore。
+### 长任务执行 
 
-## 它的整体位置
+![AetherCore 演示](./site/assets/demo-preview.gif)
+
+### 平台治理与运行时控制
+
+![管理台](./site/assets/admin-preview.png)
+
+## 适合什么场景
+
+- 想把 Agent 面板嵌进现有 SaaS 或内部系统
+- 需要 Agent 真正使用工具、文件和命令执行，而不只是聊天
+- 希望多个产品共用一套 Runtime
+- 需要统一管理模型策略、平台基线和审计
+- 较早就重视沙箱隔离和运行边界
+
+## 它在系统里的位置
 
 ```mermaid
 flowchart LR
-    A["宿主产品"] --> B["AetherCore Host Bind"]
-    B --> C["会话与平台上下文"]
+    A["宿主产品"] --> B["AetherCore bind 流程"]
+    B --> C["会话 + 平台上下文"]
     C --> D["Agent Runtime"]
     D --> E["LLM"]
     D --> F["Sandbox Tools"]
@@ -79,14 +97,14 @@ flowchart LR
 
 ### 1. 配置后端
 
-基于 [backend/.env.example](/C:/Work/AetherCore/backend/.env.example) 创建 `backend/.env`，至少配置：
+基于 `backend/.env.example` 创建 `backend/.env`，至少填写：
 
 - `LLM_BASE_URL`
 - `LLM_MODEL`
 - `LLM_API_KEY`
 - `AUTH_SECRET_KEY`
 
-如果要按生产环境方式准备配置，建议从 [backend/.env.production.example](/C:/Work/AetherCore/backend/.env.production.example) 开始。
+如果要按生产环境方式准备配置，建议从 `backend/.env.production.example` 开始。
 
 ### 2. 安装依赖
 
@@ -115,9 +133,17 @@ python run_dev.py start
 常用命令：
 
 ```bash
-python run_dev.py restart
 python run_dev.py status
+python run_dev.py restart
 python run_dev.py build frontend
+```
+
+### 5. 启动生产环境
+
+```bash
+python run.py status
+python run.py start
+python run.py health
 ```
 
 默认本地端口：
@@ -125,7 +151,7 @@ python run_dev.py build frontend
 - backend: `127.0.0.1:8100`
 - frontend: `127.0.0.1:5178`
 
-## 嵌入到你的产品
+## 如何嵌入到你的产品
 
 AetherCore 可以作为工作台嵌入到已有产品里，同时继续复用同一套后端 Agent Runtime。宿主产品可以把当前用户、页面上下文绑定到 AetherCore 会话中，也可以按需把宿主 API 暴露成 Agent 可调用的工具，让 Agent 在对话中查询产品数据或触发宿主侧动作。
 
@@ -142,9 +168,12 @@ AetherCore 可以作为工作台嵌入到已有产品里，同时继续复用同
 
 如果只需要嵌入工作台，保持宿主能力为空即可；如果希望 Agent 使用产品数据，再在 bind 时添加宿主工具，让 AetherCore 代表当前用户调用受控的网站 API。
 
-相关文件：
+相关入口：
 
-- [host-adapters/universal/aethercore-embed.js](/C:/Work/AetherCore/host-adapters/universal/aethercore-embed.js)
+- [host-adapters/universal/aethercore-embed.js](./host-adapters/universal/aethercore-embed.js)
+- [host-adapters/universal/README.md](./host-adapters/universal/README.md)
+- [docs/host-integration.md](./docs/host-integration.md)
+- [docs/host-integration-standard.md](./docs/host-integration-standard.md)
 
 ## 仓库结构
 
@@ -152,58 +181,13 @@ AetherCore 可以作为工作台嵌入到已有产品里，同时继续复用同
 AetherCore/
   backend/          FastAPI runtime 与 API
   frontend/         React workbench
-  host-adapters/    嵌入壳与宿主接入资产
+  host-adapters/    宿主接入 adapter 与资产
   docs/             架构与接入文档
   docker/           沙箱镜像定义
   ops/              运行与部署说明
+  site/             GitHub Pages 静态项目页
 ```
 
-## 当前已经具备的能力
+## License
 
-当前仓库已经包含：
-
-- 管理员登录与独立工作台访问，
-- 基于平台注册和 bind/bootstrap 的嵌入工作台访问，
-- 通过 `/api/v1/agent/chat` 提供的流式 Agent 对话，
-- 会话历史、重命名、新会话引导和删除，
-- 文件上传与产物下载，
-- 技能上传与技能注入，
-- 用户级和平台级 LLM 覆盖配置，
-- 平台基线能力，
-- 沙箱命令执行，
-- 宿主工具注入，
-- 基于 token 感知的上下文管理与溢出恢复。
-
-## 主要 API
-
-- `/api/v1/auth`
-- `/api/v1/platforms`
-- `/api/v1/host`
-- `/api/v1/agent`
-- `/api/v1/agent/sessions`
-- `/api/v1/agent/files`
-- `/api/v1/agent/skills`
-- `/api/v1/llm`
-- `/api/v1/health`
-
-## 生产运行
-
-仓库内已经提供偏生产运行风格的脚本：
-
-```bash
-python run.py start
-python run.py status
-python run.py health
-```
-
-另可参考：
-
-- [run.py](/C:/Work/AetherCore/run.py)
-- [run_dev.py](/C:/Work/AetherCore/run_dev.py)
-- [process_control.py](/C:/Work/AetherCore/process_control.py)
-- [ops/production/README.md](/C:/Work/AetherCore/ops/production/README.md)
-
-## 相关文档
-
-- [docs/architecture.md](/C:/Work/AetherCore/docs/architecture.md)
-- [docs/context_management_mechanism.md](/C:/Work/AetherCore/docs/context_management_mechanism.md)
+Apache-2.0，见 [LICENSE](./LICENSE)。
