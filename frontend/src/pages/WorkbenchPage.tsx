@@ -314,6 +314,7 @@ export function WorkbenchPage({
   const historyContentRef = useRef<HTMLDivElement | null>(null);
   const activeSessionId = sessionId || localSessionId || "";
   const displayedWorkboard = workboard?.session_id === activeSessionId ? workboard : null;
+  const pendingElicitationRequest = elicitation?.session_id === activeSessionId ? elicitation.pending : null;
   const workboardVisible = activeSessionId ? (workboardVisibilityBySession[activeSessionId] ?? false) : false;
   const messages: ChatMessage[] = (() => {
     if (!pendingUserEcho) return transcriptMessages;
@@ -849,7 +850,7 @@ window.addEventListener("resize", handleResize);
       .finally(() => setLoading(false));
   }, [sessionId, isNewSession, localSessionId]);
 
-const composerDisabled = !(sessionId || localSessionId || isNewSession);
+const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boolean(pendingElicitationRequest?.blocking);
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
     setTranscriptMessages((current) =>
@@ -1886,6 +1887,10 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
 
   const handleSaveFilePreview = async () => {
     if (!sessionId || !selectedFile) return;
+    if (selectedFile.category === "platform") {
+      setFilePreviewError("共享平台基线文件为只读资源，请到平台基线工作区内修改。");
+      return;
+    }
     try {
       setFilePreviewSaving(true);
       setFilePreviewError("");
@@ -1949,6 +1954,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
               className="file-preview-drawer__editor"
               value={filePreviewContent}
               onChange={(event) => setFilePreviewContent(event.target.value)}
+              readOnly={selectedFile.category === "platform"}
               spellCheck={false}
             />
           ) : (
@@ -1961,7 +1967,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             <button
               type="button"
               className="action-button small"
-              disabled={!isTextFile(selectedFile) || filePreviewSaving || filePreviewLoading}
+              disabled={!isTextFile(selectedFile) || selectedFile.category === "platform" || filePreviewSaving || filePreviewLoading}
               onClick={() => void handleSaveFilePreview()}
             >
               {filePreviewSaving ? "保存中" : "保存"}
@@ -2014,6 +2020,27 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             onForkUserMessage={(messageId) => void handleForkFromMessage(messageId)}
             onRerunFromMessage={(messageId) => void handleRerunFromMessage(messageId)}
             onEditUserMessage={(messageId, content) => void handleEditUserMessage(messageId, content)}
+          />
+        </div>
+
+        <div className="runtime-panels">
+          <WorkboardDock
+            workboard={displayedWorkboard}
+            visible={workboardVisible}
+            busy={busy}
+            onToggle={() => {
+              if (!activeSessionId) return;
+              setWorkboardVisibilityBySession((current) => ({
+                ...current,
+                [activeSessionId]: false,
+              }));
+            }}
+            onApplyOps={handleWorkboardOps}
+          />
+          <ElicitationPanel
+            request={pendingElicitationRequest}
+            busy={busy || elicitationBusy}
+            onSubmit={(responses) => void handleElicitationSubmit(responses)}
           />
         </div>
 

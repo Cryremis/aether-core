@@ -814,6 +814,19 @@ details[open]::details-content {
   display: block;
 }
 
+.runtime-panels {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px 10px;
+}
+
+.runtime-panels > * {
+  max-width: 780px;
+  width: 100%;
+}
+
 .workboard-dock,
 .elicitation-panel {
   border-radius: 16px;
@@ -2019,6 +2032,10 @@ details[open]::details-content {
 }
 
 @media (max-width: 1024px) {
+  .runtime-panels {
+    padding: 0 14px 10px;
+  }
+
   .elicitation-panel__header,
   .elicitation-panel__footer,
   .workboard-item {
