@@ -101,8 +101,17 @@
     if (document.getElementById("aethercore-embed-styles")) return;
     const css = `
       .ac-embed-root{position:fixed;z-index:99999;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-      .ac-embed-bubble{position:fixed;right:${config.right}px;bottom:${config.bottom}px;width:56px;height:56px;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;background:${config.theme.bubbleGradient};box-shadow:${config.theme.bubbleShadow};transition:transform .24s ease,box-shadow .24s ease}
-      .ac-embed-bubble:hover{transform:translateY(-2px) scale(1.04);box-shadow:${config.theme.bubbleHoverShadow}}
+      .ac-embed-bubble{position:fixed;right:${config.right}px;bottom:${config.bottom}px;width:62px;height:62px;padding:0;border:1px solid rgba(255,255,255,.42);border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:rgba(15,23,42,.82);background:linear-gradient(180deg,rgba(255,255,255,.28),rgba(255,255,255,.14));box-shadow:0 22px 48px rgba(15,23,42,.14),0 10px 22px rgba(15,23,42,.08),inset 0 1px 0 rgba(255,255,255,.46),inset 0 -10px 20px rgba(148,163,184,.08);backdrop-filter:blur(18px) saturate(180%);-webkit-backdrop-filter:blur(18px) saturate(180%);transition:transform .24s ease,box-shadow .24s ease,border-color .24s ease,background .24s ease,color .24s ease;isolation:isolate;overflow:visible}
+      .ac-embed-bubble:before{content:"";position:absolute;inset:3px;border-radius:inherit;background:radial-gradient(circle at 30% 22%,rgba(255,255,255,.52),transparent 34%),radial-gradient(circle at 72% 78%,rgba(255,255,255,.16),transparent 28%),linear-gradient(160deg,rgba(255,255,255,.2),rgba(255,255,255,.04) 44%,rgba(148,163,184,.08) 100%);z-index:0;pointer-events:none}
+      .ac-embed-bubble:after{content:"";position:absolute;top:-4px;right:-4px;width:15px;height:15px;border-radius:50%;background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(226,232,240,.84));border:1px solid rgba(255,255,255,.86);box-shadow:0 6px 16px rgba(15,23,42,.12);z-index:3;pointer-events:none}
+      .ac-embed-bubble:hover{transform:translateY(-3px) scale(1.045);border-color:rgba(255,255,255,.56);background:linear-gradient(180deg,rgba(255,255,255,.34),rgba(255,255,255,.18));box-shadow:0 28px 56px rgba(15,23,42,.16),0 12px 24px rgba(15,23,42,.08),inset 0 1px 0 rgba(255,255,255,.56),inset 0 -10px 20px rgba(148,163,184,.08)}
+      .ac-embed-bubble:active{transform:translateY(-1px) scale(1.01)}
+      .ac-embed-bubble:focus-visible{outline:none;border-color:rgba(255,255,255,.62);box-shadow:0 0 0 4px rgba(255,255,255,.18),0 0 0 8px rgba(148,163,184,.12),0 24px 52px rgba(15,23,42,.16),inset 0 1px 0 rgba(255,255,255,.56),inset 0 -10px 20px rgba(148,163,184,.08)}
+      .ac-embed-bubble.is-open{transform:translateY(-2px);border-color:rgba(255,255,255,.58);background:linear-gradient(180deg,rgba(255,255,255,.36),rgba(255,255,255,.2));box-shadow:0 28px 60px rgba(15,23,42,.16),0 14px 30px rgba(15,23,42,.08),inset 0 1px 0 rgba(255,255,255,.58),inset 0 -10px 22px rgba(14,165,233,.09)}
+      .ac-embed-bubble.is-open:after{background:linear-gradient(180deg,#f0fdf4 0%,#bbf7d0 100%);border-color:rgba(255,255,255,.92);box-shadow:0 6px 16px rgba(34,197,94,.16)}
+      .ac-embed-bubble__icon-wrap{position:relative;z-index:1;display:flex;align-items:center;justify-content:center;width:42px;height:42px;border-radius:50%;background:linear-gradient(180deg,rgba(255,255,255,.3),rgba(255,255,255,.12));box-shadow:inset 0 1px 0 rgba(255,255,255,.34),inset 0 -8px 16px rgba(148,163,184,.08),0 6px 14px rgba(15,23,42,.08);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+      .ac-embed-bubble__icon{position:relative;z-index:2;display:block;filter:drop-shadow(0 2px 5px rgba(255,255,255,.3))}
+      .ac-embed-bubble__icon path{stroke-width:2.1}
       .ac-embed-bubble.is-hidden{display:none}
       .ac-embed-modal{position:fixed;inset:0;display:none;background:${config.theme.overlayBackground};z-index:99998;backdrop-filter:blur(2px)}
       .ac-embed-modal.is-open{display:block}
@@ -127,7 +136,9 @@
       .ac-embed-frame{width:100%;height:100%;border:0;display:block;background:#f3f4f8;opacity:0;transition:opacity .18s ease}
       .ac-embed-frame.is-loaded{opacity:1}
       .ac-embed-shield{position:absolute;inset:0;z-index:3;background:transparent;cursor:ew-resize}
-      @media (max-width:640px){.ac-embed-drawer{left:12px;right:12px;width:auto!important;border-radius:20px 20px 0 0}.ac-embed-resize{display:none}.ac-embed-bubble{right:20px;bottom:28px}}
+      @media (prefers-reduced-motion:no-preference){.ac-embed-bubble{animation:acEmbedBubbleFloat 3.8s ease-in-out infinite}.ac-embed-bubble:hover,.ac-embed-bubble:active,.ac-embed-bubble.is-open{animation-play-state:paused}}
+      @keyframes acEmbedBubbleFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+      @media (max-width:640px){.ac-embed-drawer{left:12px;right:12px;width:auto!important;border-radius:20px 20px 0 0}.ac-embed-resize{display:none}.ac-embed-bubble{right:20px;bottom:28px;width:58px;height:58px}.ac-embed-bubble__icon-wrap{width:39px;height:39px}}
     `;
     const style = document.createElement("style");
     style.id = "aethercore-embed-styles";
@@ -227,9 +238,11 @@
       root.className = "ac-embed-root";
       root.innerHTML = `
         <button type="button" class="ac-embed-bubble" aria-label="${this.config.labels.openAriaLabel}">
-          <svg width="26" height="26" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-          </svg>
+          <span class="ac-embed-bubble__icon-wrap" aria-hidden="true">
+            <svg class="ac-embed-bubble__icon" width="25" height="25" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </span>
         </button>
         <div class="${modalClass}"></div>
         <section class="ac-embed-drawer" aria-label="AetherCore Workbench">
@@ -284,6 +297,7 @@
       this.state.open = true;
       root.querySelector(".ac-embed-drawer").classList.add("is-open");
       root.querySelector(".ac-embed-modal").classList.add("is-open");
+      root.querySelector(".ac-embed-bubble").classList.add("is-open");
       if (this.config.hideBubbleWhenOpen) {
         root.querySelector(".ac-embed-bubble").classList.add("is-hidden");
       }
@@ -297,6 +311,7 @@
       root.querySelector(".ac-embed-drawer").classList.remove("is-open");
       root.querySelector(".ac-embed-modal").classList.remove("is-open");
       root.querySelector(".ac-embed-bubble").classList.remove("is-hidden");
+      root.querySelector(".ac-embed-bubble").classList.remove("is-open");
       this.emitHook("onClose");
     }
 
