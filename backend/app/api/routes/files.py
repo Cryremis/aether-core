@@ -98,6 +98,8 @@ async def update_file_content(
     file_path = file_service.resolve_file_path(session, file_id)
     if not file_path or not file_path.exists():
         raise HTTPException(status_code=404, detail="文件不存在")
+    if not file_service.is_workspace_owned_path(session, file_path):
+        raise HTTPException(status_code=403, detail="共享平台基线文件为只读资源，不能在会话内直接修改")
     if file_path.is_dir():
         raise HTTPException(status_code=400, detail="目标是目录，无法编辑")
     content = payload.get("content")

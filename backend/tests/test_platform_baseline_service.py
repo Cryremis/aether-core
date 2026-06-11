@@ -43,10 +43,16 @@ def test_platform_baseline_materializes_into_new_admin_session(tmp_path):
 
     session = conversation_service.bootstrap_admin_workbench(admin)
     files = file_service.list_platform_files(session)
+    sidebar_files = file_service.list_sidebar_files(session)
     skills = skill_service.list_for_session(session)
 
     assert any(item.name == "guide.txt" for item in files)
+    assert any(item.name == "guide.txt" for item in sidebar_files)
     assert any(item.name == "analysis-helper" and item.source == "platform" for item in skills)
+    assert session.workspace is not None
+    assert not (session.workspace.work_dir / "guide.txt").exists()
+    assert not (session.workspace.skills_dir / "analysis-helper" / "SKILL.md").exists()
+    assert file_service.read_text(session, relative_path="work/guide.txt") == "baseline guide"
 
 
 def test_platform_baseline_materializes_into_new_host_session(tmp_path):
@@ -78,7 +84,30 @@ def test_platform_baseline_materializes_into_new_host_session(tmp_path):
 
     assert session.workspace is not None
     assert any(item["name"] == "main.py" for item in session.platform_files)
+    assert any(item.name == "main.py" for item in file_service.list_sidebar_files(session))
+    assert not (session.workspace.work_dir / "repo" / "main.py").exists()
     assert file_service.read_text(session, relative_path="work/repo/main.py").strip() == "print('hello')"
+
+
+def test_platform_baseline_shared_files_are_visible_in_list_tool(tmp_path):
+    initialize_store(tmp_path)
+
+    standalone_root = platform_baseline_service.ensure_platform_root("standalone")
+    (standalone_root / "work" / "repo").mkdir(parents=True, exist_ok=True)
+    (standalone_root / "work" / "repo" / "main.py").write_text("print('shared')\n", encoding="utf-8")
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+
+    session = conversation_service.bootstrap_admin_workbench(admin)
+
+    work_entries = file_service.list(session, path="/workspace/work")
+    repo_entries = file_service.list(session, path="/workspace/work/repo")
+    read_result = file_service.read(session, file_path="/workspace/work/repo/main.py")
+
+    assert any(item.name == "repo" and item.entry_type == "dir" for item in work_entries)
+    assert any(item.name == "main.py" and item.source == "platform" for item in repo_entries)
+    assert "print('shared')" in read_result.content
 
 
 def test_platform_skill_refreshes_for_existing_session(tmp_path):

@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.main import app
 from app.services.auth_service import auth_service
 from app.services.conversation_service import conversation_service
+from app.services.file_service import file_service
 from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
@@ -722,6 +723,65 @@ def test_embed_bootstrap_new_session_inherits_platform_baseline_skills(tmp_path)
     assert summary_response.status_code == 200
     skills = summary_response.json()["data"]["skills"]
     assert any(item["name"] == "new-folder" for item in skills)
+
+
+def test_embed_session_cannot_modify_shared_platform_baseline_file(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="adcp",
+        display_name="ADCP",
+        host_type="embedded",
+        description="shared baseline readonly test platform",
+        owner_user_id=admin.user_id,
+    )
+    platform_root = platform_baseline_service.ensure_platform_root(platform["platform_key"])
+    (platform_root / "work").mkdir(parents=True, exist_ok=True)
+    (platform_root / "work" / "guide.txt").write_text("baseline guide\n", encoding="utf-8")
+
+    client = TestClient(app)
+    bind_response = client.post(
+        "/api/v1/host/bind",
+        headers={"X-Aether-Platform-Secret": platform["host_secret"]},
+        json={
+            "platform_key": platform["platform_key"],
+            "host_name": "POC",
+            "conversation_key": "thread-a",
+            "context": {
+                "user": {"id": "user-1", "name": "User 1"},
+                "extras": {"host_callback_base_url": "http://localhost:8000"},
+            },
+            "tools": [],
+            "skills": [],
+            "apis": [],
+        },
+    )
+    assert bind_response.status_code == 200
+    bind_data = bind_response.json()["data"]
+    embed_token = bind_data["token"]
+    session_id = bind_data["session_id"]
+
+    summary_response = client.get(
+        f"/api/v1/agent/sessions/{session_id}",
+        headers={"Authorization": f"Bearer {embed_token}"},
+    )
+    assert summary_response.status_code == 200
+    files = summary_response.json()["data"]["files"]
+    guide = next(item for item in files if item["name"] == "guide.txt")
+
+    session = session_service.get_or_create(session_id)
+    assert file_service.read_text(session, relative_path="work/guide.txt").strip() == "baseline guide"
+
+    update_response = client.put(
+        f"/api/v1/agent/files/{guide['file_id']}/content?session_id={session_id}",
+        headers={"Authorization": f"Bearer {embed_token}"},
+        json={"content": "mutated\n"},
+    )
+    assert update_response.status_code == 403
+    assert "只读资源" in update_response.json()["detail"]
+    assert (platform_root / "work" / "guide.txt").read_text(encoding="utf-8") == "baseline guide\n"
 
 
 def test_host_tool_requires_auth_when_injection_is_enabled():

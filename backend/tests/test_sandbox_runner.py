@@ -30,6 +30,22 @@ def build_workspace(root: Path) -> SandboxWorkspace:
     )
 
 
+def build_workspace_with_baseline(root: Path, baseline_root: Path) -> SandboxWorkspace:
+    workspace = build_workspace(root)
+    return SandboxWorkspace(
+        session_id=workspace.session_id,
+        root=workspace.root,
+        baseline_root=baseline_root,
+        skills_dir=workspace.skills_dir,
+        work_dir=workspace.work_dir,
+        logs_dir=workspace.logs_dir,
+        home_dir=workspace.home_dir,
+        cache_dir=workspace.cache_dir,
+        overlay_work_dir=workspace.overlay_work_dir,
+        metadata_dir=workspace.metadata_dir,
+    )
+
+
 def initialize_store(tmp_path: Path) -> None:
     settings.storage_root = tmp_path / "storage"
     store_service._db_path = settings.storage_root / "aethercore-test.db"
@@ -68,6 +84,31 @@ def test_session_runtime_exec_uses_work_dir_and_sandbox_user(tmp_path):
     assert "PYTHONUSERBASE=/workspace/home/.local" in args
     assert "test-container" in args
     assert args[-3:] == ["/bin/bash", "-lc", "pwd"]
+
+
+def test_session_runtime_builds_overlay_args_for_baseline_workspace(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "sandbox_allow_network", True)
+    monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
+    monkeypatch.setattr(settings, "sandbox_docker_dns_servers", [])
+    monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
+    monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
+
+    baseline_root = tmp_path / "baseline"
+    for name in ["skills", "work", "logs"]:
+        (baseline_root / name).mkdir(parents=True, exist_ok=True)
+    workspace = build_workspace_with_baseline(tmp_path / "sandbox", baseline_root)
+
+    args = session_runtime_service._build_run_args(workspace, "test-container", settings.sandbox_docker_image)
+    joined = " ".join(args)
+
+    assert "--cap-add SYS_ADMIN" in joined
+    assert f"dst={session_runtime_service._BASELINE_SESSION_ROOT_MOUNT}" in joined
+    assert f"dst={session_runtime_service._BASELINE_ROOT_MOUNT},readonly" in joined
+    assert f"--tmpfs {settings.sandbox_docker_workspace_mount}:size=64m" in joined
+    assert "mount -t overlay overlay" in joined
+    assert "for name in home cache metadata; do" in joined
+    assert "mount --bind /aether/session-root/${name} /workspace/${name}" in joined
+    assert "workdir=/aether/session-root/.overlay-work/${name}" in joined
 
 
 def test_runtime_spec_drift_requests_recreate(monkeypatch):
@@ -125,6 +166,30 @@ def test_runtime_spec_drift_detects_platform_image_change(tmp_path, monkeypatch)
         },
     }
     assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) == "runtime_config_changed"
+
+
+def test_runtime_spec_drift_detects_baseline_visibility_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "sandbox_allow_network", True)
+    monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
+    monkeypatch.setattr(settings, "sandbox_docker_dns_servers", [])
+    monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
+    monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
+
+    workspace = build_workspace(tmp_path / "sandbox")
+    baseline_root = tmp_path / "baseline"
+    for name in ["skills", "work", "logs"]:
+        (baseline_root / name).mkdir(parents=True, exist_ok=True)
+    baseline_workspace = build_workspace_with_baseline(tmp_path / "sandbox-baseline", baseline_root)
+
+    now = datetime.now(timezone.utc)
+    runtime = {
+        "status": "running",
+        "metadata": {
+            "runtime_spec": session_runtime_service._build_runtime_spec(settings.sandbox_docker_image, workspace),
+        },
+    }
+
+    assert session_runtime_service._detect_runtime_recreate_reason(runtime, now, baseline_workspace) == "runtime_config_changed"
 
 
 def test_runner_fails_closed_when_executor_unavailable(tmp_path, monkeypatch):

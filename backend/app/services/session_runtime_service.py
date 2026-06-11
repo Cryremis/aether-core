@@ -39,6 +39,8 @@ class SessionRuntimeService:
 
     _DEFAULT_SANDBOX_UID = 10001
     _DEFAULT_SANDBOX_GID = 10001
+    _BASELINE_SESSION_ROOT_MOUNT = "/aether/session-root"
+    _BASELINE_ROOT_MOUNT = "/aether/baseline"
 
     def __init__(self) -> None:
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -245,7 +247,7 @@ class SessionRuntimeService:
     async def _ensure_runtime_locked(self, workspace: SandboxWorkspace) -> dict[str, Any]:
         current = await self.refresh_runtime(workspace.session_id)
         now = self._now()
-        recreate_reason = self._detect_runtime_recreate_reason(current, now)
+        recreate_reason = self._detect_runtime_recreate_reason(current, now, workspace)
         if current.get("status") == "running" and recreate_reason is None:
             return {
                 "runtime": current,
@@ -319,7 +321,7 @@ class SessionRuntimeService:
             restart_count=0,
             workspace_root=str(workspace.root),
             home_root=str(workspace.home_dir),
-            metadata=self._build_runtime_metadata(runtime_image),
+            metadata=self._build_runtime_metadata(runtime_image, workspace),
         )
         process = await asyncio.create_subprocess_exec(
             docker_binary,
@@ -354,7 +356,7 @@ class SessionRuntimeService:
                 restart_count=0,
                 workspace_root=str(workspace.root),
                 home_root=str(workspace.home_dir),
-                metadata=self._build_runtime_metadata(runtime_image),
+                metadata=self._build_runtime_metadata(runtime_image, workspace),
             )
             raise RuntimeError(stderr_text or "创建会话 runtime 失败。")
         container_id = self._decode_output(stdout_bytes).strip() or None
@@ -381,7 +383,7 @@ class SessionRuntimeService:
             restart_count=0,
             workspace_root=str(workspace.root),
             home_root=str(workspace.home_dir),
-            metadata=self._build_runtime_metadata(runtime_image),
+            metadata=self._build_runtime_metadata(runtime_image, workspace),
         )
 
     async def _collect_locked(self, session_id: str, *, reason: str) -> dict[str, Any] | None:
@@ -463,10 +465,11 @@ class SessionRuntimeService:
             restart_count=int(runtime.get("restart_count") or 0),
             workspace_root=str(workspace.root),
             home_root=str(workspace.home_dir),
-            metadata=runtime.get("metadata") or self._build_runtime_metadata(str(runtime.get("image") or "")),
+            metadata=runtime.get("metadata") or self._build_runtime_metadata(str(runtime.get("image") or ""), workspace),
         )
 
     def _build_run_args(self, workspace: SandboxWorkspace, container_name: str, image: str) -> list[str]:
+        uses_baseline_overlay = workspace.baseline_root is not None
         args = [
             "run",
             "-d",
@@ -484,12 +487,6 @@ class SessionRuntimeService:
             "no-new-privileges:true",
             "--cap-drop",
             "ALL",
-            "--mount",
-            (
-                "type=bind,"
-                f"src={workspace.root.resolve()},"
-                f"dst={settings.sandbox_docker_workspace_mount}"
-            ),
             "--env",
             f"AETHER_SESSION_ID={workspace.session_id}",
             "--env",
@@ -527,6 +524,38 @@ class SessionRuntimeService:
             "--env",
             f"DOTNET_CLI_HOME={settings.sandbox_docker_home_dir}",
         ]
+        if uses_baseline_overlay:
+            args.extend(
+                [
+                    "--cap-add",
+                    "SYS_ADMIN",
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace.root.resolve()},"
+                        f"dst={self._BASELINE_SESSION_ROOT_MOUNT}"
+                    ),
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace.baseline_root.resolve()},"
+                        f"dst={self._BASELINE_ROOT_MOUNT},readonly"
+                    ),
+                    "--tmpfs",
+                    f"{settings.sandbox_docker_workspace_mount}:size=64m",
+                ]
+            )
+        else:
+            args.extend(
+                [
+                    "--mount",
+                    (
+                        "type=bind,"
+                        f"src={workspace.root.resolve()},"
+                        f"dst={settings.sandbox_docker_workspace_mount}"
+                    ),
+                ]
+            )
         for env_name, env_value in self._build_passthrough_env_vars().items():
             args.extend(["--env", f"{env_name}={env_value}"])
         if settings.sandbox_docker_read_only_rootfs:
@@ -544,20 +573,7 @@ class SessionRuntimeService:
             [
                 "/bin/bash",
                 "-lc",
-                (
-                    "mkdir -p "
-                    f"{shlex.quote(settings.sandbox_docker_skills_dir)} "
-                    f"{shlex.quote(settings.sandbox_docker_work_dir)} "
-                    f"{shlex.quote(settings.sandbox_docker_logs_dir)} "
-                    f"{shlex.quote(settings.sandbox_docker_home_dir)} "
-                    f"{shlex.quote(settings.sandbox_docker_cache_dir)}"
-                    "; chown -R "
-                    f"{self._sandbox_uid()}:{self._sandbox_gid()} "
-                    f"{shlex.quote(settings.sandbox_docker_workspace_mount)}"
-                    "; chmod -R u+rwX,g+rwX,o+rwX "
-                    f"{shlex.quote(settings.sandbox_docker_workspace_mount)}"
-                    "; while true; do sleep 3600; done"
-                ),
+                self._build_runtime_bootstrap_script(workspace),
             ]
         )
         return args
@@ -662,12 +678,52 @@ class SessionRuntimeService:
         configured = settings.sandbox_docker_network_mode.strip()
         return configured or "bridge"
 
-    def _build_runtime_metadata(self, image: str) -> dict[str, Any]:
+    def _build_runtime_bootstrap_script(self, workspace: SandboxWorkspace) -> str:
+        if workspace.baseline_root is None:
+            return (
+                "mkdir -p "
+                f"{shlex.quote(settings.sandbox_docker_skills_dir)} "
+                f"{shlex.quote(settings.sandbox_docker_work_dir)} "
+                f"{shlex.quote(settings.sandbox_docker_logs_dir)} "
+                f"{shlex.quote(settings.sandbox_docker_home_dir)} "
+                f"{shlex.quote(settings.sandbox_docker_cache_dir)}"
+                "; chown -R "
+                f"{self._sandbox_uid()}:{self._sandbox_gid()} "
+                f"{shlex.quote(settings.sandbox_docker_workspace_mount)}"
+                "; chmod -R u+rwX,g+rwX,o+rwX "
+                f"{shlex.quote(settings.sandbox_docker_workspace_mount)}"
+                "; while true; do sleep 3600; done"
+            )
+
+        quoted_workspace = shlex.quote(settings.sandbox_docker_workspace_mount)
+        session_root = shlex.quote(self._BASELINE_SESSION_ROOT_MOUNT)
+        baseline_root = shlex.quote(self._BASELINE_ROOT_MOUNT)
+        return (
+            "set -euo pipefail;"
+            f" chown -R {self._sandbox_uid()}:{self._sandbox_gid()} {session_root};"
+            f" chmod -R u+rwX,g+rwX,o+rwX {session_root};"
+            f" mkdir -p {quoted_workspace};"
+            " for name in skills work logs; do"
+            f" mkdir -p {quoted_workspace}/${{name}} {session_root}/${{name}} {session_root}/.overlay-work/${{name}};"
+            f" if [ -d {baseline_root}/${{name}} ]; then"
+            f" mount -t overlay overlay -o lowerdir={self._BASELINE_ROOT_MOUNT}/${{name}},upperdir={self._BASELINE_SESSION_ROOT_MOUNT}/${{name}},workdir={self._BASELINE_SESSION_ROOT_MOUNT}/.overlay-work/${{name}} {settings.sandbox_docker_workspace_mount}/${{name}};"
+            " else"
+            f" mount --bind {self._BASELINE_SESSION_ROOT_MOUNT}/${{name}} {settings.sandbox_docker_workspace_mount}/${{name}};"
+            " fi;"
+            " done;"
+            " for name in home cache metadata; do"
+            f" mkdir -p {quoted_workspace}/${{name}} {session_root}/${{name}};"
+            f" mount --bind {self._BASELINE_SESSION_ROOT_MOUNT}/${{name}} {settings.sandbox_docker_workspace_mount}/${{name}};"
+            " done;"
+            " while true; do sleep 3600; done"
+        )
+
+    def _build_runtime_metadata(self, image: str, workspace: SandboxWorkspace) -> dict[str, Any]:
         return {
-            "runtime_spec": self._build_runtime_spec(image),
+            "runtime_spec": self._build_runtime_spec(image, workspace),
         }
 
-    def _build_runtime_spec(self, image: str | None = None) -> dict[str, Any]:
+    def _build_runtime_spec(self, image: str | None = None, workspace: SandboxWorkspace | None = None) -> dict[str, Any]:
         return {
             "image": image or settings.sandbox_docker_image,
             "network_mode": self._runtime_network_mode(),
@@ -678,6 +734,8 @@ class SessionRuntimeService:
             "work_dir": settings.sandbox_docker_work_dir,
             "home_dir": settings.sandbox_docker_home_dir,
             "cache_dir": settings.sandbox_docker_cache_dir,
+            "baseline_mode": "overlay" if workspace and workspace.baseline_root is not None else "direct",
+            "baseline_root": str(workspace.baseline_root.resolve()) if workspace and workspace.baseline_root is not None else "",
         }
 
     def _sandbox_uid(self) -> int:
@@ -703,19 +761,25 @@ class SessionRuntimeService:
             return int(configured)
         return self._DEFAULT_SANDBOX_GID
 
-    def _detect_runtime_recreate_reason(self, runtime: dict[str, Any], now: datetime) -> str | None:
+    def _detect_runtime_recreate_reason(
+        self,
+        runtime: dict[str, Any],
+        now: datetime,
+        workspace: SandboxWorkspace | None = None,
+    ) -> str | None:
         expired_reason = self._detect_expired_reason(runtime, now)
         if expired_reason is not None:
             return expired_reason
-        return self._detect_runtime_spec_drift(runtime)
+        return self._detect_runtime_spec_drift(runtime, workspace)
 
-    def _detect_runtime_spec_drift(self, runtime: dict[str, Any]) -> str | None:
+    def _detect_runtime_spec_drift(self, runtime: dict[str, Any], workspace: SandboxWorkspace | None = None) -> str | None:
         if runtime.get("status") == "missing":
             return None
         metadata = runtime.get("metadata") or {}
         current_spec = metadata.get("runtime_spec")
         desired_spec = self._build_runtime_spec(
-            self._resolve_runtime_image({"platform_id": runtime.get("platform_id")})
+            self._resolve_runtime_image({"platform_id": runtime.get("platform_id")}),
+            workspace,
         )
         if not current_spec:
             return "runtime_spec_missing"

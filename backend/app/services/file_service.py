@@ -79,20 +79,29 @@ class FileService:
 
     def list_work_files(self, session: AgentSession) -> list[FileRecord]:
         assert session.workspace is not None
-        if not session.workspace.work_dir.exists():
-            return []
-        return [
-            self._record_from_path(
-                session_id=session.session_id,
-                root=session.workspace.root,
-                file_path=file_path,
-            )
+        records_by_relative: dict[str, FileRecord] = {}
+
+        if session.workspace.work_dir.exists():
             for file_path in sorted(
                 session.workspace.work_dir.rglob("*"),
-                key=lambda item: (str(item.relative_to(session.workspace.work_dir)).lower()),
-            )
-            if file_path.is_file()
-        ]
+                key=lambda item: str(item.relative_to(session.workspace.work_dir)).lower(),
+            ):
+                if not file_path.is_file():
+                    continue
+                record = self._record_from_path(
+                    session_id=session.session_id,
+                    root=session.workspace.root,
+                    file_path=file_path,
+                )
+                records_by_relative[record.relative_path] = record
+
+        for item in self.list_platform_files(session):
+            relative_path = str(item.relative_path or "").replace("\\", "/")
+            if not relative_path.startswith("work/"):
+                continue
+            records_by_relative.setdefault(relative_path, item)
+
+        return [records_by_relative[key] for key in sorted(records_by_relative.keys(), key=str.lower)]
 
     def list_sidebar_files(self, session: AgentSession) -> list[FileRecord]:
         return self.list_work_files(session)
@@ -156,7 +165,7 @@ class FileService:
             target_path = self.resolve_file_path(session, file_id)
             if target_path is not None:
                 logical_path = workspace_path_service.relative_to_logical_path(
-                    str(target_path.relative_to(session.workspace.root)).replace("\\", "/")
+                    self._relative_path_for_target(session, target_path)
                 )
         elif file_path:
             resolved = workspace_path_service.resolve_path(session, file_path)
@@ -186,7 +195,7 @@ class FileService:
 
         return ReadResult(
             file_path=logical_path or workspace_path_service.relative_to_logical_path(
-                str(target_path.relative_to(session.workspace.root)).replace("\\", "/")
+                self._relative_path_for_target(session, target_path)
             ),
             content=output,
             num_lines=len(line_slice),
@@ -218,9 +227,14 @@ class FileService:
             ]
         }
 
+        relative_dir = workspace_path_service.logical_to_relative_path(resolved.logical_path)
+        workspace_dir = sandbox_manager.ensure_within_workspace(session.workspace, session.workspace.root / relative_dir)
+        baseline_dir = self._baseline_path_for_relative(session, relative_dir)
+        merged_children = self._merge_directory_children(workspace_dir, baseline_dir)
+
         entries: list[ListEntry] = []
-        for child in sorted(resolved.host_path.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))[: max(0, limit)]:
-            relative_path = str(child.relative_to(session.workspace.root)).replace("\\", "/")
+        for child in merged_children[: max(0, limit)]:
+            relative_path = self._relative_path_for_target(session, child)
             logical_path = workspace_path_service.relative_to_logical_path(relative_path)
             metadata = visible_by_path.get(relative_path)
             source = metadata.category if metadata else ("directory" if child.is_dir() else "workspace")
@@ -295,6 +309,56 @@ class FileService:
         except Exception:
             pass
         return value
+
+    def is_workspace_owned_path(self, session: AgentSession, target_path: Path) -> bool:
+        if session.workspace is None:
+            return False
+        try:
+            target_path.resolve(strict=False).relative_to(session.workspace.root.resolve(strict=False))
+        except ValueError:
+            return False
+        return True
+
+    def _relative_path_for_target(self, session: AgentSession, target_path: Path) -> str:
+        assert session.workspace is not None
+        resolved_target = target_path.resolve(strict=False)
+        workspace_root = session.workspace.root.resolve(strict=False)
+        try:
+            return str(resolved_target.relative_to(workspace_root)).replace("\\", "/")
+        except ValueError:
+            pass
+
+        baseline_root = session.workspace.baseline_root
+        if baseline_root is not None:
+            resolved_baseline = baseline_root.resolve(strict=False)
+            try:
+                return str(resolved_target.relative_to(resolved_baseline)).replace("\\", "/")
+            except ValueError:
+                pass
+
+        raise ValueError("目标路径不属于当前会话工作区或平台基线。")
+
+    def _baseline_path_for_relative(self, session: AgentSession, relative_path: str) -> Path | None:
+        assert session.workspace is not None
+        if session.workspace.baseline_root is None:
+            return None
+        candidate = (session.workspace.baseline_root / relative_path).resolve(strict=False)
+        baseline_root = session.workspace.baseline_root.resolve(strict=False)
+        try:
+            candidate.relative_to(baseline_root)
+        except ValueError:
+            return None
+        return candidate
+
+    def _merge_directory_children(self, workspace_dir: Path, baseline_dir: Path | None) -> list[Path]:
+        merged: dict[str, Path] = {}
+        if workspace_dir.exists() and workspace_dir.is_dir():
+            for child in workspace_dir.iterdir():
+                merged[child.name] = child
+        if baseline_dir is not None and baseline_dir.exists() and baseline_dir.is_dir():
+            for child in baseline_dir.iterdir():
+                merged.setdefault(child.name, child)
+        return sorted(merged.values(), key=lambda item: (not item.is_dir(), item.name.lower()))
 
 
 file_service = FileService()
