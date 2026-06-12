@@ -7,7 +7,8 @@ import pytest
 from app.core.config import settings
 from app.sandbox.runner import SandboxRunner
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
-from app.services.session_runtime_service import RuntimeBusyError, session_runtime_service
+from app.services.session_runtime_service import RuntimeBusyError, RuntimeStartError, session_runtime_service
+from app.services.session_workspace_sync_service import session_workspace_sync_service
 from app.services.store import store_service
 
 
@@ -69,10 +70,9 @@ def test_session_runtime_builds_persistent_container_args(tmp_path, monkeypatch)
     assert "--dns 8.8.8.8" in joined
     assert "PIP_CACHE_DIR=/workspace/cache/pip" in joined
     assert "/workspace/home/.local/bin" in joined
-    assert f"dst={settings.sandbox_docker_workspace_mount}" in joined
+    assert "dst=/aether/session-host" in joined
     assert settings.sandbox_docker_home_dir in joined
-    assert "chown -R 10001:10001 /workspace" in joined
-    assert "chmod -R u+rwX,g+rwX,o+rwX /workspace" in joined
+    assert "while true; do sleep 3600; done" in joined
     assert settings.sandbox_docker_image in args
 
 
@@ -86,7 +86,7 @@ def test_session_runtime_exec_uses_work_dir_and_sandbox_user(tmp_path):
     assert args[-3:] == ["/bin/bash", "-lc", "pwd"]
 
 
-def test_session_runtime_builds_overlay_args_for_baseline_workspace(tmp_path, monkeypatch):
+def test_session_runtime_builds_baseline_image_args_for_shared_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "sandbox_allow_network", True)
     monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
     monkeypatch.setattr(settings, "sandbox_docker_dns_servers", [])
@@ -101,14 +101,10 @@ def test_session_runtime_builds_overlay_args_for_baseline_workspace(tmp_path, mo
     args = session_runtime_service._build_run_args(workspace, "test-container", settings.sandbox_docker_image)
     joined = " ".join(args)
 
-    assert "--cap-add SYS_ADMIN" in joined
-    assert f"dst={session_runtime_service._BASELINE_SESSION_ROOT_MOUNT}" in joined
-    assert f"dst={session_runtime_service._BASELINE_ROOT_MOUNT},readonly" in joined
-    assert f"--tmpfs {settings.sandbox_docker_workspace_mount}:size=64m" in joined
-    assert "mount -t overlay overlay" in joined
-    assert "for name in home cache metadata; do" in joined
-    assert "mount --bind /aether/session-root/${name} /workspace/${name}" in joined
-    assert "workdir=/aether/session-root/.overlay-work/${name}" in joined
+    assert "--cap-add SYS_ADMIN" not in joined
+    assert "dst=/aether/session-host" in joined
+    assert "mount -t overlay overlay" not in joined
+    assert f"--tmpfs {settings.sandbox_docker_workspace_mount}:size=64m" not in joined
 
 
 def test_runtime_spec_drift_requests_recreate(monkeypatch):
@@ -190,6 +186,17 @@ def test_runtime_spec_drift_detects_baseline_visibility_change(tmp_path, monkeyp
     }
 
     assert session_runtime_service._detect_runtime_recreate_reason(runtime, now, baseline_workspace) == "runtime_config_changed"
+
+
+def test_runtime_spec_records_baseline_image_mode(tmp_path):
+    baseline_root = tmp_path / "baseline"
+    for name in ["skills", "work", "logs"]:
+        (baseline_root / name).mkdir(parents=True, exist_ok=True)
+    workspace = build_workspace_with_baseline(tmp_path / "sandbox", baseline_root)
+
+    runtime_spec = session_runtime_service._build_runtime_spec(settings.sandbox_docker_image, workspace)
+
+    assert runtime_spec["baseline_mode"] == "image"
 
 
 def test_runner_fails_closed_when_executor_unavailable(tmp_path, monkeypatch):
@@ -344,7 +351,7 @@ def test_runtime_timeout_no_max_limit_when_zero(monkeypatch):
     assert session_runtime_service._effective_timeout_seconds(9999) == 9999
 
 
-def test_runtime_busy_error_when_runtime_remains_draining(tmp_path, monkeypatch):
+def test_runtime_busy_error_when_runtime_remains_terminating(tmp_path, monkeypatch):
     initialize_store(tmp_path)
     workspace = build_workspace(tmp_path / "sandbox")
     now = datetime.now(timezone.utc)
@@ -357,7 +364,7 @@ def test_runtime_busy_error_when_runtime_remains_draining(tmp_path, monkeypatch)
         container_name="test-container",
         container_id="container-id",
         image=settings.sandbox_docker_image,
-        status="draining",
+        status="terminating",
         generation=2,
         network_mode="none",
         created_at=now.isoformat(),
@@ -371,13 +378,13 @@ def test_runtime_busy_error_when_runtime_remains_draining(tmp_path, monkeypatch)
         restart_count=0,
         workspace_root=str(workspace.root),
         home_root=str(workspace.home_dir),
-        metadata={"runtime_spec": session_runtime_service._build_runtime_spec()},
+        metadata={"runtime_spec": session_runtime_service._build_runtime_spec(settings.sandbox_docker_image)},
     )
 
     monkeypatch.setattr(settings, "sandbox_runtime_busy_wait_seconds", 0)
 
     async def fake_inspect(_container_name: str):
-        return "exited"
+        return "restarting"
 
     monkeypatch.setattr(session_runtime_service, "_inspect_container_state", fake_inspect)
 
@@ -390,3 +397,73 @@ def test_runtime_busy_error_when_runtime_remains_draining(tmp_path, monkeypatch)
             )
 
     asyncio.run(execute())
+
+
+def test_runtime_start_error_when_runtime_already_failed(tmp_path):
+    initialize_store(tmp_path)
+    workspace = build_workspace(tmp_path / "sandbox")
+    now = datetime.now(timezone.utc)
+    store_service.upsert_session_runtime(
+        session_id=workspace.session_id,
+        conversation_id=None,
+        platform_id=None,
+        owner_user_id=None,
+        external_user_id=None,
+        container_name="test-container",
+        container_id="container-id",
+        image=settings.sandbox_docker_image,
+        status="failed_start",
+        generation=2,
+        network_mode="none",
+        created_at=now.isoformat(),
+        updated_at=now.isoformat(),
+        last_started_at=now.isoformat(),
+        last_used_at=now.isoformat(),
+        idle_expires_at=(now + timedelta(days=1)).isoformat(),
+        max_expires_at=(now + timedelta(days=7)).isoformat(),
+        destroyed_at=now.isoformat(),
+        destroy_reason="bootstrap_failed",
+        restart_count=0,
+        workspace_root=str(workspace.root),
+        home_root=str(workspace.home_dir),
+        metadata={"runtime_spec": session_runtime_service._build_runtime_spec(settings.sandbox_docker_image)},
+    )
+
+    async def fake_create_runtime(*_args, **_kwargs):
+        raise RuntimeStartError(
+            session_id=workspace.session_id,
+            summary="沙箱 runtime 未能处于可执行状态，请重建运行环境。",
+            runtime={"status": "failed_start", "generation": 3, "destroy_reason": "bootstrap_failed"},
+        )
+
+    original = session_runtime_service._create_runtime_locked
+    session_runtime_service._create_runtime_locked = fake_create_runtime
+
+    async def execute():
+        with pytest.raises(RuntimeStartError, match="沙箱 runtime 未能处于可执行状态"):
+            await session_runtime_service.run_shell(
+                workspace,
+                command="echo hello",
+                shell="bash",
+            )
+
+    try:
+        asyncio.run(execute())
+    finally:
+        session_runtime_service._create_runtime_locked = original
+
+
+def test_workspace_sync_state_tombstones_are_minimized(tmp_path):
+    workspace = build_workspace(tmp_path / "sandbox")
+    state = session_workspace_sync_service.load_state(workspace)
+    assert state.tombstones == ()
+
+    session_workspace_sync_service.save_state(
+        workspace,
+        session_workspace_sync_service.load_state(workspace).__class__(
+            tombstones=("work/repo", "work/repo/main.py", "skills/helper.py"),
+        ),
+    )
+
+    restored = session_workspace_sync_service.load_state(workspace)
+    assert set(restored.tombstones) == {"work/repo", "skills/helper.py"}

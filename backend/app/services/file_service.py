@@ -15,6 +15,7 @@ from app.schemas.files import FileRecord
 from app.sandbox.manager import sandbox_manager
 from app.services.artifact_service import artifact_service
 from app.services.session_service import session_service
+from app.services.session_workspace_sync_service import session_workspace_sync_service
 from app.services.session_types import AgentSession
 from app.services.workspace_path_service import workspace_path_service
 
@@ -80,6 +81,7 @@ class FileService:
     def list_work_files(self, session: AgentSession) -> list[FileRecord]:
         assert session.workspace is not None
         records_by_relative: dict[str, FileRecord] = {}
+        tombstones = set(session_workspace_sync_service.load_state(session.workspace).tombstones)
 
         if session.workspace.work_dir.exists():
             for file_path in sorted(
@@ -93,11 +95,15 @@ class FileService:
                     root=session.workspace.root,
                     file_path=file_path,
                 )
+                if record.relative_path in tombstones:
+                    continue
                 records_by_relative[record.relative_path] = record
 
         for item in self.list_platform_files(session):
             relative_path = str(item.relative_path or "").replace("\\", "/")
             if not relative_path.startswith("work/"):
+                continue
+            if self._is_deleted_relative_path(relative_path, tombstones):
                 continue
             records_by_relative.setdefault(relative_path, item)
 
@@ -137,9 +143,14 @@ class FileService:
         if file_id:
             target_path = self.resolve_file_path(session, file_id)
         elif relative_path:
+            normalized_relative = self._normalize_relative_path(relative_path)
+            if session.workspace is not None and session_workspace_sync_service.is_deleted(session.workspace, normalized_relative):
+                raise FileNotFoundError("目标文件不存在。")
             target_path = workspace_path_service.resolve_path(session, relative_path).host_path
 
         if not target_path or not target_path.exists():
+            if relative_path and session.workspace is not None and session_workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(relative_path)):
+                raise FileNotFoundError("目标文件不存在。")
             raise FileNotFoundError("目标文件不存在。")
         if target_path.is_dir():
             raise IsADirectoryError("目标路径是目录，请改用 list 工具。")
@@ -168,11 +179,21 @@ class FileService:
                     self._relative_path_for_target(session, target_path)
                 )
         elif file_path:
+            normalized_relative = workspace_path_service.logical_to_relative_path(file_path)
+            if session.workspace is not None and session_workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(normalized_relative)):
+                raise FileNotFoundError("目标文件不存在。")
             resolved = workspace_path_service.resolve_path(session, file_path)
             target_path = resolved.host_path
             logical_path = resolved.logical_path
 
         if not target_path or not target_path.exists():
+            logical_candidate = None
+            if file_path:
+                logical_candidate = workspace_path_service.logical_to_relative_path(file_path)
+            elif logical_path:
+                logical_candidate = workspace_path_service.logical_to_relative_path(logical_path)
+            if logical_candidate and session.workspace is not None and session_workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(logical_candidate)):
+                raise FileNotFoundError("目标文件不存在。")
             raise FileNotFoundError("目标文件不存在。")
         if target_path.is_dir():
             raise IsADirectoryError("目标路径是目录，请改用 list 工具。")
@@ -230,7 +251,13 @@ class FileService:
         relative_dir = workspace_path_service.logical_to_relative_path(resolved.logical_path)
         workspace_dir = sandbox_manager.ensure_within_workspace(session.workspace, session.workspace.root / relative_dir)
         baseline_dir = self._baseline_path_for_relative(session, relative_dir)
-        merged_children = self._merge_directory_children(workspace_dir, baseline_dir)
+        tombstones = set(session_workspace_sync_service.load_state(session.workspace).tombstones)
+        merged_children = self._merge_directory_children(
+            relative_dir=relative_dir,
+            workspace_dir=workspace_dir,
+            baseline_dir=baseline_dir,
+            tombstones=tombstones,
+        )
 
         entries: list[ListEntry] = []
         for child in merged_children[: max(0, limit)]:
@@ -350,15 +377,44 @@ class FileService:
             return None
         return candidate
 
-    def _merge_directory_children(self, workspace_dir: Path, baseline_dir: Path | None) -> list[Path]:
+    def _merge_directory_children(
+        self,
+        *,
+        relative_dir: str,
+        workspace_dir: Path,
+        baseline_dir: Path | None,
+        tombstones: set[str],
+    ) -> list[Path]:
         merged: dict[str, Path] = {}
         if workspace_dir.exists() and workspace_dir.is_dir():
             for child in workspace_dir.iterdir():
+                child_relative = self._join_relative(relative_dir, child.name)
+                if self._is_deleted_relative_path(child_relative, tombstones):
+                    continue
                 merged[child.name] = child
         if baseline_dir is not None and baseline_dir.exists() and baseline_dir.is_dir():
             for child in baseline_dir.iterdir():
+                child_relative = self._join_relative(relative_dir, child.name)
+                if self._is_deleted_relative_path(child_relative, tombstones):
+                    continue
                 merged.setdefault(child.name, child)
         return sorted(merged.values(), key=lambda item: (not item.is_dir(), item.name.lower()))
+
+    def _normalize_relative_path(self, value: str) -> str:
+        return str(value or "").replace("\\", "/").strip("/")
+
+    def _join_relative(self, parent: str, name: str) -> str:
+        parent_normalized = self._normalize_relative_path(parent)
+        if not parent_normalized:
+            return self._normalize_relative_path(name)
+        return f"{parent_normalized}/{name}"
+
+    def _is_deleted_relative_path(self, relative_path: str, tombstones: set[str]) -> bool:
+        normalized = self._normalize_relative_path(relative_path)
+        return any(
+            normalized == tombstone or normalized.startswith(f"{tombstone}/")
+            for tombstone in tombstones
+        )
 
 
 file_service = FileService()

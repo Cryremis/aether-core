@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable
 from app.core.config import settings
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 from app.services.platform_runtime_image_service import platform_runtime_image_service
+from app.services.session_workspace_sync_service import session_workspace_sync_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service, utcnow_iso
 
@@ -34,14 +35,21 @@ class RuntimeBusyError(RuntimeError):
         return self.summary
 
 
+@dataclass(frozen=True)
+class RuntimeStartError(RuntimeError):
+    session_id: str
+    summary: str
+    runtime: dict[str, Any]
+
+    def __str__(self) -> str:
+        return self.summary
+
+
 class SessionRuntimeService:
     """管理会话级持久化容器 runtime。"""
 
     _DEFAULT_SANDBOX_UID = 10001
     _DEFAULT_SANDBOX_GID = 10001
-    _BASELINE_SESSION_ROOT_MOUNT = "/aether/session-root"
-    _BASELINE_ROOT_MOUNT = "/aether/baseline"
-
     def __init__(self) -> None:
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._gc_task: asyncio.Task[None] | None = None
@@ -152,7 +160,7 @@ class SessionRuntimeService:
                 container_name=record.get("container_name"),
                 container_id=record.get("container_id"),
                 image=str(record.get("image") or settings.sandbox_docker_image),
-                status="failed",
+                status="failed_start" if record["status"] == "provisioning" else "failed_runtime",
                 generation=int(record.get("generation") or 0),
                 network_mode=str(record.get("network_mode") or self._runtime_network_mode()),
                 created_at=str(record.get("created_at") or now_iso),
@@ -169,7 +177,8 @@ class SessionRuntimeService:
                 metadata=record.get("metadata") or {},
             )
             return record
-        if state and state != record["status"] and record["status"] not in {"busy"}:
+        if state and state != record["status"] and record["status"] not in {"executing"}:
+            mapped_state = self._map_container_state_to_runtime_status(state)
             now_iso = utcnow_iso()
             record = store_service.upsert_session_runtime(
                 session_id=session_id,
@@ -180,7 +189,7 @@ class SessionRuntimeService:
                 container_name=record.get("container_name"),
                 container_id=record.get("container_id"),
                 image=str(record.get("image") or settings.sandbox_docker_image),
-                status="running" if state == "running" else state,
+                status=mapped_state,
                 generation=int(record.get("generation") or 0),
                 network_mode=str(record.get("network_mode") or self._runtime_network_mode()),
                 created_at=str(record.get("created_at") or now_iso),
@@ -213,7 +222,7 @@ class SessionRuntimeService:
         now = self._now()
         items = store_service.list_session_runtimes()
         for item in items:
-            if item.get("status") in {"busy", "provisioning"}:
+            if item.get("status") in {"executing", "provisioning", "syncing", "terminating"}:
                 continue
             idle_expires_at = self._parse_dt(item.get("idle_expires_at"))
             max_expires_at = self._parse_dt(item.get("max_expires_at"))
@@ -253,18 +262,17 @@ class SessionRuntimeService:
                 "runtime": current,
                 "notice": None,
             }
-        if current.get("status") == "busy" and recreate_reason is None:
+        if current.get("status") == "executing" and recreate_reason is None:
             return {
                 "runtime": current,
                 "notice": None,
             }
-        if current.get("status") in {"draining", "stuck", "exited"} and recreate_reason is None:
+        if current.get("status") == "terminating" and recreate_reason is None:
             return {
                 "runtime": current,
                 "notice": None,
             }
-
-        if recreate_reason is None and current.get("status") != "missing":
+        if recreate_reason is None and current.get("status") in {"provisioning", "syncing"}:
             return {
                 "runtime": current,
                 "notice": None,
@@ -293,7 +301,7 @@ class SessionRuntimeService:
     async def _create_runtime_locked(self, workspace: SandboxWorkspace, *, generation: int) -> dict[str, Any]:
         docker_binary = self._require_docker_binary()
         conversation = store_service.get_conversation_by_session(workspace.session_id) or {}
-        runtime_image = self._resolve_runtime_image(conversation)
+        runtime_image = await platform_runtime_image_service.ensure_platform_runtime_image(conversation.get("platform_id"))
         created_at = utcnow_iso()
         max_expires_at = self._to_iso(self._now() + timedelta(seconds=settings.sandbox_runtime_max_age_seconds))
         idle_expires_at = self._to_iso(self._now() + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds))
@@ -342,7 +350,7 @@ class SessionRuntimeService:
                 container_name=container_name,
                 container_id=None,
                 image=runtime_image,
-                status="failed",
+                status="failed_start",
                 generation=generation,
                 network_mode=self._runtime_network_mode(),
                 created_at=created_at,
@@ -358,9 +366,19 @@ class SessionRuntimeService:
                 home_root=str(workspace.home_dir),
                 metadata=self._build_runtime_metadata(runtime_image, workspace),
             )
-            raise RuntimeError(stderr_text or "创建会话 runtime 失败。")
+            raise RuntimeStartError(
+                session_id=workspace.session_id,
+                summary=stderr_text or "创建会话 runtime 失败。",
+                runtime={
+                    "status": "failed_start",
+                    "generation": generation,
+                    "container_name": container_name,
+                    "image": runtime_image,
+                    "destroy_reason": stderr_text or "container_create_failed",
+                },
+            )
         container_id = self._decode_output(stdout_bytes).strip() or None
-        return store_service.upsert_session_runtime(
+        runtime = store_service.upsert_session_runtime(
             session_id=workspace.session_id,
             conversation_id=conversation.get("conversation_id"),
             platform_id=conversation.get("platform_id"),
@@ -385,6 +403,52 @@ class SessionRuntimeService:
             home_root=str(workspace.home_dir),
             metadata=self._build_runtime_metadata(runtime_image, workspace),
         )
+        try:
+            await session_workspace_sync_service.hydrate_container(
+                docker_binary=docker_binary,
+                container_name=container_name,
+                workspace=workspace,
+            )
+        except Exception as exc:
+            destroy_reason = str(exc) or "workspace_hydration_failed"
+            await self._collect_locked(workspace.session_id, reason="workspace_hydration_failed")
+            store_service.upsert_session_runtime(
+                session_id=workspace.session_id,
+                conversation_id=conversation.get("conversation_id"),
+                platform_id=conversation.get("platform_id"),
+                owner_user_id=conversation.get("owner_user_id"),
+                external_user_id=conversation.get("external_user_id"),
+                container_name=container_name,
+                container_id=container_id,
+                image=runtime_image,
+                status="failed_start",
+                generation=generation,
+                network_mode=self._runtime_network_mode(),
+                created_at=created_at,
+                updated_at=utcnow_iso(),
+                last_started_at=created_at,
+                last_used_at=created_at,
+                idle_expires_at=idle_expires_at,
+                max_expires_at=max_expires_at,
+                destroyed_at=utcnow_iso(),
+                destroy_reason=destroy_reason,
+                restart_count=0,
+                workspace_root=str(workspace.root),
+                home_root=str(workspace.home_dir),
+                metadata=self._build_runtime_metadata(runtime_image, workspace),
+            )
+            raise RuntimeStartError(
+                session_id=workspace.session_id,
+                summary=f"初始化会话增量失败: {destroy_reason}",
+                runtime={
+                    "status": "failed_start",
+                    "generation": generation,
+                    "container_name": container_name,
+                    "image": runtime_image,
+                    "destroy_reason": destroy_reason,
+                },
+            ) from None
+        return runtime
 
     async def _collect_locked(self, session_id: str, *, reason: str) -> dict[str, Any] | None:
         record = store_service.get_session_runtime(session_id)
@@ -460,8 +524,8 @@ class SessionRuntimeService:
             last_used_at=self._to_iso(last_used_at),
             idle_expires_at=idle_expires_at,
             max_expires_at=runtime.get("max_expires_at"),
-            destroyed_at=None if status in {"running", "busy", "draining", "stuck"} else runtime.get("destroyed_at"),
-            destroy_reason=None if status in {"running", "busy", "draining", "stuck"} else runtime.get("destroy_reason"),
+            destroyed_at=None if status in {"running", "executing", "terminating", "syncing"} else runtime.get("destroyed_at"),
+            destroy_reason=None if status in {"running", "executing", "terminating", "syncing"} else runtime.get("destroy_reason"),
             restart_count=int(runtime.get("restart_count") or 0),
             workspace_root=str(workspace.root),
             home_root=str(workspace.home_dir),
@@ -469,7 +533,6 @@ class SessionRuntimeService:
         )
 
     def _build_run_args(self, workspace: SandboxWorkspace, container_name: str, image: str) -> list[str]:
-        uses_baseline_overlay = workspace.baseline_root is not None
         args = [
             "run",
             "-d",
@@ -487,6 +550,12 @@ class SessionRuntimeService:
             "no-new-privileges:true",
             "--cap-drop",
             "ALL",
+            "--mount",
+            (
+                "type=bind,"
+                f"src={workspace.root.resolve()},"
+                "dst=/aether/session-host"
+            ),
             "--env",
             f"AETHER_SESSION_ID={workspace.session_id}",
             "--env",
@@ -524,38 +593,6 @@ class SessionRuntimeService:
             "--env",
             f"DOTNET_CLI_HOME={settings.sandbox_docker_home_dir}",
         ]
-        if uses_baseline_overlay:
-            args.extend(
-                [
-                    "--cap-add",
-                    "SYS_ADMIN",
-                    "--mount",
-                    (
-                        "type=bind,"
-                        f"src={workspace.root.resolve()},"
-                        f"dst={self._BASELINE_SESSION_ROOT_MOUNT}"
-                    ),
-                    "--mount",
-                    (
-                        "type=bind,"
-                        f"src={workspace.baseline_root.resolve()},"
-                        f"dst={self._BASELINE_ROOT_MOUNT},readonly"
-                    ),
-                    "--tmpfs",
-                    f"{settings.sandbox_docker_workspace_mount}:size=64m",
-                ]
-            )
-        else:
-            args.extend(
-                [
-                    "--mount",
-                    (
-                        "type=bind,"
-                        f"src={workspace.root.resolve()},"
-                        f"dst={settings.sandbox_docker_workspace_mount}"
-                    ),
-                ]
-            )
         for env_name, env_value in self._build_passthrough_env_vars().items():
             args.extend(["--env", f"{env_name}={env_value}"])
         if settings.sandbox_docker_read_only_rootfs:
@@ -687,35 +724,17 @@ class SessionRuntimeService:
                 f"{shlex.quote(settings.sandbox_docker_logs_dir)} "
                 f"{shlex.quote(settings.sandbox_docker_home_dir)} "
                 f"{shlex.quote(settings.sandbox_docker_cache_dir)}"
-                "; chown -R "
-                f"{self._sandbox_uid()}:{self._sandbox_gid()} "
-                f"{shlex.quote(settings.sandbox_docker_workspace_mount)}"
-                "; chmod -R u+rwX,g+rwX,o+rwX "
-                f"{shlex.quote(settings.sandbox_docker_workspace_mount)}"
                 "; while true; do sleep 3600; done"
             )
 
-        quoted_workspace = shlex.quote(settings.sandbox_docker_workspace_mount)
-        session_root = shlex.quote(self._BASELINE_SESSION_ROOT_MOUNT)
-        baseline_root = shlex.quote(self._BASELINE_ROOT_MOUNT)
         return (
-            "set -euo pipefail;"
-            f" chown -R {self._sandbox_uid()}:{self._sandbox_gid()} {session_root};"
-            f" chmod -R u+rwX,g+rwX,o+rwX {session_root};"
-            f" mkdir -p {quoted_workspace};"
-            " for name in skills work logs; do"
-            f" mkdir -p {quoted_workspace}/${{name}} {session_root}/${{name}} {session_root}/.overlay-work/${{name}};"
-            f" if [ -d {baseline_root}/${{name}} ]; then"
-            f" mount -t overlay overlay -o lowerdir={self._BASELINE_ROOT_MOUNT}/${{name}},upperdir={self._BASELINE_SESSION_ROOT_MOUNT}/${{name}},workdir={self._BASELINE_SESSION_ROOT_MOUNT}/.overlay-work/${{name}} {settings.sandbox_docker_workspace_mount}/${{name}};"
-            " else"
-            f" mount --bind {self._BASELINE_SESSION_ROOT_MOUNT}/${{name}} {settings.sandbox_docker_workspace_mount}/${{name}};"
-            " fi;"
-            " done;"
-            " for name in home cache metadata; do"
-            f" mkdir -p {quoted_workspace}/${{name}} {session_root}/${{name}};"
-            f" mount --bind {self._BASELINE_SESSION_ROOT_MOUNT}/${{name}} {settings.sandbox_docker_workspace_mount}/${{name}};"
-            " done;"
-            " while true; do sleep 3600; done"
+            "mkdir -p "
+            f"{shlex.quote(settings.sandbox_docker_skills_dir)} "
+            f"{shlex.quote(settings.sandbox_docker_work_dir)} "
+            f"{shlex.quote(settings.sandbox_docker_logs_dir)} "
+            f"{shlex.quote(settings.sandbox_docker_home_dir)} "
+            f"{shlex.quote(settings.sandbox_docker_cache_dir)}"
+            "; while true; do sleep 3600; done"
         )
 
     def _build_runtime_metadata(self, image: str, workspace: SandboxWorkspace) -> dict[str, Any]:
@@ -734,7 +753,7 @@ class SessionRuntimeService:
             "work_dir": settings.sandbox_docker_work_dir,
             "home_dir": settings.sandbox_docker_home_dir,
             "cache_dir": settings.sandbox_docker_cache_dir,
-            "baseline_mode": "overlay" if workspace and workspace.baseline_root is not None else "direct",
+            "baseline_mode": "image" if workspace and workspace.baseline_root is not None else "direct",
             "baseline_root": str(workspace.baseline_root.resolve()) if workspace and workspace.baseline_root is not None else "",
         }
 
@@ -850,7 +869,7 @@ class SessionRuntimeService:
         runtime = runtime_state["runtime"]
         effective_timeout = self._effective_timeout_seconds(timeout_seconds)
         runtime_status = str(runtime.get("status") or "")
-        if runtime_status in {"draining", "stuck", "failed", "collected", "exited"}:
+        if runtime_status in {"executing", "terminating"}:
             refreshed = await self._wait_for_runtime_ready_locked(workspace, runtime)
             refreshed_status = str(refreshed.get("status") or "")
             if refreshed_status != "running":
@@ -865,13 +884,25 @@ class SessionRuntimeService:
                     },
                 )
             runtime = refreshed
+        elif runtime_status in {"failed_start", "failed_runtime", "exited"}:
+            raise RuntimeStartError(
+                session_id=workspace.session_id,
+                summary="沙箱 runtime 未能处于可执行状态，请重建运行环境。",
+                runtime={
+                    "status": runtime_status,
+                    "generation": runtime.get("generation"),
+                    "container_name": runtime.get("container_name"),
+                    "destroy_reason": runtime.get("destroy_reason"),
+                    "image": runtime.get("image"),
+                },
+            )
         container_name = str(runtime["container_name"])
         now = self._now()
         await self._persist_runtime(
             session_id=workspace.session_id,
             workspace=workspace,
             runtime=runtime,
-            status="busy",
+            status="executing",
             last_used_at=now,
             idle_expires_at=self._to_iso(now + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds)),
         )
@@ -891,7 +922,7 @@ class SessionRuntimeService:
                 session_id=workspace.session_id,
                 workspace=workspace,
                 runtime=runtime,
-                status="draining",
+                status="terminating",
                 last_used_at=now,
                 idle_expires_at=self._to_iso(now + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds)),
             )
@@ -903,7 +934,7 @@ class SessionRuntimeService:
                 session_id=workspace.session_id,
                 workspace=workspace,
                 runtime=runtime,
-                status="stuck",
+                status="failed_runtime",
                 last_used_at=now,
                 idle_expires_at=self._to_iso(now + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds)),
             )
@@ -911,7 +942,7 @@ class SessionRuntimeService:
                 session_id=workspace.session_id,
                 summary=f"命令执行超过 {effective_timeout} 秒仍未完成，当前沙箱可能卡住。可以继续等待，或调用 rebuild_runtime 重建沙箱。",
                 runtime={
-                    "status": "stuck",
+                    "status": "failed_runtime",
                     "generation": runtime.get("generation"),
                     "container_name": runtime.get("container_name"),
                     "destroy_reason": "command_timeout",
@@ -945,6 +976,11 @@ class SessionRuntimeService:
             )
 
         now = self._now()
+        await session_workspace_sync_service.capture_container_delta(
+            docker_binary=self._require_docker_binary(),
+            container_name=container_name,
+            workspace=workspace,
+        )
         runtime = await self._persist_runtime(
             session_id=workspace.session_id,
             workspace=workspace,
@@ -1007,6 +1043,19 @@ class SessionRuntimeService:
             await asyncio.sleep(0.2)
             current = await self.refresh_runtime(workspace.session_id)
         return await self.refresh_runtime(workspace.session_id)
+
+    def _map_container_state_to_runtime_status(self, state: str) -> str:
+        normalized = str(state or "").strip().lower()
+        mapping = {
+            "running": "running",
+            "created": "provisioning",
+            "restarting": "terminating",
+            "paused": "running",
+            "dead": "failed_runtime",
+            "exited": "failed_runtime",
+            "removing": "terminating",
+        }
+        return mapping.get(normalized, normalized or "failed_runtime")
 
     async def _collect_stream_output(
         self,

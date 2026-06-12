@@ -25,7 +25,7 @@ from app.services.tool_execution_service import ToolOutputEvent, tool_execution_
 from app.services.search_service import search_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
-from app.services.session_runtime_service import RuntimeBusyError, session_runtime_service
+from app.services.session_runtime_service import RuntimeBusyError, RuntimeStartError, session_runtime_service
 
 
 ToolHandler = Callable[[AgentSession, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -519,6 +519,27 @@ class ToolService:
                     "error_code": "runtime_busy",
                     "recoverable": True,
                     "suggested_actions": list(exc.suggested_actions),
+                    "runtime": exc.runtime,
+                },
+            }
+        except RuntimeStartError as exc:
+            if streaming_enabled and tool_call_id is not None:
+                tool_execution_service.fail_execution(
+                    session,
+                    tool_call_id=tool_call_id,
+                    error=exc.summary,
+                )
+            return {
+                "summary": exc.summary,
+                "error_code": "runtime_start_failed",
+                "recoverable": True,
+                "suggested_actions": ["rebuild_runtime"],
+                "runtime": exc.runtime,
+                "public_output": {
+                    "summary": exc.summary,
+                    "error_code": "runtime_start_failed",
+                    "recoverable": True,
+                    "suggested_actions": ["rebuild_runtime"],
                     "runtime": exc.runtime,
                 },
             }

@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import re
 import shutil
 import subprocess
 import tempfile
+import tarfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import UploadFile
 
 from app.core.config import settings
+from app.services.platform_baseline_service import platform_baseline_service
 from app.schemas.platform import (
     PlatformRuntimeImageBuildSpec,
     PlatformRuntimeImageGuide,
@@ -24,6 +28,7 @@ class PlatformRuntimeImageService:
 
     _UPLOAD_CHUNK_SIZE = 1024 * 1024
     _LOAD_NAME_PATTERN = re.compile(r"(?:Loaded image(?: ID)?:\s*)(?P<name>\S+)", re.IGNORECASE)
+    _AUTO_IMAGE_PREFIX = "aethercore-platform-runtime"
 
     def get_summary(self, platform_id: int) -> PlatformRuntimeImageSummary:
         platform = self._require_platform(platform_id)
@@ -150,6 +155,16 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
         custom_image = str(platform.get("sandbox_image") or "").strip()
         return custom_image or settings.sandbox_docker_image
 
+    async def ensure_platform_runtime_image(self, platform_id: int | None) -> str:
+        if platform_id is None:
+            return settings.sandbox_docker_image
+        platform = self._require_platform(int(platform_id))
+        custom_image = str(platform.get("sandbox_image") or "").strip()
+        if custom_image:
+            await self._verify_image_available(self._require_docker_binary(), custom_image)
+            return custom_image
+        return await self._ensure_auto_image(platform)
+
     async def cleanup_replaced_image(self, image: str, *, keep_image: str) -> None:
         normalized_old = image.strip()
         normalized_keep = keep_image.strip()
@@ -222,6 +237,96 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
         if any(ch.isspace() for ch in normalized):
             raise RuntimeError("镜像名称不能包含空白字符")
         return normalized
+
+    async def _ensure_auto_image(self, platform: dict[str, Any]) -> str:
+        docker_binary = self._require_docker_binary()
+        platform_id = int(platform["platform_id"])
+        baseline_root = platform_baseline_service.ensure_platform_root(str(platform["platform_key"]))
+        baseline_hash = self._compute_baseline_hash(baseline_root)
+        image_name = f"{self._AUTO_IMAGE_PREFIX}:{platform_id}-{baseline_hash}"
+        if await self._image_exists(docker_binary, image_name):
+            return image_name
+
+        base_image = settings.sandbox_docker_image
+        await self._verify_image_available(docker_binary, base_image)
+        build_root = Path(tempfile.mkdtemp(prefix="aethercore-platform-build-"))
+        try:
+            baseline_tar = build_root / "baseline.tar"
+            dockerfile_path = build_root / "Dockerfile"
+            self._write_baseline_tarball(baseline_root, baseline_tar)
+            dockerfile_path.write_text(
+                self._build_auto_image_dockerfile(base_image),
+                encoding="utf-8",
+            )
+            process = await asyncio.create_subprocess_exec(
+                docker_binary,
+                "build",
+                "-t",
+                image_name,
+                str(build_root),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                **self._subprocess_kwargs(),
+            )
+            stdout_bytes, stderr_bytes = await process.communicate()
+            if process.returncode != 0:
+                error_text = self._decode_output(stderr_bytes).strip() or self._decode_output(stdout_bytes).strip()
+                raise RuntimeError(error_text or "构建平台运行镜像失败")
+            await self._verify_image_available(docker_binary, image_name)
+            return image_name
+        finally:
+            shutil.rmtree(build_root, ignore_errors=True)
+
+    async def _image_exists(self, docker_binary: str, image: str) -> bool:
+        process = await asyncio.create_subprocess_exec(
+            docker_binary,
+            "image",
+            "inspect",
+            image,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            **self._subprocess_kwargs(),
+        )
+        await process.communicate()
+        return process.returncode == 0
+
+    def _compute_baseline_hash(self, baseline_root: Path) -> str:
+        digest = hashlib.sha256()
+        for file_path in sorted(
+            (item for item in baseline_root.rglob("*") if item.is_file()),
+            key=lambda item: str(item.relative_to(baseline_root)).replace("\\", "/").lower(),
+        ):
+            relative = str(file_path.relative_to(baseline_root)).replace("\\", "/")
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(file_path.read_bytes())
+            digest.update(b"\0")
+        return digest.hexdigest()[:16]
+
+    def _write_baseline_tarball(self, baseline_root: Path, target_path: Path) -> None:
+        with tarfile.open(target_path, mode="w") as handle:
+            for section in ("skills", "work", "logs"):
+                section_dir = baseline_root / section
+                if not section_dir.exists():
+                    continue
+                for child in sorted(section_dir.iterdir(), key=lambda item: item.name.lower()):
+                    handle.add(child, arcname=str(Path("baseline") / section / child.name))
+
+    def _build_auto_image_dockerfile(self, base_image: str) -> str:
+        return f"""FROM {base_image}
+
+USER root
+COPY baseline.tar /tmp/aethercore-baseline.tar
+RUN mkdir -p /tmp/aethercore-baseline \\
+    && tar -xf /tmp/aethercore-baseline.tar -C /tmp/aethercore-baseline \\
+    && mkdir -p {settings.sandbox_docker_skills_dir} {settings.sandbox_docker_work_dir} {settings.sandbox_docker_logs_dir} {settings.sandbox_docker_home_dir} {settings.sandbox_docker_cache_dir} \\
+    && if [ -d /tmp/aethercore-baseline/baseline/skills ]; then cp -a /tmp/aethercore-baseline/baseline/skills/. {settings.sandbox_docker_skills_dir}/; fi \\
+    && if [ -d /tmp/aethercore-baseline/baseline/work ]; then cp -a /tmp/aethercore-baseline/baseline/work/. {settings.sandbox_docker_work_dir}/; fi \\
+    && if [ -d /tmp/aethercore-baseline/baseline/logs ]; then cp -a /tmp/aethercore-baseline/baseline/logs/. {settings.sandbox_docker_logs_dir}/; fi \\
+    && chown -R 10001:10001 {settings.sandbox_docker_workspace_mount} \\
+    && rm -rf /tmp/aethercore-baseline /tmp/aethercore-baseline.tar
+USER sandbox
+"""
 
     def _require_platform(self, platform_id: int) -> dict[str, Any]:
         platform = store_service.get_platform_by_id(platform_id)

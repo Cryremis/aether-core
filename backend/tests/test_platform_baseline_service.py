@@ -14,6 +14,7 @@ from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
+from app.services.session_workspace_sync_service import WorkspaceState, session_workspace_sync_service
 
 
 def initialize_store(tmp_path: Path) -> None:
@@ -108,6 +109,32 @@ def test_platform_baseline_shared_files_are_visible_in_list_tool(tmp_path):
     assert any(item.name == "repo" and item.entry_type == "dir" for item in work_entries)
     assert any(item.name == "main.py" and item.source == "platform" for item in repo_entries)
     assert "print('shared')" in read_result.content
+
+
+def test_deleted_baseline_file_is_hidden_from_list_and_read(tmp_path):
+    initialize_store(tmp_path)
+
+    standalone_root = platform_baseline_service.ensure_platform_root("standalone")
+    (standalone_root / "work" / "repo").mkdir(parents=True, exist_ok=True)
+    (standalone_root / "work" / "repo" / "main.py").write_text("print('shared')\n", encoding="utf-8")
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    session = conversation_service.bootstrap_admin_workbench(admin)
+    assert session.workspace is not None
+
+    session_workspace_sync_service.save_state(
+        session.workspace,
+        WorkspaceState(tombstones=("work/repo/main.py",)),
+    )
+
+    repo_entries = file_service.list(session, path="/workspace/work/repo")
+    assert not any(item.name == "main.py" for item in repo_entries)
+
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        file_service.read_text(session, relative_path="work/repo/main.py")
 
 
 def test_platform_skill_refreshes_for_existing_session(tmp_path):

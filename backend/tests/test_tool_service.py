@@ -265,7 +265,7 @@ def test_sandbox_shell_returns_runtime_busy_payload(monkeypatch, tmp_path):
         raise RuntimeBusyError(
             session_id=workspace.session_id,
             summary="前一个命令仍在退出中，当前沙箱暂时不可用。可以继续等待，或调用 rebuild_runtime 重建沙箱。",
-            runtime={"status": "draining", "generation": 2},
+            runtime={"status": "terminating", "generation": 2},
         )
 
     monkeypatch.setattr("app.services.tool_service.sandbox_runner.run_shell", fake_run_shell)
@@ -284,6 +284,39 @@ def test_sandbox_shell_returns_runtime_busy_payload(monkeypatch, tmp_path):
     assert result["error_code"] == "runtime_busy"
     assert result["recoverable"] is True
     assert "rebuild_runtime" in result["suggested_actions"]
+
+
+def test_sandbox_shell_returns_runtime_start_failed_payload(monkeypatch, tmp_path):
+    from app.core.config import settings
+    from app.services.session_service import session_service
+    from app.services.session_runtime_service import RuntimeStartError
+
+    settings.storage_root = tmp_path / "storage"
+    session = session_service.get_or_create("sess_shell_start_failed")
+
+    async def fake_run_shell(*, workspace, command, shell, timeout_seconds=None, session=None, run_id=None):
+        raise RuntimeStartError(
+            session_id=workspace.session_id,
+            summary="沙箱 runtime 未能处于可执行状态，请重建运行环境。",
+            runtime={"status": "failed_start", "generation": 3, "destroy_reason": "bootstrap_failed"},
+        )
+
+    monkeypatch.setattr("app.services.tool_service.sandbox_runner.run_shell", fake_run_shell)
+
+    result = __import__("asyncio").run(
+        tool_service.execute(
+            session,
+            "sandbox_shell",
+            {
+                "command": "echo hello",
+                "shell": "bash",
+            },
+        )
+    )
+
+    assert result["error_code"] == "runtime_start_failed"
+    assert result["recoverable"] is True
+    assert result["suggested_actions"] == ["rebuild_runtime"]
 
 
 def test_rebuild_runtime_tool_reports_runtime_event(monkeypatch, tmp_path):
