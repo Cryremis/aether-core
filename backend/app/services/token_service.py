@@ -12,6 +12,12 @@ from app.core.config import settings
 class TokenService:
     """统一管理内部用户令牌与嵌入令牌。"""
 
+    def _resolved_algorithm(self) -> str:
+        algorithm = settings.auth_algorithm.strip().upper()
+        if not algorithm:
+            raise ValueError("AUTH_ALGORITHM 不能为空")
+        return algorithm
+
     def create_user_token(self, user_id: int, role: str) -> tuple[str, int]:
         return self._create_token(
             {
@@ -43,14 +49,15 @@ class TokenService:
         )
 
     def decode_token(self, token: str) -> dict[str, Any]:
+        algorithm = self._resolved_algorithm()
         try:
-            return jwt.decode(token, settings.auth_secret_key, algorithms=[settings.auth_algorithm])
+            return jwt.decode(token, settings.auth_secret_key, algorithms=[algorithm])
         except JWTError as exc:  # noqa: B904
             raise ValueError("令牌无效或已过期") from exc
 
     def _create_token(self, payload: dict[str, Any], expires_delta: timedelta) -> tuple[str, int]:
         expire_at = datetime.now(timezone.utc) + expires_delta
-        token = jwt.encode({**payload, "exp": expire_at}, settings.auth_secret_key, algorithm=settings.auth_algorithm)
+        token = jwt.encode({**payload, "exp": expire_at}, settings.auth_secret_key, algorithm=self._resolved_algorithm())
         return token, int(expires_delta.total_seconds())
 
 

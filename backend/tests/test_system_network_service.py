@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from app.services.system_network_service import SystemNetworkService
+from app.services.token_service import TokenService
 
 
 def test_decode_output_falls_back_to_windows_code_page(monkeypatch):
@@ -21,3 +24,18 @@ def test_decode_output_prefers_utf8_when_available(monkeypatch):
     payload = "eth0: flags=4163".encode("utf-8")
 
     assert service._decode_output(payload) == "eth0: flags=4163"
+
+
+def test_token_service_normalizes_algorithm(monkeypatch):
+    service = TokenService()
+    monkeypatch.setattr("app.services.token_service.settings.auth_algorithm", " hs256 ")
+
+    assert service._resolved_algorithm() == "HS256"
+
+
+def test_token_service_rejects_empty_algorithm(monkeypatch):
+    service = TokenService()
+    monkeypatch.setattr("app.services.token_service.settings.auth_algorithm", "   ")
+
+    with pytest.raises(ValueError, match="AUTH_ALGORITHM"):
+        service._resolved_algorithm()

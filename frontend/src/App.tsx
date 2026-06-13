@@ -156,7 +156,7 @@ export default function App() {
   }, [authed, location.pathname]);
 
   useEffect(() => {
-    if (authed || isEmbedMode) return;
+    if (!ready || authed || isEmbedMode) return;
     const isProtectedPath =
       location.pathname.startsWith("/workbench") ||
       location.pathname.startsWith("/platforms") ||
@@ -167,7 +167,7 @@ export default function App() {
     setPendingPath(`${location.pathname}${location.search}`);
     setAuthModalOpen(true);
     navigate("/", { replace: true });
-  }, [authed, isEmbedMode, location.pathname, location.search, navigate]);
+  }, [authed, isEmbedMode, location.pathname, location.search, navigate, ready]);
 
   useEffect(() => {
     if (!isEmbedMode || !sessionId || window.parent === window) return;
