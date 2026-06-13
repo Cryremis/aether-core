@@ -20,6 +20,7 @@ import { HomePage } from "./pages/HomePage";
 import { PlatformDetailPage } from "./pages/PlatformDetailPage";
 import { PlatformsPage } from "./pages/PlatformsPage";
 import { AdminPage } from "./pages/AdminPage";
+import { IpsPage } from "./pages/IpsPage";
 
 const WorkbenchPage = lazy(async () => import("./pages/WorkbenchPage").then((module) => ({ default: module.WorkbenchPage })));
 
@@ -159,6 +160,7 @@ export default function App() {
     const isProtectedPath =
       location.pathname.startsWith("/workbench") ||
       location.pathname.startsWith("/platforms") ||
+      location.pathname.startsWith("/ips") ||
       location.pathname.startsWith("/system") ||
       location.pathname.startsWith("/admin");
     if (!isProtectedPath) return;
@@ -332,6 +334,10 @@ export default function App() {
             <Route
               path="/platforms/:platformId"
               element={authed && currentUser ? <PlatformDetailPage currentUser={currentUser} /> : <Navigate to="/" replace />}
+            />
+            <Route
+              path="/ips"
+              element={authed && currentUser?.can_manage_system ? <IpsPage currentUser={currentUser} /> : authed ? <Navigate to="/system" replace /> : <Navigate to="/" replace />}
             />
             <Route
               path="/system"

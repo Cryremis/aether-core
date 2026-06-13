@@ -18,6 +18,7 @@ from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.skill_service import skill_service
 from app.services.store import store_service
+from app.services.system_network_service import system_network_service
 from app.services.tool_service import tool_service
 
 
@@ -67,6 +68,89 @@ def test_current_user_endpoint_allows_regular_internal_users(tmp_path):
     assert payload["full_name"] == "Regular User"
     assert payload["role"] == "user"
     assert payload["can_manage_platforms"] is False
+
+
+def test_system_network_endpoint_requires_system_admin(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="user-ips-001",
+        full_name="Regular User",
+        email="regular@example.com",
+    )
+    user = store_service.get_user_by_provider("corp-sso", "user-ips-001")
+    assert user is not None
+
+    from app.services.token_service import token_service
+
+    user_token, _ = token_service.create_user_token(user.user_id, user.role)
+    client = TestClient(app)
+    response = client.get("/api/v1/admin/ips", headers={"Authorization": f"Bearer {user_token}"})
+
+    assert response.status_code == 403
+
+
+def test_system_network_endpoint_returns_snapshot_for_system_admin(tmp_path, monkeypatch):
+    initialize_isolated_runtime(tmp_path)
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+
+    def fake_snapshot():
+        from app.schemas.system_network import NetworkAddress, NetworkInterface, NetworkSummary, SystemNetworkSnapshot
+
+        return SystemNetworkSnapshot(
+            hostname="host-01",
+            fqdn="host-01.example.com",
+            platform="linux",
+            source="ip",
+            namespace_scope="host",
+            scope_note="当前结果来自 AetherCore 后端所在宿主机的网络命名空间。",
+            summary=NetworkSummary(
+                interface_count=1,
+                up_interface_count=1,
+                ipv4_count=1,
+                ipv6_count=0,
+                public_address_count=0,
+            ),
+            interfaces=[
+                NetworkInterface(
+                    name="eth0",
+                    state="UP",
+                    is_up=True,
+                    mtu=1500,
+                    mac_address="00:11:22:33:44:55",
+                    flags=["UP", "BROADCAST"],
+                    interface_type="ethernet",
+                    addresses=[
+                        NetworkAddress(
+                            family="ipv4",
+                            address="192.168.10.5",
+                            prefix_length=24,
+                            is_private=True,
+                            category="private",
+                        )
+                    ],
+                )
+            ],
+            raw_text="2: eth0: <UP,BROADCAST> mtu 1500",
+        )
+
+    monkeypatch.setattr(system_network_service, "get_snapshot", fake_snapshot)
+
+    client = TestClient(app)
+    response = client.get("/api/v1/admin/ips", headers={"Authorization": f"Bearer {login.token}"})
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["hostname"] == "host-01"
+    assert payload["namespace_scope"] == "host"
+    assert payload["summary"]["interface_count"] == 1
+    assert payload["interfaces"][0]["name"] == "eth0"
+    assert payload["interfaces"][0]["addresses"][0]["address"] == "192.168.10.5"
 
 
 def test_conversations_are_isolated_for_internal_users_and_host_users(tmp_path):

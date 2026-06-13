@@ -1,0 +1,9 @@
+<type>(<scope>): <summary>
+
+# Examples:
+# feat(system): add server ips overview page
+# fix(runtime): stop unnecessary sandbox recreation
+# refactor(audit): simplify audit card layout
+#
+# Common types:
+# feat, fix, refactor, perf, docs, test, chore

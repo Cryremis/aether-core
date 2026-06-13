@@ -169,6 +169,52 @@ export type UserRoleUpdatePayload = {
   role: "system_admin" | "user";
 };
 
+export type SystemNetworkAddress = {
+  family: "ipv4" | "ipv6";
+  address: string;
+  prefix_length?: number | null;
+  netmask?: string | null;
+  broadcast?: string | null;
+  scope?: string | null;
+  label?: string | null;
+  is_loopback: boolean;
+  is_private: boolean;
+  is_link_local: boolean;
+  is_multicast: boolean;
+  category: "public" | "private" | "loopback" | "link_local" | "multicast" | "unknown";
+};
+
+export type SystemNetworkInterface = {
+  name: string;
+  display_name?: string | null;
+  state: string;
+  is_up: boolean;
+  mtu?: number | null;
+  mac_address?: string | null;
+  flags: string[];
+  interface_type?: string | null;
+  addresses: SystemNetworkAddress[];
+};
+
+export type SystemNetworkSnapshot = {
+  hostname: string;
+  fqdn?: string | null;
+  platform: string;
+  source: string;
+  namespace_scope: "host" | "container" | "unknown";
+  scope_note: string;
+  collected_at: string;
+  summary: {
+    interface_count: number;
+    up_interface_count: number;
+    ipv4_count: number;
+    ipv6_count: number;
+    public_address_count: number;
+  };
+  interfaces: SystemNetworkInterface[];
+  raw_text?: string | null;
+};
+
 export type PlatformBaselineFile = {
   name: string;
   relative_path: string;
@@ -1139,6 +1185,14 @@ export async function collectAdminRuntime(sessionId: string) {
   });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, `回收 runtime 失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function getSystemNetworkSnapshot() {
+  const response = await apiFetch("/admin/ips");
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `获取服务器 IP 信息失败: ${response.status}`));
   }
   return response.json();
 }
