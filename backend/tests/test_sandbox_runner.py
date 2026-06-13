@@ -164,6 +164,45 @@ def test_runtime_spec_drift_detects_platform_image_change(tmp_path, monkeypatch)
     assert session_runtime_service._detect_runtime_recreate_reason(runtime, now) == "runtime_config_changed"
 
 
+def test_runtime_spec_drift_keeps_auto_platform_image_stable(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    monkeypatch.setattr(settings, "sandbox_allow_network", True)
+    monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
+    monkeypatch.setattr(settings, "sandbox_docker_dns_servers", [])
+    monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
+    monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
+
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="runtime-auto-image-platform",
+        display_name="Runtime Auto Image Platform",
+        host_type="embedded",
+        description="runtime auto image test",
+        owner_user_id=admin.user_id,
+    )
+
+    baseline_root = settings.platform_baselines_root / "runtime-auto-image-platform"
+    for name in ["skills", "work", "logs"]:
+        (baseline_root / name).mkdir(parents=True, exist_ok=True)
+    (baseline_root / "work" / "guide.txt").write_text("shared baseline", encoding="utf-8")
+
+    workspace = build_workspace_with_baseline(tmp_path / "sandbox", baseline_root)
+    resolved_image = session_runtime_service._resolve_runtime_image({"platform_id": platform["platform_id"]})
+    now = datetime.now(timezone.utc)
+    runtime = {
+        "status": "running",
+        "platform_id": platform["platform_id"],
+        "image": resolved_image,
+        "metadata": {
+            "runtime_spec": session_runtime_service._build_runtime_spec(resolved_image, workspace),
+        },
+    }
+
+    assert resolved_image.startswith("aethercore-platform-runtime:")
+    assert session_runtime_service._detect_runtime_recreate_reason(runtime, now, workspace) is None
+
+
 def test_runtime_spec_drift_detects_baseline_visibility_change(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "sandbox_allow_network", True)
     monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")

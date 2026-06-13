@@ -36,7 +36,7 @@ class PlatformRuntimeImageService:
         return PlatformRuntimeImageSummary(
             platform_id=platform_id,
             custom_image=custom_image,
-            resolved_image=custom_image or settings.sandbox_docker_image,
+            resolved_image=self.resolve_for_platform(platform_id),
             updated_at=platform.get("sandbox_image_updated_at"),
         )
 
@@ -152,8 +152,7 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
         platform = store_service.get_platform_by_id(int(platform_id))
         if platform is None:
             return settings.sandbox_docker_image
-        custom_image = str(platform.get("sandbox_image") or "").strip()
-        return custom_image or settings.sandbox_docker_image
+        return self._resolve_platform_image_name(platform)
 
     async def ensure_platform_runtime_image(self, platform_id: int | None) -> str:
         if platform_id is None:
@@ -240,10 +239,7 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
 
     async def _ensure_auto_image(self, platform: dict[str, Any]) -> str:
         docker_binary = self._require_docker_binary()
-        platform_id = int(platform["platform_id"])
-        baseline_root = platform_baseline_service.ensure_platform_root(str(platform["platform_key"]))
-        baseline_hash = self._compute_baseline_hash(baseline_root)
-        image_name = f"{self._AUTO_IMAGE_PREFIX}:{platform_id}-{baseline_hash}"
+        image_name = self._resolve_platform_image_name(platform)
         if await self._image_exists(docker_binary, image_name):
             return image_name
 
@@ -253,6 +249,7 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
         try:
             baseline_tar = build_root / "baseline.tar"
             dockerfile_path = build_root / "Dockerfile"
+            baseline_root = platform_baseline_service.ensure_platform_root(str(platform["platform_key"]))
             self._write_baseline_tarball(baseline_root, baseline_tar)
             dockerfile_path.write_text(
                 self._build_auto_image_dockerfile(base_image),
@@ -302,6 +299,15 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
             digest.update(file_path.read_bytes())
             digest.update(b"\0")
         return digest.hexdigest()[:16]
+
+    def _resolve_platform_image_name(self, platform: dict[str, Any]) -> str:
+        custom_image = str(platform.get("sandbox_image") or "").strip()
+        if custom_image:
+            return custom_image
+        platform_id = int(platform["platform_id"])
+        baseline_root = platform_baseline_service.ensure_platform_root(str(platform["platform_key"]))
+        baseline_hash = self._compute_baseline_hash(baseline_root)
+        return f"{self._AUTO_IMAGE_PREFIX}:{platform_id}-{baseline_hash}"
 
     def _write_baseline_tarball(self, baseline_root: Path, target_path: Path) -> None:
         with tarfile.open(target_path, mode="w") as handle:
