@@ -27,6 +27,7 @@ export function IpsPage({ currentUser }: IpsPageProps) {
   const [snapshot, setSnapshot] = useState<SystemNetworkSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [rawOpen, setRawOpen] = useState(false);
 
   const loadData = async () => {
     try {
@@ -34,6 +35,7 @@ export function IpsPage({ currentUser }: IpsPageProps) {
       setError("");
       const result = await getSystemNetworkSnapshot();
       setSnapshot((result.data ?? null) as SystemNetworkSnapshot | null);
+      setRawOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载服务器网络信息失败");
     } finally {
@@ -54,6 +56,9 @@ export function IpsPage({ currentUser }: IpsPageProps) {
           <p>{t("ips.subtitle")}</p>
         </div>
         <div className="ips-page__hero-actions">
+          <button type="button" className="home-button" onClick={() => setRawOpen(true)}>
+            {t("ips.openRaw")}
+          </button>
           <Link className="home-button" to="/system">
             {t("ips.backSystem")}
           </Link>
@@ -76,95 +81,99 @@ export function IpsPage({ currentUser }: IpsPageProps) {
 
       {!loading && snapshot ? (
         <>
-          <section className="ips-summary-grid">
-            <article className="ips-stat-card">
-              <span>{t("ips.hostname")}</span>
+          <section className="ips-toolbar">
+            <div className="ips-toolbar__primary">
               <strong>{snapshot.hostname}</strong>
-              <p>{snapshot.fqdn || snapshot.scope_note}</p>
-            </article>
-            <article className="ips-stat-card">
-              <span>{t("ips.interfaces")}</span>
-              <strong>{snapshot.summary.interface_count}</strong>
-              <p>{t("ips.interfacesUp")}: {snapshot.summary.up_interface_count}</p>
-            </article>
-            <article className="ips-stat-card">
-              <span>{t("ips.ipv4")}</span>
-              <strong>{snapshot.summary.ipv4_count}</strong>
-              <p>{t("ips.ipv6")}: {snapshot.summary.ipv6_count}</p>
-            </article>
-            <article className="ips-stat-card">
-              <span>{t("ips.public")}</span>
-              <strong>{snapshot.summary.public_address_count}</strong>
-              <p>{t(`ips.scope.${snapshot.namespace_scope}`)} · {snapshot.source}</p>
-            </article>
-          </section>
-
-          <section className="ips-meta-card">
-            <div>
-              <span>{t("ips.platform")}</span>
-              <strong>{snapshot.platform}</strong>
+              <span>{snapshot.fqdn || snapshot.scope_note}</span>
             </div>
-            <div>
-              <span>{t("ips.source")}</span>
-              <strong>{snapshot.source}</strong>
-            </div>
-            <div>
-              <span>{t("ips.scope")}</span>
-              <strong>{t(`ips.scope.${snapshot.namespace_scope}`)}</strong>
-            </div>
-            <div>
-              <span>{t("ips.collectedAt")}</span>
-              <strong>{formatTimestamp(snapshot.collected_at, language)}</strong>
+            <div className="ips-toolbar__metrics">
+              <div>
+                <span>{t("ips.interfaces")}</span>
+                <strong>{snapshot.summary.interface_count}</strong>
+              </div>
+              <div>
+                <span>{t("ips.interfacesUp")}</span>
+                <strong>{snapshot.summary.up_interface_count}</strong>
+              </div>
+              <div>
+                <span>{t("ips.ipv4")}</span>
+                <strong>{snapshot.summary.ipv4_count}</strong>
+              </div>
+              <div>
+                <span>{t("ips.public")}</span>
+                <strong>{snapshot.summary.public_address_count}</strong>
+              </div>
             </div>
           </section>
 
-          <section className="ips-note-card">
+          <section className="ips-context-bar">
+            <span>{t("ips.platform")}: <strong>{snapshot.platform}</strong></span>
+            <span>{t("ips.source")}: <strong>{snapshot.source}</strong></span>
+            <span>{t("ips.scope")}: <strong>{t(`ips.scope.${snapshot.namespace_scope}`)}</strong></span>
+            <span>{t("ips.collectedAt")}: <strong>{formatTimestamp(snapshot.collected_at, language)}</strong></span>
+          </section>
+
+          <section className="ips-note-strip">
             <p>{snapshot.scope_note}</p>
           </section>
 
           {snapshot.interfaces.length === 0 ? <div className="platforms-empty">{t("ips.empty")}</div> : null}
 
-          <section className="ips-interface-grid">
+          <section className="ips-list-shell">
+            <div className="ips-list-head" aria-hidden="true">
+              <span>{t("ips.interfaces")}</span>
+              <span>{t("ips.primaryAddress")}</span>
+              <span>{t("ips.addressCount")}</span>
+              <span>{t("ips.state")}</span>
+            </div>
             {snapshot.interfaces.map((item) => (
-              <article key={item.name} className="ips-interface-card">
-                <div className="ips-interface-card__head">
-                  <div>
-                    <h2>{item.display_name || item.name}</h2>
-                    <p>{item.interface_type || item.name}</p>
+              <article key={item.name} className="ips-list-row">
+                <div className="ips-list-row__summary">
+                  <div className="ips-list-row__identity">
+                    <strong>{item.display_name || item.name}</strong>
+                    <span>{item.interface_type || item.name}</span>
                   </div>
-                  <span className={`ips-state-pill${item.is_up ? " is-up" : ""}`}>{item.state}</span>
+                  <div className="ips-list-row__primary">
+                    <code>{item.addresses[0] ? formatAddress(item.addresses[0]) : "-"}</code>
+                  </div>
+                  <div className="ips-list-row__count">
+                    <strong>{item.addresses.length}</strong>
+                  </div>
+                  <div className="ips-list-row__state">
+                    <span className={`ips-state-pill${item.is_up ? " is-up" : ""}`}>{item.state}</span>
+                  </div>
                 </div>
 
-                <div className="ips-interface-card__meta">
+                <div className="ips-list-row__details">
                   <div>
-                    <span>{t("ips.mtu")}</span>
-                    <strong>{item.mtu ?? "-"}</strong>
+                    <span>{t("ips.type")}</span>
+                    <strong>{item.interface_type || "-"}</strong>
                   </div>
                   <div>
                     <span>{t("ips.mac")}</span>
                     <strong>{item.mac_address || "-"}</strong>
                   </div>
-                </div>
-
-                <div className="ips-flag-row">
-                  <span>{t("ips.flags")}</span>
                   <div>
-                    {item.flags.map((flag) => (
-                      <code key={flag}>{flag}</code>
-                    ))}
+                    <span>{t("ips.mtu")}</span>
+                    <strong>{item.mtu ?? "-"}</strong>
+                  </div>
+                  <div>
+                    <span>{t("ips.flags")}</span>
+                    <strong>{item.flags.length > 0 ? item.flags.join(" · ") : "-"}</strong>
                   </div>
                 </div>
 
-                {item.addresses.length === 0 ? <p className="ips-interface-card__empty">{t("ips.noAddresses")}</p> : null}
+                {item.addresses.length === 0 ? <p className="ips-list-row__empty">{t("ips.noAddresses")}</p> : null}
 
-                <div className="ips-address-list">
+                <div className="ips-address-column">
+                  <span className="ips-address-column__label">{t("ips.addresses")}</span>
                   {item.addresses.map((address) => (
-                    <div key={`${item.name}-${address.family}-${address.address}`} className="ips-address-card">
-                      <div className="ips-address-card__top">
+                    <div key={`${item.name}-${address.family}-${address.address}`} className="ips-address-row">
+                      <div className="ips-address-row__main">
                         <code>{formatAddress(address)}</code>
                         <span className={`ips-category-pill ips-category-pill--${address.category}`}>{t(`ips.category.${address.category}`)}</span>
                       </div>
-                      <div className="ips-address-card__meta">
+                      <div className="ips-address-row__meta">
                         <span>{address.family.toUpperCase()}</span>
                         <span>{address.scope || "-"}</span>
                         <span>{address.broadcast || "-"}</span>
@@ -175,15 +184,25 @@ export function IpsPage({ currentUser }: IpsPageProps) {
               </article>
             ))}
           </section>
+        </>
+      ) : null}
 
-          <section className="ips-raw-card">
-            <div className="ips-raw-card__head">
-              <h2>{t("ips.raw")}</h2>
-              <span>{snapshot.source}</span>
+      {rawOpen && snapshot ? (
+        <div className="ips-modal" role="dialog" aria-modal="true" aria-label={t("ips.raw")}>
+          <button type="button" className="ips-modal__backdrop" onClick={() => setRawOpen(false)} aria-label={t("ips.closeRaw")} />
+          <div className="ips-modal__panel">
+            <div className="ips-modal__header">
+              <div>
+                <h2>{t("ips.raw")}</h2>
+                <p>{snapshot.source}</p>
+              </div>
+              <button type="button" className="ips-modal__close" onClick={() => setRawOpen(false)}>
+                {t("ips.closeRaw")}
+              </button>
             </div>
             <pre>{snapshot.raw_text || t("ips.noRaw")}</pre>
-          </section>
-        </>
+          </div>
+        </div>
       ) : null}
     </main>
   );

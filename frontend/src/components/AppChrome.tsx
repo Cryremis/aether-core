@@ -76,11 +76,11 @@ export function AppChrome({ currentUser, authed, onRequireAuth, onOpenPersonalSe
           </button>
           {currentUser?.can_manage_system ? (
             <>
-              <button type="button" className={location.pathname.startsWith("/ips") ? "is-active" : ""} onClick={() => guardedNavigate("/ips")}>
-                {t("nav.ips")}
-              </button>
               <button type="button" className={location.pathname.startsWith("/system") ? "is-active" : ""} onClick={() => guardedNavigate("/system")}>
                 {t("nav.system")}
+              </button>
+              <button type="button" className={location.pathname.startsWith("/ips") ? "is-active" : ""} onClick={() => guardedNavigate("/ips")}>
+                {t("nav.ips")}
               </button>
             </>
           ) : null}
