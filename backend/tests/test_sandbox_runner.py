@@ -506,3 +506,115 @@ def test_workspace_sync_state_tombstones_are_minimized(tmp_path):
 
     restored = session_workspace_sync_service.load_state(workspace)
     assert set(restored.tombstones) == {"work/repo", "skills/helper.py"}
+
+
+def test_capture_container_delta_keeps_unmodified_host_uploads(tmp_path, monkeypatch):
+    workspace = build_workspace(tmp_path / "sandbox")
+    upload = workspace.work_dir / "uploaded.docx"
+    upload.write_bytes(b"docx-bytes")
+
+    async def fake_list_container_diff(*, docker_binary: str, container_name: str):
+        return [("C", "work/generated.txt")]
+
+    async def fake_copy_path_from_container(
+        *,
+        docker_binary: str,
+        container_name: str,
+        relative_path: str,
+        staging_root: Path,
+    ) -> None:
+        target = staging_root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("generated", encoding="utf-8")
+
+    monkeypatch.setattr(
+        session_workspace_sync_service,
+        "_list_container_diff",
+        fake_list_container_diff,
+    )
+    monkeypatch.setattr(
+        session_workspace_sync_service,
+        "_copy_path_from_container",
+        fake_copy_path_from_container,
+    )
+
+    asyncio.run(
+        session_workspace_sync_service.capture_container_delta(
+            docker_binary="docker",
+            container_name="demo",
+            workspace=workspace,
+        )
+    )
+
+    assert upload.exists()
+    assert upload.read_bytes() == b"docx-bytes"
+    assert (workspace.work_dir / "generated.txt").read_text(encoding="utf-8") == "generated"
+
+
+def test_session_runtime_run_shell_hydrates_latest_workspace_before_exec(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    workspace = build_workspace(tmp_path / "sandbox")
+    now = datetime.now(timezone.utc)
+    store_service.upsert_session_runtime(
+        session_id=workspace.session_id,
+        conversation_id=None,
+        platform_id=None,
+        owner_user_id=None,
+        external_user_id=None,
+        container_name="test-container",
+        container_id="container-id",
+        image=settings.sandbox_docker_image,
+        status="running",
+        generation=1,
+        network_mode="none",
+        created_at=now.isoformat(),
+        updated_at=now.isoformat(),
+        last_started_at=now.isoformat(),
+        last_used_at=now.isoformat(),
+        idle_expires_at=(now + timedelta(days=1)).isoformat(),
+        max_expires_at=(now + timedelta(days=7)).isoformat(),
+        destroyed_at=None,
+        destroy_reason=None,
+        restart_count=0,
+        workspace_root=str(workspace.root),
+        home_root=str(workspace.home_dir),
+        metadata={"runtime_spec": session_runtime_service._build_runtime_spec(settings.sandbox_docker_image)},
+    )
+
+    calls: list[str] = []
+
+    async def fake_hydrate_container(*, docker_binary: str, container_name: str, workspace: SandboxWorkspace) -> None:
+        calls.append(f"hydrate:{container_name}")
+
+    async def fake_capture_container_delta(*, docker_binary: str, container_name: str, workspace: SandboxWorkspace):
+        calls.append(f"capture:{container_name}")
+        return session_workspace_sync_service.load_state(workspace)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+
+    async def fake_create_exec_process(container_name: str, shell: str, command: str):
+        calls.append(f"exec:{container_name}")
+        return FakeProcess()
+
+    async def fake_collect_stream_output(process, *, output_callback=None):
+        return b"ok\n", b""
+
+    monkeypatch.setattr(session_runtime_service, "_require_docker_binary", lambda: "docker")
+    monkeypatch.setattr(session_runtime_service, "_inspect_container_state", lambda _container_name: asyncio.sleep(0, result="running"))
+    monkeypatch.setattr(session_workspace_sync_service, "hydrate_container", fake_hydrate_container)
+    monkeypatch.setattr(session_workspace_sync_service, "capture_container_delta", fake_capture_container_delta)
+    monkeypatch.setattr(session_runtime_service, "_create_exec_process", fake_create_exec_process)
+    monkeypatch.setattr(session_runtime_service, "_collect_stream_output", fake_collect_stream_output)
+
+    result = asyncio.run(
+        session_runtime_service.run_shell(
+            workspace,
+            command="echo ok",
+            shell="bash",
+        )
+    )
+
+    assert result.exit_code == 0
+    assert calls == ["hydrate:test-container", "exec:test-container", "capture:test-container"]

@@ -131,7 +131,8 @@ class SessionWorkspaceSyncService:
         minimized_changes = self._minimize_paths(changed_paths)
         minimized_tombstones = self._minimize_paths(tombstones)
 
-        self._reset_delta_directories(workspace)
+        # 仅应用容器内的增量变化，避免把宿主上未变更但真实存在的上传文件整目录清空。
+        self._apply_tombstones(workspace, minimized_tombstones)
         if minimized_changes:
             staging_root = Path(tempfile.mkdtemp(prefix="aethercore-delta-stage-"))
             try:
@@ -266,10 +267,6 @@ class SessionWorkspaceSyncService:
             error_text = self._decode_output(stderr_bytes).strip() or self._decode_output(stdout_bytes).strip()
             raise RuntimeError(error_text or "执行容器同步命令失败。")
 
-    def _reset_delta_directories(self, workspace: SandboxWorkspace) -> None:
-        for section in self._SYNC_SECTIONS:
-            self._clear_directory(getattr(workspace, f"{section}_dir"))
-
     def _materialize_staging(self, staging_root: Path, workspace: SandboxWorkspace) -> None:
         for section in self._SYNC_SECTIONS:
             source_dir = staging_root / section
@@ -279,18 +276,33 @@ class SessionWorkspaceSyncService:
             for child in source_dir.iterdir():
                 destination = target_dir / child.name
                 if child.is_dir():
+                    if destination.exists() and destination.is_file():
+                        destination.unlink(missing_ok=True)
                     shutil.copytree(child, destination, dirs_exist_ok=True)
                 else:
                     destination.parent.mkdir(parents=True, exist_ok=True)
+                    if destination.exists() and destination.is_dir():
+                        shutil.rmtree(destination, ignore_errors=True)
                     shutil.copy2(child, destination)
 
-    def _clear_directory(self, directory: Path) -> None:
-        directory.mkdir(parents=True, exist_ok=True)
-        for child in directory.iterdir():
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=True)
+    def _apply_tombstones(self, workspace: SandboxWorkspace, tombstones: tuple[str, ...]) -> None:
+        for relative_path in tombstones:
+            normalized = self._normalize_relative_path(relative_path)
+            if not normalized:
+                continue
+            root_name, _, remainder = normalized.partition("/")
+            if root_name not in self._SYNC_SECTIONS:
+                continue
+            target_root = getattr(workspace, f"{root_name}_dir")
+            target = (target_root / remainder).resolve(strict=False) if remainder else target_root
+            try:
+                target.relative_to(target_root.resolve(strict=False))
+            except ValueError:
+                continue
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
             else:
-                child.unlink(missing_ok=True)
+                target.unlink(missing_ok=True)
 
     def _is_synced_relative_path(self, relative_path: str) -> bool:
         return any(

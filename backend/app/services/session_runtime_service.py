@@ -906,6 +906,11 @@ class SessionRuntimeService:
             last_used_at=now,
             idle_expires_at=self._to_iso(now + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds)),
         )
+        await session_workspace_sync_service.hydrate_container(
+            docker_binary=self._require_docker_binary(),
+            container_name=container_name,
+            workspace=workspace,
+        )
         started_at = time.perf_counter()
         try:
             process = await self._create_exec_process(container_name, shell, command)
