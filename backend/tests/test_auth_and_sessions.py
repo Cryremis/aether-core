@@ -70,6 +70,45 @@ def test_current_user_endpoint_allows_regular_internal_users(tmp_path):
     assert payload["can_manage_platforms"] is False
 
 
+def test_regular_user_can_submit_and_query_platform_registration_requests(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="user-platform-request-001",
+        full_name="Platform Request User",
+        email="platform-request@example.com",
+    )
+    user = store_service.get_user_by_provider("corp-sso", "user-platform-request-001")
+    assert user is not None
+
+    from app.services.token_service import token_service
+
+    user_token, _ = token_service.create_user_token(user.user_id, user.role)
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {user_token}"}
+
+    create_response = client.post(
+        "/api/v1/platforms/registration-requests",
+        headers=headers,
+        json={
+            "platform_key": "customer-success-hub",
+            "display_name": "Customer Success Hub",
+            "description": "for external tenant support",
+            "justification": "need to onboard a new host platform",
+        },
+    )
+
+    assert create_response.status_code == 200
+    assert create_response.json()["data"]["platform_key"] == "customer-success-hub"
+
+    list_response = client.get("/api/v1/platforms/registration-requests/mine", headers=headers)
+    assert list_response.status_code == 200
+    payload = list_response.json()["data"]
+    assert len(payload) == 1
+    assert payload[0]["display_name"] == "Customer Success Hub"
+
+
 def test_system_network_endpoint_requires_system_admin(tmp_path):
     initialize_isolated_runtime(tmp_path)
 
@@ -357,6 +396,62 @@ def test_platform_admin_can_update_runtime_image_and_recycle_runtimes(tmp_path, 
     refreshed = store_service.get_platform_by_id(platform["platform_id"])
     assert refreshed is not None
     assert refreshed["sandbox_image"] == "registry.example.com/aether/platform:2026.05.12"
+
+
+def test_platform_admin_can_update_sandbox_proxy_and_recycle_runtimes(tmp_path, monkeypatch):
+    initialize_isolated_runtime(tmp_path)
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="sandbox-proxy-demo",
+        display_name="Sandbox Proxy Demo",
+        host_type="embedded",
+        description="platform sandbox proxy test",
+        owner_user_id=admin.user_id,
+    )
+
+    observed: dict[str, object] = {}
+
+    async def fake_collect_platform_runtimes(platform_id: int, *, reason: str) -> int:
+        observed["platform_id"] = platform_id
+        observed["reason"] = reason
+        return 4
+
+    monkeypatch.setattr(
+        "app.api.routes.platform_sandbox_proxy.session_runtime_service.collect_platform_runtimes",
+        fake_collect_platform_runtimes,
+    )
+
+    client = TestClient(app)
+    response = client.put(
+        f"/api/v1/platform-sandbox-proxy/platform/{platform['platform_id']}",
+        headers={"Authorization": f"Bearer {login.token}"},
+        json={
+            "enabled": True,
+            "http_proxy": "http://proxy.example.com:7890",
+            "https_proxy": "http://proxy.example.com:7890",
+            "all_proxy": "",
+            "no_proxy": "dashscope.aliyuncs.com,localhost",
+            "inherit_host_proxy": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["enabled"] is True
+    assert payload["http_proxy"] == "http://proxy.example.com:7890"
+    assert payload["recycled_runtime_count"] == 4
+    assert observed["platform_id"] == platform["platform_id"]
+    assert observed["reason"] == "platform_sandbox_proxy_updated"
+
+    refreshed = store_service.get_platform_by_id(platform["platform_id"])
+    assert refreshed is not None
+    assert refreshed["sandbox_proxy_http"] == "http://proxy.example.com:7890"
 
 
 def test_platform_runtime_image_guide_returns_build_contract(tmp_path):
@@ -1203,3 +1298,147 @@ def test_platform_admin_runtime_list_hides_inactive_by_default(tmp_path, monkeyp
         managed_session.session_id,
         closed_session.session_id,
     }
+
+
+def test_system_audit_overview_aggregates_host_platform_metrics(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+
+    platform = store_service.create_platform(
+        platform_key="audit-overview-hub",
+        display_name="Audit Overview Hub",
+        host_type="embedded",
+        description="system audit test platform",
+        owner_user_id=admin.user_id,
+    )
+    secondary_admin = store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="audit-overview-admin-001",
+        full_name="Audit Overview Admin",
+        email="audit-overview-admin@example.com",
+    )
+    store_service.add_platform_admin(
+        platform_id=platform["platform_id"],
+        user_id=secondary_admin.user_id,
+        assigned_by=admin.user_id,
+    )
+
+    active_session, _ = conversation_service.bootstrap_host_workbench(
+        platform_key=platform["platform_key"],
+        external_user_id="tenant-user-a",
+        external_user_name="Tenant User A",
+        external_org_id="org-a",
+        conversation_id=None,
+        conversation_key="system-audit-a",
+        host_name="Audit Overview Host",
+    )
+    active_session.messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "world"},
+        {"role": "user", "content": "follow-up"},
+    ]
+    session_service.persist(active_session)
+    store_service.touch_conversation(active_session.session_id, message_count=len(active_session.messages))
+    active_conversation = store_service.get_conversation_by_session(active_session.session_id)
+    assert active_conversation is not None
+
+    closed_session, _ = conversation_service.bootstrap_host_workbench(
+        platform_key=platform["platform_key"],
+        external_user_id="tenant-user-b",
+        external_user_name="Tenant User B",
+        external_org_id="org-b",
+        conversation_id=None,
+        conversation_key="system-audit-b",
+        host_name="Audit Overview Host",
+    )
+    closed_session.messages = [{"role": "user", "content": "runtime check"}]
+    session_service.persist(closed_session)
+    store_service.touch_conversation(closed_session.session_id, message_count=len(closed_session.messages))
+    closed_conversation = store_service.get_conversation_by_session(closed_session.session_id)
+    assert closed_conversation is not None
+
+    now = datetime.now(timezone.utc).isoformat()
+    store_service.upsert_session_runtime(
+        session_id=active_session.session_id,
+        conversation_id=active_conversation["conversation_id"],
+        platform_id=platform["platform_id"],
+        owner_user_id=None,
+        external_user_id="tenant-user-a",
+        container_name="audit-overview-live",
+        container_id="audit-overview-live-id",
+        image=settings.sandbox_docker_image,
+        status="running",
+        generation=1,
+        network_mode="bridge",
+        created_at=now,
+        updated_at=now,
+        last_started_at=now,
+        last_used_at=now,
+        idle_expires_at=now,
+        max_expires_at=now,
+        destroyed_at=None,
+        destroy_reason=None,
+        restart_count=0,
+        workspace_root="workspace-live",
+        home_root="home-live",
+        metadata={},
+    )
+    store_service.upsert_session_runtime(
+        session_id=closed_session.session_id,
+        conversation_id=closed_conversation["conversation_id"],
+        platform_id=platform["platform_id"],
+        owner_user_id=None,
+        external_user_id="tenant-user-b",
+        container_name="audit-overview-closed",
+        container_id="audit-overview-closed-id",
+        image=settings.sandbox_docker_image,
+        status="collected",
+        generation=1,
+        network_mode="bridge",
+        created_at=now,
+        updated_at=now,
+        last_started_at=now,
+        last_used_at=now,
+        idle_expires_at=now,
+        max_expires_at=now,
+        destroyed_at=now,
+        destroy_reason="admin_collected",
+        restart_count=0,
+        workspace_root="workspace-closed",
+        home_root="home-closed",
+        metadata={},
+    )
+    store_service.create_platform_registration_request(
+        applicant_user_id=secondary_admin.user_id,
+        platform_key="future-audit-overview-hub",
+        display_name="Future Audit Overview Hub",
+        description="pending approval",
+        justification="need another tenant surface",
+    )
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/v1/admin/audit/overview",
+        headers={"Authorization": f"Bearer {login.token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["platform_count"] == 1
+    assert payload["platforms_with_traffic_count"] == 1
+    assert payload["hosted_user_count"] == 2
+    assert payload["conversation_count"] == 2
+    assert payload["message_count"] == 4
+    assert payload["active_runtime_count"] == 1
+    assert payload["runtime_count"] == 2
+    assert payload["platform_admin_assignment_count"] == 2
+    assert payload["pending_registration_request_count"] == 1
+    assert payload["platforms"][0]["display_name"] == "Audit Overview Hub"
+    assert payload["platforms"][0]["hosted_user_count"] == 2
+    assert payload["platforms"][0]["message_count"] == 4

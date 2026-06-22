@@ -77,9 +77,36 @@ class PlatformSummary(BaseModel):
     sandbox_image: str | None = None
     resolved_sandbox_image: str = ""
     sandbox_image_updated_at: datetime | None = None
+    sandbox_proxy_enabled: bool = False
+    sandbox_proxy_http: str = ""
+    sandbox_proxy_https: str = ""
+    sandbox_proxy_all: str = ""
+    sandbox_proxy_no_proxy: str = ""
+    sandbox_proxy_inherit_host_proxy: bool = True
+    sandbox_proxy_updated_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     admin_user_ids: list[int] = Field(default_factory=list)
     admin_names: list[str] = Field(default_factory=list)
+
+
+class PlatformSandboxProxyConfigUpdateRequest(BaseModel):
+    enabled: bool = False
+    http_proxy: str = ""
+    https_proxy: str = ""
+    all_proxy: str = ""
+    no_proxy: str = ""
+    inherit_host_proxy: bool = False
+
+
+class PlatformSandboxProxyConfigSummary(BaseModel):
+    platform_id: int
+    enabled: bool = False
+    http_proxy: str = ""
+    https_proxy: str = ""
+    all_proxy: str = ""
+    no_proxy: str = ""
+    inherit_host_proxy: bool = False
+    updated_at: datetime | None = None
 
 
 class PlatformRuntimeImageUpdateRequest(BaseModel):

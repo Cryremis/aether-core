@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.agent import router as agent_router
+from app.api.routes.admin_audit import router as admin_audit_router
 from app.api.routes.admin_ips import router as admin_ips_router
 from app.api.routes.admin_conversations import router as admin_conversations_router
 from app.api.routes.files import router as files_router
@@ -14,6 +15,7 @@ from app.api.routes.host import router as host_router
 from app.api.routes.llm import router as llm_router
 from app.api.routes.platforms import router as platforms_router
 from app.api.routes.platform_runtime_images import router as platform_runtime_images_router
+from app.api.routes.platform_sandbox_proxy import router as platform_sandbox_proxy_router
 from app.api.routes.prompts import router as prompts_router
 from app.api.routes.runtimes import router as runtimes_router
 from app.api.routes.sessions import router as sessions_router
@@ -49,12 +51,14 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(admin_audit_router)
 app.include_router(admin_ips_router)
 app.include_router(admin_conversations_router)
 app.include_router(llm_router)
 app.include_router(prompts_router)
 app.include_router(platforms_router)
 app.include_router(platform_runtime_images_router)
+app.include_router(platform_sandbox_proxy_router)
 app.include_router(runtimes_router)
 app.include_router(host_router)
 app.include_router(agent_router)

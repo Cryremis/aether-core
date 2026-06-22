@@ -851,6 +851,11 @@
   margin-bottom: 24px;
 }
 
+.management-console__section-head--subtle {
+  margin-top: 8px;
+  margin-bottom: 18px;
+}
+
 .management-console__section-head > div:first-child {
   display: flex;
   flex-direction: column;
@@ -2119,6 +2124,51 @@
   font-size: 12px;
   color: var(--text-tertiary);
   line-height: 1.6;
+}
+
+.management-console__stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.management-console__stat-card,
+.management-console__audit-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(226, 232, 240, 0.88);
+}
+
+.management-console__stat-card span:first-child {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.management-console__stat-card strong {
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: #0f172a;
+}
+
+.management-console__stat-card p,
+.management-console__summary-metrics span {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.management-console__summary-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
 }
 
 .runtime-card p:nth-of-type(2) {

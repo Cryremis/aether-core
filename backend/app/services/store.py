@@ -214,6 +214,13 @@ class StoreService:
             self._ensure_column(conn, "user_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(conn, "platforms", "sandbox_image", "TEXT")
             self._ensure_column(conn, "platforms", "sandbox_image_updated_at", "TEXT")
+            self._ensure_column(conn, "platforms", "sandbox_proxy_enabled", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "platforms", "sandbox_proxy_http", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "platforms", "sandbox_proxy_https", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "platforms", "sandbox_proxy_all", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "platforms", "sandbox_proxy_no_proxy", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "platforms", "sandbox_proxy_inherit_host_proxy", "INTEGER NOT NULL DEFAULT 1")
+            self._ensure_column(conn, "platforms", "sandbox_proxy_updated_at", "TEXT")
             conn.execute("DROP TABLE IF EXISTS admin_whitelist")
             self._migrate_roles(conn)
             self._backfill_platform_admin_metadata(conn)
@@ -603,6 +610,66 @@ class StoreService:
                 WHERE platform_id = ?
                 """,
                 (normalized, now, now, platform_id),
+            )
+        return self.get_platform_by_id(platform_id)
+
+    def update_platform_sandbox_proxy_config(
+        self,
+        *,
+        platform_id: int,
+        enabled: bool,
+        http_proxy: str,
+        https_proxy: str,
+        all_proxy: str,
+        no_proxy: str,
+        inherit_host_proxy: bool,
+    ) -> dict[str, Any] | None:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE platforms
+                SET sandbox_proxy_enabled = ?,
+                    sandbox_proxy_http = ?,
+                    sandbox_proxy_https = ?,
+                    sandbox_proxy_all = ?,
+                    sandbox_proxy_no_proxy = ?,
+                    sandbox_proxy_inherit_host_proxy = ?,
+                    sandbox_proxy_updated_at = ?,
+                    updated_at = ?
+                WHERE platform_id = ?
+                """,
+                (
+                    1 if enabled else 0,
+                    http_proxy.strip(),
+                    https_proxy.strip(),
+                    all_proxy.strip(),
+                    no_proxy.strip(),
+                    1 if inherit_host_proxy else 0,
+                    now,
+                    now,
+                    platform_id,
+                ),
+            )
+        return self.get_platform_by_id(platform_id)
+
+    def clear_platform_sandbox_proxy_config(self, *, platform_id: int) -> dict[str, Any] | None:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE platforms
+                SET sandbox_proxy_enabled = 0,
+                    sandbox_proxy_http = '',
+                    sandbox_proxy_https = '',
+                    sandbox_proxy_all = '',
+                    sandbox_proxy_no_proxy = '',
+                    sandbox_proxy_inherit_host_proxy = 1,
+                    sandbox_proxy_updated_at = ?,
+                    updated_at = ?
+                WHERE platform_id = ?
+                """,
+                (now, now, platform_id),
             )
         return self.get_platform_by_id(platform_id)
 
@@ -1064,6 +1131,145 @@ class StoreService:
             ).fetchall()
         return [self._row_to_session_runtime(row) for row in rows if row is not None]
 
+    def get_system_audit_overview(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            platform_rows = conn.execute(
+                """
+                SELECT
+                    p.platform_id,
+                    p.platform_key,
+                    p.display_name,
+                    p.owner_user_id,
+                    p.updated_at,
+                    u.full_name AS owner_name
+                FROM platforms p
+                LEFT JOIN users u ON u.user_id = p.owner_user_id
+                WHERE p.host_type = 'embedded'
+                ORDER BY p.created_at DESC, p.platform_id DESC
+                """
+            ).fetchall()
+            user_count_row = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()
+            pending_request_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM platform_registration_requests WHERE status = 'pending'"
+            ).fetchone()
+            admin_rows = conn.execute(
+                """
+                SELECT platform_id, COUNT(*) AS count
+                FROM platform_admins
+                GROUP BY platform_id
+                """
+            ).fetchall()
+            conversation_rows = conn.execute(
+                """
+                SELECT
+                    c.platform_id,
+                    c.owner_user_id,
+                    c.external_user_id,
+                    c.message_count,
+                    c.updated_at
+                FROM conversations c
+                JOIN platforms p ON p.platform_id = c.platform_id
+                WHERE p.host_type = 'embedded'
+                ORDER BY c.updated_at DESC
+                """
+            ).fetchall()
+            runtime_rows = conn.execute(
+                """
+                SELECT
+                    sr.platform_id,
+                    sr.status,
+                    COALESCE(sr.last_used_at, sr.updated_at) AS activity_at
+                FROM session_runtimes sr
+                JOIN platforms p ON p.platform_id = sr.platform_id
+                WHERE p.host_type = 'embedded'
+                ORDER BY COALESCE(sr.last_used_at, sr.updated_at) DESC
+                """
+            ).fetchall()
+
+        platform_metrics: dict[int, dict[str, Any]] = {
+            int(row["platform_id"]): {
+                "platform_id": int(row["platform_id"]),
+                "platform_key": str(row["platform_key"]),
+                "display_name": str(row["display_name"]),
+                "owner_user_id": int(row["owner_user_id"]),
+                "owner_name": str(row["owner_name"] or "未知负责人"),
+                "admin_count": 0,
+                "hosted_user_count": 0,
+                "conversation_count": 0,
+                "message_count": 0,
+                "active_runtime_count": 0,
+                "runtime_count": 0,
+                "last_activity_at": row["updated_at"],
+                "_hosted_users": set(),
+            }
+            for row in platform_rows
+        }
+        global_hosted_users: set[str] = set()
+
+        for row in admin_rows:
+            platform_id = int(row["platform_id"])
+            if platform_id in platform_metrics:
+                platform_metrics[platform_id]["admin_count"] = int(row["count"] or 0)
+
+        for row in conversation_rows:
+            platform_id = int(row["platform_id"])
+            metric = platform_metrics.get(platform_id)
+            if metric is None:
+                continue
+            metric["conversation_count"] += 1
+            metric["message_count"] += int(row["message_count"] or 0)
+            activity_at = row["updated_at"]
+            if activity_at and (not metric["last_activity_at"] or activity_at > metric["last_activity_at"]):
+                metric["last_activity_at"] = activity_at
+            identity = self._build_hosted_user_identity(
+                owner_user_id=row["owner_user_id"],
+                external_user_id=row["external_user_id"],
+            )
+            if identity:
+                metric["_hosted_users"].add(identity)
+                global_hosted_users.add(identity)
+
+        for row in runtime_rows:
+            platform_id = int(row["platform_id"])
+            metric = platform_metrics.get(platform_id)
+            if metric is None:
+                continue
+            metric["runtime_count"] += 1
+            if str(row["status"]) in {"provisioning", "running", "busy"}:
+                metric["active_runtime_count"] += 1
+            activity_at = row["activity_at"]
+            if activity_at and (not metric["last_activity_at"] or activity_at > metric["last_activity_at"]):
+                metric["last_activity_at"] = activity_at
+
+        platforms: list[dict[str, Any]] = []
+        for metric in platform_metrics.values():
+            metric["hosted_user_count"] = len(metric.pop("_hosted_users"))
+            platforms.append(metric)
+
+        platforms.sort(
+            key=lambda item: (
+                item["conversation_count"],
+                item["active_runtime_count"],
+                item["message_count"],
+                item["platform_id"],
+            ),
+            reverse=True,
+        )
+
+        return {
+            "platform_count": len(platforms),
+            "platforms_with_traffic_count": sum(1 for item in platforms if item["conversation_count"] > 0),
+            "hosted_user_count": len(global_hosted_users),
+            "internal_user_count": int(user_count_row["count"] or 0) if user_count_row else 0,
+            "platform_admin_assignment_count": sum(int(item["admin_count"]) for item in platforms),
+            "pending_registration_request_count": int(pending_request_row["count"] or 0) if pending_request_row else 0,
+            "conversation_count": sum(int(item["conversation_count"]) for item in platforms),
+            "message_count": sum(int(item["message_count"]) for item in platforms),
+            "active_runtime_count": sum(int(item["active_runtime_count"]) for item in platforms),
+            "runtime_count": sum(int(item["runtime_count"]) for item in platforms),
+            "platforms": platforms,
+        }
+
     def upsert_session_runtime(
         self,
         *,
@@ -1170,6 +1376,18 @@ class StoreService:
             "applicant_email": applicant.email if applicant else None,
             "reviewed_by_name": reviewer.full_name if reviewer else None,
         }
+
+    def _build_hosted_user_identity(
+        self,
+        *,
+        owner_user_id: Any | None,
+        external_user_id: Any | None,
+    ) -> str | None:
+        if external_user_id:
+            return f"external:{external_user_id}"
+        if owner_user_id:
+            return f"internal:{owner_user_id}"
+        return None
 
     def _row_to_user(self, row: sqlite3.Row | None) -> StoreUser | None:
         if row is None:

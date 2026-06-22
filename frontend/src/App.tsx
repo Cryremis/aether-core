@@ -329,7 +329,7 @@ export default function App() {
             />
             <Route
               path="/platforms"
-              element={authed && currentUser?.can_manage_platforms ? <PlatformsPage currentUser={currentUser} /> : authed ? <Navigate to="/workbench" replace /> : <Navigate to="/" replace />}
+              element={authed && currentUser ? <PlatformsPage currentUser={currentUser} /> : <Navigate to="/" replace />}
             />
             <Route
               path="/platforms/:platformId"

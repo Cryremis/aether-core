@@ -67,6 +67,27 @@ export type PlatformRuntimeImageGuide = {
   build_spec: PlatformRuntimeImageBuildSpec;
 };
 
+export type PlatformSandboxProxyPayload = {
+  enabled: boolean;
+  http_proxy: string;
+  https_proxy: string;
+  all_proxy: string;
+  no_proxy: string;
+  inherit_host_proxy: boolean;
+};
+
+export type PlatformSandboxProxySummary = {
+  platform_id: number;
+  enabled: boolean;
+  http_proxy: string;
+  https_proxy: string;
+  all_proxy: string;
+  no_proxy: string;
+  inherit_host_proxy: boolean;
+  updated_at?: string | null;
+  recycled_runtime_count?: number;
+};
+
 export type PlatformIntegrationGuide = {
   platform_key: string;
   display_name: string;
@@ -443,6 +464,35 @@ export type AuditConversationDetail = {
   audit: AuditConversationSummary;
 };
 
+export type PlatformAuditOverviewItem = {
+  platform_id: number;
+  platform_key: string;
+  display_name: string;
+  owner_user_id: number;
+  owner_name: string;
+  admin_count: number;
+  hosted_user_count: number;
+  conversation_count: number;
+  message_count: number;
+  active_runtime_count: number;
+  runtime_count: number;
+  last_activity_at?: string | null;
+};
+
+export type SystemAuditOverview = {
+  platform_count: number;
+  platforms_with_traffic_count: number;
+  hosted_user_count: number;
+  internal_user_count: number;
+  platform_admin_assignment_count: number;
+  pending_registration_request_count: number;
+  conversation_count: number;
+  message_count: number;
+  active_runtime_count: number;
+  runtime_count: number;
+  platforms: PlatformAuditOverviewItem[];
+};
+
 export type WorkItemStatus = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
 export type WorkboardStatus = "idle" | "active" | "completed" | "blocked";
 
@@ -742,6 +792,36 @@ export async function deletePlatformRuntimeImage(platformId: number) {
   });
   if (!response.ok) {
     throw new Error(`清除平台运行镜像失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getPlatformSandboxProxyConfig(platformId: number) {
+  const response = await apiFetch(`/platform-sandbox-proxy/platform/${platformId}`);
+  if (!response.ok) {
+    throw new Error(`获取平台 sandbox 代理配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function updatePlatformSandboxProxyConfig(platformId: number, payload: PlatformSandboxProxyPayload) {
+  const response = await apiFetch(`/platform-sandbox-proxy/platform/${platformId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`更新平台 sandbox 代理配置失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function deletePlatformSandboxProxyConfig(platformId: number) {
+  const response = await apiFetch(`/platform-sandbox-proxy/platform/${platformId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(`删除平台 sandbox 代理配置失败: ${response.status}`);
   }
   return response.json();
 }
@@ -1210,6 +1290,14 @@ export async function getAdminConversationDetail(sessionId: string) {
   const response = await apiFetch(`/admin/conversations/${encodeURIComponent(sessionId)}`);
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, `获取审计会话详情失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function getSystemAuditOverview() {
+  const response = await apiFetch("/admin/audit/overview");
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `获取系统审计概览失败: ${response.status}`));
   }
   return response.json();
 }

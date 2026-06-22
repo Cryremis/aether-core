@@ -4,8 +4,10 @@ import type {
   AuditConversationDetail,
   AuditConversationSummary,
   CurrentUserProfile,
+  PlatformAuditOverviewItem,
   PlatformRegistrationRequestSummary,
   SessionRuntimeSummary,
+  SystemAuditOverview,
   TranscriptAssistantBlock,
   TranscriptChatMessage,
   UserSummary,
@@ -15,6 +17,7 @@ import {
   assignPlatformAdmin,
   collectAdminRuntime,
   getAdminConversationDetail,
+  getSystemAuditOverview,
   listAdminConversations,
   listAdminRuntimes,
   listAdminRuntimesHistory,
@@ -52,7 +55,7 @@ type PlatformAdminRecord = {
   is_primary: boolean;
 };
 
-type ManagementTab = "config" | "approvals" | "users" | "admins" | "runtimes" | "audit";
+type ManagementTab = "config" | "approvals" | "users" | "admins" | "runtimes" | "audit" | "systemAudit";
 
 function formatRequestStatus(status: PlatformRegistrationRequestSummary["status"]) {
   if (status === "pending") return "待审批";
@@ -248,6 +251,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
   const [requests, setRequests] = useState<PlatformRegistrationRequestSummary[]>([]);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [runtimes, setRuntimes] = useState<SessionRuntimeSummary[]>([]);
+  const [systemAuditOverview, setSystemAuditOverview] = useState<SystemAuditOverview | null>(null);
   const [auditConversations, setAuditConversations] = useState<AuditConversationSummary[]>([]);
   const [selectedAuditSessionId, setSelectedAuditSessionId] = useState<string>("");
   const [selectedAuditDetail, setSelectedAuditDetail] = useState<AuditConversationDetail | null>(null);
@@ -258,6 +262,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
   const [assignUserId, setAssignUserId] = useState<number | null>(null);
   const [showRuntimeHistory, setShowRuntimeHistory] = useState(false);
   const [auditBusy, setAuditBusy] = useState(false);
+  const [systemAuditBusy, setSystemAuditBusy] = useState(false);
   const [error, setError] = useState("");
   const [busyRequestId, setBusyRequestId] = useState<number | null>(null);
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
@@ -314,6 +319,16 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
   const loadRuntimes = async (includeHistory: boolean) => {
     const result = includeHistory ? await listAdminRuntimesHistory() : await listAdminRuntimes();
     setRuntimes((result.data ?? []) as SessionRuntimeSummary[]);
+  };
+
+  const loadSystemAuditOverview = async () => {
+    setSystemAuditBusy(true);
+    try {
+      const result = await getSystemAuditOverview();
+      setSystemAuditOverview((result.data ?? null) as SystemAuditOverview | null);
+    } finally {
+      setSystemAuditBusy(false);
+    }
   };
 
   const loadAuditSessions = async (platformId?: number | null) => {
@@ -400,6 +415,15 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
         setError(err instanceof Error ? err.message : "加载审计会话详情失败");
       });
   }, [activeTab, canManage, selectedAuditSessionId]);
+
+  useEffect(() => {
+    if (!canManageSystem || activeTab !== "systemAudit") {
+      return;
+    }
+    void loadSystemAuditOverview().catch((err) => {
+      setError(err instanceof Error ? err.message : "加载系统审计概览失败");
+    });
+  }, [activeTab, canManageSystem]);
 
   const handleApprove = async (requestId: number) => {
     const reviewComment = window.prompt("审批备注（可选）", "") ?? "";
@@ -540,6 +564,11 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
             {canManageSystem ? (
               <button type="button" className={`admin-tab-btn ${activeTab === "users" ? "is-active" : ""}`} onClick={() => setActiveTab("users")}>
                 用户授权
+              </button>
+            ) : null}
+            {canManageSystem ? (
+              <button type="button" className={`admin-tab-btn ${activeTab === "systemAudit" ? "is-active" : ""}`} onClick={() => setActiveTab("systemAudit")}>
+                审计概览
               </button>
             ) : null}
             {canManageSystem ? (
@@ -720,6 +749,98 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                   </div>
                 </article>
               ))}
+            </div>
+          </section>
+        )}
+
+        {canManageSystem && activeTab === "systemAudit" && (
+          <section className="management-console__section epic-glass stagger-3">
+            <div className="management-console__section-head">
+              <div>
+                <h4>系统审计概览</h4>
+                <p>按宿主平台聚合查看承载用户、会话消息和 runtime 规模，便于判断整体接入与负载情况。</p>
+              </div>
+              <button type="button" className="action-button action-button--ghost" disabled={systemAuditBusy} onClick={() => void loadSystemAuditOverview()}>
+                {systemAuditBusy ? "刷新中..." : "刷新"}
+              </button>
+            </div>
+
+            <div className="management-console__stats-grid">
+              <article className="management-console__stat-card">
+                <span>承载用户数</span>
+                <strong>{systemAuditOverview?.hosted_user_count ?? 0}</strong>
+                <p>跨所有宿主平台去重后的用户总数</p>
+              </article>
+              <article className="management-console__stat-card">
+                <span>承载消息数</span>
+                <strong>{systemAuditOverview?.message_count ?? 0}</strong>
+                <p>所有宿主平台会话累计消息量</p>
+              </article>
+              <article className="management-console__stat-card">
+                <span>宿主平台数</span>
+                <strong>{systemAuditOverview?.platform_count ?? 0}</strong>
+                <p>已注册的 embedded 宿主平台总数</p>
+              </article>
+              <article className="management-console__stat-card">
+                <span>活跃 Runtime</span>
+                <strong>{systemAuditOverview?.active_runtime_count ?? 0}</strong>
+                <p>当前正在运行、创建中或执行中的容器</p>
+              </article>
+              <article className="management-console__stat-card">
+                <span>宿主会话数</span>
+                <strong>{systemAuditOverview?.conversation_count ?? 0}</strong>
+                <p>所有宿主平台累计会话数</p>
+              </article>
+              <article className="management-console__stat-card">
+                <span>内部账号数</span>
+                <strong>{systemAuditOverview?.internal_user_count ?? 0}</strong>
+                <p>AetherCore 当前已存在的登录账号数</p>
+              </article>
+              <article className="management-console__stat-card">
+                <span>负责人指派数</span>
+                <strong>{systemAuditOverview?.platform_admin_assignment_count ?? 0}</strong>
+                <p>所有宿主平台上的负责人绑定总数</p>
+              </article>
+              <article className="management-console__stat-card">
+                <span>待审批申请</span>
+                <strong>{systemAuditOverview?.pending_registration_request_count ?? 0}</strong>
+                <p>当前待处理的平台接入申请</p>
+              </article>
+            </div>
+
+            <div className="management-console__section-head management-console__section-head--subtle">
+              <div>
+                <h4>平台承载明细</h4>
+                <p>按平台查看用户、消息、会话和 runtime 分布。</p>
+              </div>
+              <span className="management-console__metric">{systemAuditOverview?.platforms_with_traffic_count ?? 0} 个平台已有业务流量</span>
+            </div>
+
+            <div className="management-console__table">
+              {!systemAuditOverview || systemAuditOverview.platforms.length === 0 ? (
+                <div className="admin-panel__empty">当前还没有宿主平台审计数据。</div>
+              ) : (
+                systemAuditOverview.platforms.map((platform: PlatformAuditOverviewItem) => (
+                  <article key={platform.platform_id} className="management-console__audit-summary-card">
+                    <div className="management-console__card-head">
+                      <div>
+                        <strong>{platform.display_name}</strong>
+                        <p>{platform.platform_key}</p>
+                      </div>
+                      <span className="request-status request-status--returned">{platform.hosted_user_count} 用户</span>
+                    </div>
+                    <div className="management-console__summary-metrics">
+                      <span>负责人：{platform.owner_name}</span>
+                      <span>负责人席位：{platform.admin_count}</span>
+                      <span>会话：{platform.conversation_count}</span>
+                      <span>消息：{platform.message_count}</span>
+                      <span>活跃 Runtime：{platform.active_runtime_count}</span>
+                      <span>Runtime 总数：{platform.runtime_count}</span>
+                      <span>最近活动：{formatTime(platform.last_activity_at)}</span>
+                    </div>
+                  </article>
+                ))
+              )}
             </div>
           </section>
         )}

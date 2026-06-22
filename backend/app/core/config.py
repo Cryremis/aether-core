@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     sandbox_docker_network_mode: str = "bridge"
     sandbox_docker_auto_dns_from_host: bool = True
     sandbox_docker_dns_servers: list[str] = Field(default_factory=list)
+    sandbox_proxy_enabled: bool = False
+    sandbox_proxy_http: str = ""
+    sandbox_proxy_https: str = ""
+    sandbox_proxy_all: str = ""
+    sandbox_proxy_no_proxy: str = ""
+    sandbox_proxy_inherit_host_proxy: bool = True
     sandbox_docker_env_passthrough: list[str] = Field(
         default_factory=lambda: [
             "HTTP_PROXY",

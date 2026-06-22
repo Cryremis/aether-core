@@ -7,6 +7,7 @@ import {
   createPlatform,
   deletePlatformLlmConfig,
   deletePlatformPromptConfig,
+  deletePlatformSandboxProxyConfig,
   deletePlatformRuntimeImage,
   deletePlatformBaselineFile,
   downloadPlatformBaselineFile,
@@ -15,6 +16,7 @@ import {
   getPlatformIntegrationGuide,
   getPlatformLlmConfig,
   getPlatformPromptConfig,
+  getPlatformSandboxProxyConfig,
   getPlatformRuntimeImage,
   getPlatformRuntimeImageGuide,
   listPlatforms,
@@ -22,6 +24,7 @@ import {
   PlatformIntegrationGuide,
   savePlatformBaselineTextFile,
   updatePlatformPromptConfig,
+  updatePlatformSandboxProxyConfig,
   updatePlatformLlmConfig,
   updatePlatformRuntimeImage,
   uploadPlatformRuntimeImage,
@@ -36,6 +39,7 @@ import { IntegrationGuideModal } from "./admin/IntegrationGuideModal";
 import { PlatformList } from "./admin/PlatformList";
 import { PlatformLlmPanel } from "./admin/PlatformLlmPanel";
 import { PlatformPromptPanel } from "./admin/PlatformPromptPanel";
+import { PlatformSandboxProxyPanel } from "./admin/PlatformSandboxProxyPanel";
 import { PlatformRuntimeImagePanel } from "./admin/PlatformRuntimeImagePanel";
 import { SkillUploadModal } from "./admin/SkillUploadModal";
 import { useAppPreferences } from "../i18n";
@@ -44,6 +48,7 @@ import type {
   PlatformBaselineEntryItem,
   PlatformBaselineFileItem,
   PlatformItem,
+  PlatformSandboxProxyFormState,
   PlatformRuntimeImageFormState,
   PromptConfigFormState,
 } from "./admin/types";
@@ -54,7 +59,7 @@ type AdminPanelProps = {
   initialPlatformId?: number | null;
 };
 
-type PlatformSettingsView = "image" | "prompt" | "llm";
+type PlatformSettingsView = "image" | "proxy" | "prompt" | "llm";
 
 export function AdminPanel({ role, mode = "overview", initialPlatformId = null }: AdminPanelProps) {
   const { t } = useAppPreferences();
@@ -113,6 +118,17 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
   });
   const [runtimeImageError, setRuntimeImageError] = useState("");
   const [runtimeImageBusy, setRuntimeImageBusy] = useState(false);
+  const [sandboxProxyForm, setSandboxProxyForm] = useState<PlatformSandboxProxyFormState>({
+    enabled: false,
+    http_proxy: "",
+    https_proxy: "",
+    all_proxy: "",
+    no_proxy: "",
+    inherit_host_proxy: true,
+    recycledRuntimeCount: null,
+  });
+  const [sandboxProxyError, setSandboxProxyError] = useState("");
+  const [sandboxProxyBusy, setSandboxProxyBusy] = useState(false);
   const [settingsView, setSettingsView] = useState<PlatformSettingsView>("image");
   const [integrationGuide, setIntegrationGuide] = useState<PlatformIntegrationGuide | null>(null);
   const [integrationGuideError, setIntegrationGuideError] = useState("");
@@ -184,6 +200,16 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         recycledRuntimeCount: null,
         guide: null,
       });
+      setSandboxProxyError("");
+      setSandboxProxyForm({
+        enabled: false,
+        http_proxy: "",
+        https_proxy: "",
+        all_proxy: "",
+        no_proxy: "",
+        inherit_host_proxy: true,
+        recycledRuntimeCount: null,
+      });
       return;
     }
     void (async () => {
@@ -243,6 +269,32 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         });
       } catch (err) {
         setPromptError(err instanceof Error ? err.message : "加载平台提示词配置失败");
+      }
+    })();
+    void (async () => {
+      try {
+        setSandboxProxyError("");
+        const result = await getPlatformSandboxProxyConfig(activePlatformId);
+        const data = (result.data ?? null) as {
+          enabled?: boolean;
+          http_proxy?: string;
+          https_proxy?: string;
+          all_proxy?: string;
+          no_proxy?: string;
+          inherit_host_proxy?: boolean;
+          recycled_runtime_count?: number;
+        } | null;
+        setSandboxProxyForm({
+          enabled: data?.enabled ?? false,
+          http_proxy: data?.http_proxy ?? "",
+          https_proxy: data?.https_proxy ?? "",
+          all_proxy: data?.all_proxy ?? "",
+          no_proxy: data?.no_proxy ?? "",
+          inherit_host_proxy: data?.inherit_host_proxy ?? true,
+          recycledRuntimeCount: data?.recycled_runtime_count ?? null,
+        });
+      } catch (err) {
+        setSandboxProxyError(err instanceof Error ? err.message : "加载平台 sandbox 代理配置失败");
       }
     })();
     void (async () => {
@@ -421,6 +473,7 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
   const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
   const settingsTabs: Array<{ key: PlatformSettingsView; title: string; description: string }> = [
     { key: "image", title: t("admin.tab.image"), description: t("admin.tab.imageDesc") },
+    { key: "proxy", title: t("admin.tab.proxy"), description: t("admin.tab.proxyDesc") },
     { key: "prompt", title: t("admin.tab.prompt"), description: t("admin.tab.promptDesc") },
     { key: "llm", title: t("admin.tab.llm"), description: t("admin.tab.llmDesc") },
   ];
@@ -586,6 +639,78 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
       setRuntimeImageError(err instanceof Error ? err.message : "保存平台运行镜像失败");
     } finally {
       setRuntimeImageBusy(false);
+    }
+  };
+
+  const handleSavePlatformSandboxProxy = async () => {
+    if (!activePlatformId) return;
+    try {
+      setSandboxProxyBusy(true);
+      setSandboxProxyError("");
+      const result = await updatePlatformSandboxProxyConfig(activePlatformId, {
+        enabled: sandboxProxyForm.enabled,
+        http_proxy: sandboxProxyForm.http_proxy.trim(),
+        https_proxy: sandboxProxyForm.https_proxy.trim(),
+        all_proxy: sandboxProxyForm.all_proxy.trim(),
+        no_proxy: sandboxProxyForm.no_proxy.trim(),
+        inherit_host_proxy: sandboxProxyForm.inherit_host_proxy,
+      });
+      const data = (result.data ?? {}) as {
+        enabled?: boolean;
+        http_proxy?: string;
+        https_proxy?: string;
+        all_proxy?: string;
+        no_proxy?: string;
+        inherit_host_proxy?: boolean;
+        recycled_runtime_count?: number;
+      };
+      setSandboxProxyForm({
+        enabled: data.enabled ?? false,
+        http_proxy: data.http_proxy ?? "",
+        https_proxy: data.https_proxy ?? "",
+        all_proxy: data.all_proxy ?? "",
+        no_proxy: data.no_proxy ?? "",
+        inherit_host_proxy: data.inherit_host_proxy ?? true,
+        recycledRuntimeCount: data.recycled_runtime_count ?? null,
+      });
+      await loadData();
+    } catch (err) {
+      setSandboxProxyError(err instanceof Error ? err.message : "保存平台 sandbox 代理配置失败");
+    } finally {
+      setSandboxProxyBusy(false);
+    }
+  };
+
+  const handleResetPlatformSandboxProxy = async () => {
+    if (!activePlatformId) return;
+    if (!window.confirm("确定删除该平台的专属 sandbox 代理配置并回退到全局默认吗？")) return;
+    try {
+      setSandboxProxyBusy(true);
+      setSandboxProxyError("");
+      const result = await deletePlatformSandboxProxyConfig(activePlatformId);
+      const data = (result.data ?? {}) as {
+        enabled?: boolean;
+        http_proxy?: string;
+        https_proxy?: string;
+        all_proxy?: string;
+        no_proxy?: string;
+        inherit_host_proxy?: boolean;
+        recycled_runtime_count?: number;
+      };
+      setSandboxProxyForm({
+        enabled: data.enabled ?? false,
+        http_proxy: data.http_proxy ?? "",
+        https_proxy: data.https_proxy ?? "",
+        all_proxy: data.all_proxy ?? "",
+        no_proxy: data.no_proxy ?? "",
+        inherit_host_proxy: data.inherit_host_proxy ?? true,
+        recycledRuntimeCount: data.recycled_runtime_count ?? null,
+      });
+      await loadData();
+    } catch (err) {
+      setSandboxProxyError(err instanceof Error ? err.message : "清除平台 sandbox 代理配置失败");
+    } finally {
+      setSandboxProxyBusy(false);
     }
   };
 
@@ -834,6 +959,17 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
                     onSave={() => void handleSavePlatformRuntimeImage()}
                     onReset={() => void handleResetPlatformRuntimeImage()}
                     onUpload={(file) => void handleUploadPlatformRuntimeImage(file)}
+                  />
+                ) : null}
+
+                {settingsView === "proxy" ? (
+                  <PlatformSandboxProxyPanel
+                    sandboxProxyForm={sandboxProxyForm}
+                    sandboxProxyError={sandboxProxyError}
+                    sandboxProxyBusy={sandboxProxyBusy}
+                    onChange={setSandboxProxyForm}
+                    onSave={() => void handleSavePlatformSandboxProxy()}
+                    onReset={() => void handleResetPlatformSandboxProxy()}
                   />
                 ) : null}
 

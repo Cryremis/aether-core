@@ -11,6 +11,13 @@ export type PlatformItem = {
   sandbox_image?: string | null;
   resolved_sandbox_image: string;
   sandbox_image_updated_at?: string | null;
+  sandbox_proxy_enabled: boolean;
+  sandbox_proxy_http: string;
+  sandbox_proxy_https: string;
+  sandbox_proxy_all: string;
+  sandbox_proxy_no_proxy: string;
+  sandbox_proxy_inherit_host_proxy: boolean;
+  sandbox_proxy_updated_at?: string | null;
 };
 
 export type PlatformBaselineFileItem = {
@@ -55,6 +62,16 @@ export type PlatformRuntimeImageFormState = {
   resolvedImage: string;
   recycledRuntimeCount: number | null;
   guide: PlatformRuntimeImageGuide | null;
+};
+
+export type PlatformSandboxProxyFormState = {
+  enabled: boolean;
+  http_proxy: string;
+  https_proxy: string;
+  all_proxy: string;
+  no_proxy: string;
+  inherit_host_proxy: boolean;
+  recycledRuntimeCount: number | null;
 };
 
 export type IntegrationGuideState = {

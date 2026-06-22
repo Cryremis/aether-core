@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable
 from app.core.config import settings
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 from app.services.platform_runtime_image_service import platform_runtime_image_service
+from app.services.platform_sandbox_proxy_service import EffectiveSandboxProxyConfig, platform_sandbox_proxy_service
 from app.services.session_workspace_sync_service import session_workspace_sync_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service, utcnow_iso
@@ -302,6 +303,7 @@ class SessionRuntimeService:
         docker_binary = self._require_docker_binary()
         conversation = store_service.get_conversation_by_session(workspace.session_id) or {}
         runtime_image = await platform_runtime_image_service.ensure_platform_runtime_image(conversation.get("platform_id"))
+        proxy_config = platform_sandbox_proxy_service.resolve_for_platform(conversation.get("platform_id"))
         created_at = utcnow_iso()
         max_expires_at = self._to_iso(self._now() + timedelta(seconds=settings.sandbox_runtime_max_age_seconds))
         idle_expires_at = self._to_iso(self._now() + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds))
@@ -333,7 +335,7 @@ class SessionRuntimeService:
         )
         process = await asyncio.create_subprocess_exec(
             docker_binary,
-            *self._build_run_args(workspace, container_name, runtime_image),
+            *self._build_run_args(workspace, container_name, runtime_image, proxy_config),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             **self._subprocess_kwargs(),
@@ -532,7 +534,13 @@ class SessionRuntimeService:
             metadata=runtime.get("metadata") or self._build_runtime_metadata(str(runtime.get("image") or ""), workspace),
         )
 
-    def _build_run_args(self, workspace: SandboxWorkspace, container_name: str, image: str) -> list[str]:
+    def _build_run_args(
+        self,
+        workspace: SandboxWorkspace,
+        container_name: str,
+        image: str,
+        proxy_config: EffectiveSandboxProxyConfig | None = None,
+    ) -> list[str]:
         args = [
             "run",
             "-d",
@@ -593,7 +601,7 @@ class SessionRuntimeService:
             "--env",
             f"DOTNET_CLI_HOME={settings.sandbox_docker_home_dir}",
         ]
-        for env_name, env_value in self._build_passthrough_env_vars().items():
+        for env_name, env_value in self._build_proxy_env_vars(proxy_config).items():
             args.extend(["--env", f"{env_name}={env_value}"])
         if settings.sandbox_docker_read_only_rootfs:
             args.append("--read-only")
@@ -615,7 +623,13 @@ class SessionRuntimeService:
         )
         return args
 
-    def _build_exec_args(self, container_name: str, shell: str, command: str) -> list[str]:
+    def _build_exec_args(
+        self,
+        container_name: str,
+        shell: str,
+        command: str,
+        proxy_config: EffectiveSandboxProxyConfig | None = None,
+    ) -> list[str]:
         args = [
             "exec",
             "--user",
@@ -656,8 +670,10 @@ class SessionRuntimeService:
             "CLICOLOR_FORCE=1",
             "--env",
             "PYTHONUNBUFFERED=1",
-            container_name,
         ]
+        for env_name, env_value in self._build_proxy_env_vars(proxy_config).items():
+            args.extend(["--env", f"{env_name}={env_value}"])
+        args.append(container_name)
         if shell == "bash":
             return [*args, "/bin/bash", "-lc", command]
         if shell == "powershell":
@@ -1114,8 +1130,11 @@ class SessionRuntimeService:
         command: str,
     ) -> asyncio.subprocess.Process:
         docker_binary = self._require_docker_binary()
+        session_id = self._extract_session_id_from_container_name(container_name)
+        runtime = store_service.get_session_runtime(session_id) if session_id else None
+        proxy_config = platform_sandbox_proxy_service.resolve_for_platform(runtime.get("platform_id") if runtime else None)
         exec_command = self._wrap_command_for_terminal(command) if shell == "bash" else command
-        exec_args = ["exec", "-i", *self._build_exec_args(container_name, shell, exec_command)[1:]]
+        exec_args = ["exec", "-i", *self._build_exec_args(container_name, shell, exec_command, proxy_config)[1:]]
 
         if os.name == "nt" or not hasattr(os, "fork"):
             return await asyncio.create_subprocess_exec(
@@ -1348,6 +1367,27 @@ class SessionRuntimeService:
             if env_value:
                 passthrough[env_name] = env_value
         return passthrough
+
+    def _build_proxy_env_vars(self, proxy_config: EffectiveSandboxProxyConfig | None) -> dict[str, str]:
+        effective = proxy_config or platform_sandbox_proxy_service.resolve_for_platform(None)
+        if effective.enabled:
+            explicit = effective.to_env_map()
+            if explicit:
+                return explicit
+            if not effective.inherit_host_proxy:
+                return {}
+        if not effective.inherit_host_proxy:
+            return {}
+        return self._build_passthrough_env_vars()
+
+    def _extract_session_id_from_container_name(self, container_name: str) -> str | None:
+        prefix = "aethercore-rt-"
+        if not container_name.startswith(prefix):
+            return None
+        remainder = container_name[len(prefix):]
+        if "-g" not in remainder:
+            return None
+        return remainder.rsplit("-g", 1)[0]
 
     def _is_retryable_dns_failure(self, stdout_text: str, stderr_text: str) -> bool:
         combined = f"{stdout_text}\n{stderr_text}".lower()
