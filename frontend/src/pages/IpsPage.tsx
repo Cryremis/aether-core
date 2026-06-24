@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { getSystemNetworkSnapshot, type CurrentUserProfile, type SystemNetworkAddress, type SystemNetworkSnapshot } from "../api/client";
+import {
+  addRouteFor80Network,
+  getSystemNetworkSnapshot,
+  type AddRouteFor80NetworkResult,
+  type CurrentUserProfile,
+  type SystemNetworkAddress,
+  type SystemNetworkSnapshot,
+} from "../api/client";
 import { useAppPreferences } from "../i18n";
 
 type IpsPageProps = {
@@ -28,11 +35,14 @@ export function IpsPage({ currentUser }: IpsPageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [rawOpen, setRawOpen] = useState(false);
+  const [routeBusyIp, setRouteBusyIp] = useState("");
+  const [routeResult, setRouteResult] = useState<AddRouteFor80NetworkResult | null>(null);
 
   const loadData = async () => {
     try {
       setLoading(true);
       setError("");
+      setRouteResult(null);
       const result = await getSystemNetworkSnapshot();
       setSnapshot((result.data ?? null) as SystemNetworkSnapshot | null);
       setRawOpen(false);
@@ -46,6 +56,30 @@ export function IpsPage({ currentUser }: IpsPageProps) {
   useEffect(() => {
     void loadData();
   }, []);
+
+  const addressesStartingWith80 = snapshot
+    ? snapshot.interfaces.flatMap((item) =>
+        item.addresses
+          .filter((address) => address.family === "ipv4" && address.address.startsWith("80."))
+          .map((address) => ({
+            interfaceName: item.display_name || item.name,
+            address,
+          })),
+      )
+    : [];
+
+  const handleAddRoute = async (gatewayIp: string) => {
+    try {
+      setRouteBusyIp(gatewayIp);
+      setError("");
+      const result = await addRouteFor80Network(gatewayIp);
+      setRouteResult((result.data ?? null) as AddRouteFor80NetworkResult | null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "执行 80 网段路由失败");
+    } finally {
+      setRouteBusyIp("");
+    }
+  };
 
   return (
     <main className="ips-page">
@@ -115,6 +149,49 @@ export function IpsPage({ currentUser }: IpsPageProps) {
 
           <section className="ips-note-strip">
             <p>{snapshot.scope_note}</p>
+          </section>
+
+          <section className="ips-special-route-panel">
+            <div className="ips-special-route-panel__head">
+              <div>
+                <h2>80 段专用路由</h2>
+                <p>单独显示当前实时采集到的 `80.*` IPv4 地址，并可一键执行 `route add -net 80.0.0.0 netmask 255.0.0.0 gw 80.xxx`。</p>
+              </div>
+              <span className="ips-special-route-panel__count">{addressesStartingWith80.length} 个 80 段地址</span>
+            </div>
+
+            {addressesStartingWith80.length === 0 ? (
+              <div className="ips-special-route-panel__empty">当前没有发现以 80 开头的 IPv4 地址。</div>
+            ) : (
+              <div className="ips-special-route-list">
+                {addressesStartingWith80.map(({ interfaceName, address }) => (
+                  <article key={`${interfaceName}-${address.address}`} className="ips-special-route-card">
+                    <div className="ips-special-route-card__meta">
+                      <strong>{address.address}</strong>
+                      <span>{interfaceName}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="home-button home-button--primary ips-special-route-card__action"
+                      disabled={routeBusyIp === address.address}
+                      onClick={() => void handleAddRoute(address.address)}
+                    >
+                      {routeBusyIp === address.address ? "执行中..." : "添加 80 网段路由"}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
+
+            {routeResult ? (
+              <div className="ips-special-route-result">
+                <strong>最近一次执行成功</strong>
+                <code>{routeResult.command}</code>
+                <span>使用网关：{routeResult.gateway_ip}</span>
+                {routeResult.stdout ? <pre>{routeResult.stdout}</pre> : null}
+                {routeResult.stderr ? <pre>{routeResult.stderr}</pre> : null}
+              </div>
+            ) : null}
           </section>
 
           {snapshot.interfaces.length === 0 ? <div className="platforms-empty">{t("ips.empty")}</div> : null}

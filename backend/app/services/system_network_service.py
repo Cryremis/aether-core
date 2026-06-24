@@ -113,6 +113,77 @@ class SystemNetworkService:
             raw_text=None,
         )
 
+    def list_80_prefix_ipv4_addresses(self, snapshot: SystemNetworkSnapshot | None = None) -> list[str]:
+        """提取当前快照中所有以 80. 开头的 IPv4 地址，按发现顺序去重返回。"""
+        effective_snapshot = snapshot or self.get_snapshot()
+        matches: list[str] = []
+        seen: set[str] = set()
+        for interface in effective_snapshot.interfaces:
+            for address in interface.addresses:
+                if address.family != "ipv4":
+                    continue
+                if not address.address.startswith("80."):
+                    continue
+                if address.address in seen:
+                    continue
+                seen.add(address.address)
+                matches.append(address.address)
+        return matches
+
+    def apply_route_for_80_network(self, gateway_ip: str | None = None) -> dict[str, Any]:
+        """使用当前服务器上的 80.* IPv4 地址为 80.0.0.0/8 添加静态路由。"""
+        if platform.system().lower() != "linux":
+            raise RuntimeError("当前仅支持在 Linux 宿主机上执行 route 命令。")
+
+        snapshot = self.get_snapshot()
+        candidates = self.list_80_prefix_ipv4_addresses(snapshot)
+        if not candidates:
+            raise RuntimeError("当前服务器未发现 80 开头的 IPv4 地址，无法执行 route add。")
+
+        selected_gateway = gateway_ip.strip() if gateway_ip else candidates[0]
+        if selected_gateway not in candidates:
+            raise RuntimeError("指定的 80 开头网关地址不在当前实时采集结果中。")
+
+        command = [
+            "route",
+            "add",
+            "-net",
+            "80.0.0.0",
+            "netmask",
+            "255.0.0.0",
+            "gw",
+            selected_gateway,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("宿主机未找到 route 命令。") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("route add 命令执行超时。") from exc
+        except OSError as exc:
+            raise RuntimeError(f"执行 route add 命令失败：{exc}") from exc
+
+        stdout_text = self._decode_output(completed.stdout).strip()
+        stderr_text = self._decode_output(completed.stderr).strip()
+        if completed.returncode != 0:
+            error_text = stderr_text or stdout_text or f"route add 命令退出码为 {completed.returncode}"
+            raise RuntimeError(error_text)
+
+        return {
+            "gateway_ip": selected_gateway,
+            "available_gateway_ips": candidates,
+            "command": " ".join(command),
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "return_code": completed.returncode,
+            "namespace_scope": snapshot.namespace_scope,
+        }
+
     def _build_snapshot(
         self,
         *,

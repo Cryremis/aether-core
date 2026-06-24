@@ -192,6 +192,60 @@ def test_system_network_endpoint_returns_snapshot_for_system_admin(tmp_path, mon
     assert payload["interfaces"][0]["addresses"][0]["address"] == "192.168.10.5"
 
 
+def test_add_80_route_endpoint_requires_system_admin(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+
+    store_service.create_or_update_oauth_user(
+        provider="corp-sso",
+        provider_user_id="user-ips-route-001",
+        full_name="Regular User",
+        email="regular@example.com",
+    )
+    user = store_service.get_user_by_provider("corp-sso", "user-ips-route-001")
+    assert user is not None
+
+    from app.services.token_service import token_service
+
+    user_token, _ = token_service.create_user_token(user.user_id, user.role)
+    client = TestClient(app)
+    response = client.post("/api/v1/admin/ips/routes/80", headers={"Authorization": f"Bearer {user_token}"})
+
+    assert response.status_code == 403
+
+
+def test_add_80_route_endpoint_executes_for_system_admin(tmp_path, monkeypatch):
+    initialize_isolated_runtime(tmp_path)
+
+    login = auth_service.login_with_password(
+        settings.auth_system_admin_username,
+        settings.auth_system_admin_password,
+    )
+
+    def fake_apply_route(gateway_ip: str | None = None):
+        return {
+            "gateway_ip": gateway_ip or "80.12.34.56",
+            "available_gateway_ips": ["80.12.34.56"],
+            "command": f"route add -net 80.0.0.0 netmask 255.0.0.0 gw {gateway_ip or '80.12.34.56'}",
+            "stdout": "ok",
+            "stderr": "",
+            "return_code": 0,
+            "namespace_scope": "host",
+        }
+
+    monkeypatch.setattr(system_network_service, "apply_route_for_80_network", fake_apply_route)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/admin/ips/routes/80?gateway_ip=80.12.34.56",
+        headers={"Authorization": f"Bearer {login.token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["gateway_ip"] == "80.12.34.56"
+    assert payload["command"].endswith("gw 80.12.34.56")
+
+
 def test_conversations_are_isolated_for_internal_users_and_host_users(tmp_path):
     initialize_isolated_runtime(tmp_path)
 

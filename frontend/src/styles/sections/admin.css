@@ -2923,6 +2923,121 @@
   background: linear-gradient(135deg, color-mix(in srgb, var(--brand-cyan) 10%, transparent), color-mix(in srgb, var(--surface-1) 92%, transparent));
 }
 
+.ips-special-route-panel {
+  margin-bottom: 18px;
+  padding: 20px 22px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--brand-amber) 10%, transparent), transparent 28%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 90%, transparent), color-mix(in srgb, var(--surface-0) 96%, transparent));
+  box-shadow: var(--shadow-sm);
+}
+
+.ips-special-route-panel__head,
+.ips-special-route-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ips-special-route-panel__head {
+  margin-bottom: 14px;
+}
+
+.ips-special-route-panel__head h2 {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.ips-special-route-panel__head p,
+.ips-special-route-panel__empty,
+.ips-special-route-card__meta span,
+.ips-special-route-result span {
+  color: var(--text-secondary);
+}
+
+.ips-special-route-panel__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-amber) 18%, var(--surface-1));
+  color: color-mix(in srgb, var(--brand-amber) 72%, var(--text-primary));
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ips-special-route-list {
+  display: grid;
+  gap: 12px;
+}
+
+.ips-special-route-card {
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-1) 86%, transparent);
+}
+
+.ips-special-route-card__meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ips-special-route-card__meta strong,
+.ips-special-route-result strong {
+  color: var(--text-primary);
+}
+
+.ips-special-route-card__meta strong,
+.ips-special-route-result code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+
+.ips-special-route-card__action {
+  white-space: nowrap;
+}
+
+.ips-special-route-panel__empty {
+  padding: 14px 16px;
+  border: 1px dashed var(--line-soft);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+}
+
+.ips-special-route-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--brand-green) 28%, var(--line-soft));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand-green) 10%, var(--surface-1));
+}
+
+.ips-special-route-result code,
+.ips-special-route-result pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .ips-list-shell {
   overflow: hidden;
 }
@@ -3157,6 +3272,8 @@
 @media (max-width: 720px) {
   .ips-page__hero,
   .ips-page__hero-actions,
+  .ips-special-route-panel__head,
+  .ips-special-route-card,
   .ips-modal__header,
   .ips-address-row {
     flex-direction: column;

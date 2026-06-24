@@ -236,6 +236,16 @@ export type SystemNetworkSnapshot = {
   raw_text?: string | null;
 };
 
+export type AddRouteFor80NetworkResult = {
+  gateway_ip: string;
+  available_gateway_ips: string[];
+  command: string;
+  stdout: string;
+  stderr: string;
+  return_code: number;
+  namespace_scope: "host" | "container" | "unknown";
+};
+
 export type PlatformBaselineFile = {
   name: string;
   relative_path: string;
@@ -1273,6 +1283,17 @@ export async function getSystemNetworkSnapshot() {
   const response = await apiFetch("/admin/ips");
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, `获取服务器 IP 信息失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function addRouteFor80Network(gatewayIp?: string) {
+  const query = gatewayIp ? `?gateway_ip=${encodeURIComponent(gatewayIp)}` : "";
+  const response = await apiFetch(`/admin/ips/routes/80${query}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `执行 80 网段路由失败: ${response.status}`));
   }
   return response.json();
 }
