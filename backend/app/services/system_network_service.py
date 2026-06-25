@@ -14,6 +14,8 @@ from app.schemas.system_network import NetworkAddress, NetworkInterface, Network
 
 
 class SystemNetworkService:
+    _FIXED_80_ROUTE_GATEWAY = "80.253.32.1"
+
     def get_snapshot(self) -> SystemNetworkSnapshot:
         hostname = socket.gethostname()
         fqdn = socket.getfqdn() or None
@@ -130,20 +132,12 @@ class SystemNetworkService:
                 matches.append(address.address)
         return matches
 
-    def apply_route_for_80_network(self, gateway_ip: str | None = None) -> dict[str, Any]:
-        """使用当前服务器上的 80.* IPv4 地址为 80.0.0.0/8 添加静态路由。"""
+    def apply_route_for_80_network(self) -> dict[str, Any]:
+        """使用固定网关为 80.0.0.0/8 添加静态路由。"""
         if platform.system().lower() != "linux":
             raise RuntimeError("当前仅支持在 Linux 宿主机上执行 route 命令。")
 
         snapshot = self.get_snapshot()
-        candidates = self.list_80_prefix_ipv4_addresses(snapshot)
-        if not candidates:
-            raise RuntimeError("当前服务器未发现 80 开头的 IPv4 地址，无法执行 route add。")
-
-        selected_gateway = gateway_ip.strip() if gateway_ip else candidates[0]
-        if selected_gateway not in candidates:
-            raise RuntimeError("指定的 80 开头网关地址不在当前实时采集结果中。")
-
         command = [
             "route",
             "add",
@@ -152,7 +146,7 @@ class SystemNetworkService:
             "netmask",
             "255.0.0.0",
             "gw",
-            selected_gateway,
+            self._FIXED_80_ROUTE_GATEWAY,
         ]
         try:
             completed = subprocess.run(
@@ -175,8 +169,8 @@ class SystemNetworkService:
             raise RuntimeError(error_text)
 
         return {
-            "gateway_ip": selected_gateway,
-            "available_gateway_ips": candidates,
+            "gateway_ip": self._FIXED_80_ROUTE_GATEWAY,
+            "detected_80_prefix_ips": self.list_80_prefix_ipv4_addresses(snapshot),
             "command": " ".join(command),
             "stdout": stdout_text,
             "stderr": stderr_text,

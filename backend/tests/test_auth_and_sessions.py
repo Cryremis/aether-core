@@ -221,11 +221,11 @@ def test_add_80_route_endpoint_executes_for_system_admin(tmp_path, monkeypatch):
         settings.auth_system_admin_password,
     )
 
-    def fake_apply_route(gateway_ip: str | None = None):
+    def fake_apply_route():
         return {
-            "gateway_ip": gateway_ip or "80.12.34.56",
-            "available_gateway_ips": ["80.12.34.56"],
-            "command": f"route add -net 80.0.0.0 netmask 255.0.0.0 gw {gateway_ip or '80.12.34.56'}",
+            "gateway_ip": "80.253.32.1",
+            "detected_80_prefix_ips": ["80.12.34.56"],
+            "command": "route add -net 80.0.0.0 netmask 255.0.0.0 gw 80.253.32.1",
             "stdout": "ok",
             "stderr": "",
             "return_code": 0,
@@ -236,14 +236,14 @@ def test_add_80_route_endpoint_executes_for_system_admin(tmp_path, monkeypatch):
 
     client = TestClient(app)
     response = client.post(
-        "/api/v1/admin/ips/routes/80?gateway_ip=80.12.34.56",
+        "/api/v1/admin/ips/routes/80",
         headers={"Authorization": f"Bearer {login.token}"},
     )
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["gateway_ip"] == "80.12.34.56"
-    assert payload["command"].endswith("gw 80.12.34.56")
+    assert payload["gateway_ip"] == "80.253.32.1"
+    assert payload["command"].endswith("gw 80.253.32.1")
 
 
 def test_conversations_are_isolated_for_internal_users_and_host_users(tmp_path):

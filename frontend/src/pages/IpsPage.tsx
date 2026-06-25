@@ -35,7 +35,7 @@ export function IpsPage({ currentUser }: IpsPageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [rawOpen, setRawOpen] = useState(false);
-  const [routeBusyIp, setRouteBusyIp] = useState("");
+  const [routeBusy, setRouteBusy] = useState(false);
   const [routeResult, setRouteResult] = useState<AddRouteFor80NetworkResult | null>(null);
 
   const loadData = async () => {
@@ -68,16 +68,16 @@ export function IpsPage({ currentUser }: IpsPageProps) {
       )
     : [];
 
-  const handleAddRoute = async (gatewayIp: string) => {
+  const handleAddRoute = async () => {
     try {
-      setRouteBusyIp(gatewayIp);
+      setRouteBusy(true);
       setError("");
-      const result = await addRouteFor80Network(gatewayIp);
+      const result = await addRouteFor80Network();
       setRouteResult((result.data ?? null) as AddRouteFor80NetworkResult | null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "执行 80 网段路由失败");
     } finally {
-      setRouteBusyIp("");
+      setRouteBusy(false);
     }
   };
 
@@ -155,7 +155,7 @@ export function IpsPage({ currentUser }: IpsPageProps) {
             <div className="ips-special-route-panel__head">
               <div>
                 <h2>80 段专用路由</h2>
-                <p>单独显示当前实时采集到的 `80.*` IPv4 地址，并可一键执行 `route add -net 80.0.0.0 netmask 255.0.0.0 gw 80.xxx`。</p>
+                <p>单独显示当前实时采集到的 `80.*` IPv4 地址，并可一键执行固定命令 `route add -net 80.0.0.0 netmask 255.0.0.0 gw 80.253.32.1`。</p>
               </div>
               <span className="ips-special-route-panel__count">{addressesStartingWith80.length} 个 80 段地址</span>
             </div>
@@ -170,24 +170,27 @@ export function IpsPage({ currentUser }: IpsPageProps) {
                       <strong>{address.address}</strong>
                       <span>{interfaceName}</span>
                     </div>
-                    <button
-                      type="button"
-                      className="home-button home-button--primary ips-special-route-card__action"
-                      disabled={routeBusyIp === address.address}
-                      onClick={() => void handleAddRoute(address.address)}
-                    >
-                      {routeBusyIp === address.address ? "执行中..." : "添加 80 网段路由"}
-                    </button>
                   </article>
                 ))}
               </div>
             )}
 
+            <div className="ips-special-route-panel__actions">
+              <button
+                type="button"
+                className="home-button home-button--primary ips-special-route-card__action"
+                disabled={routeBusy}
+                onClick={() => void handleAddRoute()}
+              >
+                {routeBusy ? "执行中..." : "添加固定 80 网段路由"}
+              </button>
+            </div>
+
             {routeResult ? (
               <div className="ips-special-route-result">
                 <strong>最近一次执行成功</strong>
                 <code>{routeResult.command}</code>
-                <span>使用网关：{routeResult.gateway_ip}</span>
+                <span>固定网关：{routeResult.gateway_ip}</span>
                 {routeResult.stdout ? <pre>{routeResult.stdout}</pre> : null}
                 {routeResult.stderr ? <pre>{routeResult.stderr}</pre> : null}
               </div>

@@ -238,7 +238,7 @@ export type SystemNetworkSnapshot = {
 
 export type AddRouteFor80NetworkResult = {
   gateway_ip: string;
-  available_gateway_ips: string[];
+  detected_80_prefix_ips: string[];
   command: string;
   stdout: string;
   stderr: string;
@@ -1287,9 +1287,8 @@ export async function getSystemNetworkSnapshot() {
   return response.json();
 }
 
-export async function addRouteFor80Network(gatewayIp?: string) {
-  const query = gatewayIp ? `?gateway_ip=${encodeURIComponent(gatewayIp)}` : "";
-  const response = await apiFetch(`/admin/ips/routes/80${query}`, {
+export async function addRouteFor80Network() {
+  const response = await apiFetch(`/admin/ips/routes/80`, {
     method: "POST",
   });
   if (!response.ok) {

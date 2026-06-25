@@ -15,11 +15,10 @@ def get_system_network_snapshot(_auth: AuthContext = Depends(require_system_admi
 
 @router.post("/routes/80")
 def add_route_for_80_network(
-    gateway_ip: str | None = None,
     _auth: AuthContext = Depends(require_system_admin),
 ) -> ApiResponse:
     try:
-        result = system_network_service.apply_route_for_80_network(gateway_ip=gateway_ip)
+        result = system_network_service.apply_route_for_80_network()
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(message="80 网段静态路由已执行", data=result)
