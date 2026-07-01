@@ -11,6 +11,7 @@ type BaselineContextMenuProps = {
   onOpenDirectory: () => void;
   onEditFile: () => void;
   onDownloadFile: () => void;
+  onMove: () => void;
   onRename: () => void;
   onDelete: () => void;
 };
@@ -20,6 +21,7 @@ export function BaselineContextMenu({
   onOpenDirectory,
   onEditFile,
   onDownloadFile,
+  onMove,
   onRename,
   onDelete,
 }: BaselineContextMenuProps) {
@@ -43,6 +45,9 @@ export function BaselineContextMenu({
         </>
       )}
       <div className="context-menu__divider" />
+      <button className="context-menu__item" onClick={onMove}>
+        <Icons.ArrowRightCircle /> 移动到...
+      </button>
       <button className="context-menu__item" onClick={onRename}>
         <Icons.Edit2 /> 重命名
       </button>

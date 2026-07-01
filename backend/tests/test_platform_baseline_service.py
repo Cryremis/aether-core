@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import io
+import zipfile
 from pathlib import Path
 
 from app.core.config import settings
@@ -15,6 +18,20 @@ from app.services.session_service import session_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
 from app.services.session_workspace_sync_service import WorkspaceState, session_workspace_sync_service
+
+
+class FakeUploadFile:
+    def __init__(self, filename: str, content: bytes, content_type: str = "application/octet-stream") -> None:
+        self.filename = filename
+        self.content_type = content_type
+        self._content = content
+        self._read = False
+
+    async def read(self, _size: int = -1) -> bytes:
+        if self._read:
+            return b""
+        self._read = True
+        return self._content
 
 
 def initialize_store(tmp_path: Path) -> None:
@@ -196,3 +213,80 @@ def test_platform_baseline_file_manager_operations(tmp_path):
     import shutil
 
     shutil.rmtree(platform_root / "work" / "docs")
+
+
+def test_platform_baseline_imports_folder_tree(tmp_path):
+    initialize_store(tmp_path)
+
+    uploads = [
+        FakeUploadFile("README.md", b"# baseline\n", "text/markdown"),
+        FakeUploadFile("app.py", b"print('ok')\n", "text/x-python"),
+    ]
+
+    entries = asyncio.run(
+        platform_baseline_service.upload_file_tree(
+            "standalone",
+            uploads=uploads,
+            relative_paths=["docs/README.md", "repo/app.py"],
+            target_relative_dir="work",
+        )
+    )
+
+    platform_root = platform_baseline_service.ensure_platform_root("standalone")
+    assert len(entries) == 2
+    assert (platform_root / "work" / "docs" / "README.md").read_text(encoding="utf-8") == "# baseline\n"
+    assert (platform_root / "work" / "repo" / "app.py").read_text(encoding="utf-8") == "print('ok')\n"
+
+
+def test_platform_baseline_skill_upload_reports_invalid_binary_skill_file(tmp_path):
+    initialize_store(tmp_path)
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="不是 UTF-8 文本"):
+        asyncio.run(
+            platform_baseline_service.upload_skill(
+                "standalone",
+                upload_file=FakeUploadFile("broken-skill.md", b"\x1f\x8b\x08binary", "text/markdown"),
+            )
+        )
+
+
+def test_platform_baseline_skill_upload_reports_orphan_file_in_zip(tmp_path):
+    initialize_store(tmp_path)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("notes.txt", "orphan")
+        archive.writestr("analysis-helper/SKILL.md", "---\nname: analysis-helper\n---\n\nhello")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="未归属到技能目录"):
+        asyncio.run(
+            platform_baseline_service.upload_skill(
+                "standalone",
+                upload_file=FakeUploadFile("analysis-helper.zip", buffer.getvalue(), "application/zip"),
+            )
+        )
+
+
+def test_platform_baseline_skill_upload_accepts_skills_root_zip(tmp_path):
+    initialize_store(tmp_path)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("skills/analysis-helper/SKILL.md", "---\nname: analysis-helper\n---\n\nhello")
+        archive.writestr("skills/analysis-helper/references/spec.txt", "spec")
+
+    items = asyncio.run(
+        platform_baseline_service.upload_skill(
+            "standalone",
+            upload_file=FakeUploadFile("analysis-helper.zip", buffer.getvalue(), "application/zip"),
+        )
+    )
+
+    platform_root = platform_baseline_service.ensure_platform_root("standalone")
+    assert any(item.name == "analysis-helper" for item in items)
+    assert (platform_root / "skills" / "analysis-helper" / "SKILL.md").exists()
+    assert (platform_root / "skills" / "analysis-helper" / "references" / "spec.txt").read_text(encoding="utf-8") == "spec"

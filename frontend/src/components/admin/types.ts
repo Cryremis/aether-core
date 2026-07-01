@@ -37,6 +37,10 @@ export type PlatformBaselineEntryItem = {
   media_type: string;
 };
 
+export type DirectoryCapableFile = File & {
+  webkitRelativePath?: string;
+};
+
 export type LlmConfigFormState = {
   enabled: boolean;
   base_url: string;

@@ -20,6 +20,11 @@ class PlatformBaselineFile(BaseModel):
     media_type: str
 
 
+class PlatformBaselineBulkImportResult(BaseModel):
+    imported_count: int = 0
+    entries: list["PlatformBaselineEntry"] = Field(default_factory=list)
+
+
 class PlatformBaselineEntry(BaseModel):
     name: str
     relative_path: str
@@ -265,3 +270,6 @@ class ConversationSummary(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_message_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     message_count: int = 0
+
+
+PlatformBaselineBulkImportResult.model_rebuild()

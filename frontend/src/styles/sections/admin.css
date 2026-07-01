@@ -1706,6 +1706,7 @@
 
 .fm-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -2033,6 +2034,12 @@
   padding: 18px 20px 20px;
 }
 
+.skill-upload-modal__actions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .skill-upload-modal__intro {
   margin: 0;
   color: var(--text-secondary);
@@ -2069,6 +2076,62 @@
   background: var(--error-bg);
   border-radius: 8px;
   padding: 8px 10px;
+}
+
+.baseline-move-modal {
+  width: min(520px, 100%);
+}
+
+.baseline-move-modal__field {
+  display: grid;
+  gap: 8px;
+}
+
+.baseline-move-modal__field span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.baseline-move-modal__field code {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  color: var(--text-primary);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.baseline-move-modal__field input {
+  width: 100%;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(203, 213, 225, 0.95);
+  background: #fff;
+  color: var(--text-primary);
+  font-size: 13px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.baseline-move-modal__field input:focus {
+  outline: none;
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
+}
+
+.baseline-move-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .skill-upload-modal__actions-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* --- 管理控制台 --- */

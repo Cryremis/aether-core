@@ -10,6 +10,7 @@ from app.schemas.platform import (
     EmbedBootstrapRequest,
     EmbedBootstrapResponse,
     PlatformAdminRecord,
+    PlatformBaselineBulkImportResult,
     PlatformBaselineDirectoryRequest,
     PlatformBaselineMoveRequest,
     PlatformAdminAssignRequest,
@@ -396,6 +397,30 @@ async def upload_platform_baseline_file(
     return ApiResponse(message="平台基线文件上传成功", data=item.model_dump(mode="json"))
 
 
+@router.post("/{platform_id}/baseline/files/import")
+async def import_platform_baseline_file_tree(
+    platform_id: int,
+    upload_files: list[UploadFile] = File(...),
+    relative_paths: list[str] = Query(...),
+    target_relative_dir: str = Query(default="work"),
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    try:
+        entries = await platform_baseline_service.upload_file_tree(
+            platform["platform_key"],
+            uploads=upload_files,
+            relative_paths=relative_paths,
+            target_relative_dir=target_relative_dir,
+        )
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload = PlatformBaselineBulkImportResult(imported_count=len(entries), entries=entries)
+    return ApiResponse(message="平台基线文件夹导入成功", data=payload.model_dump(mode="json"))
+
+
 @router.delete("/{platform_id}/baseline/files")
 def delete_platform_baseline_file(
     platform_id: int,
@@ -433,7 +458,10 @@ async def upload_platform_baseline_skill(
     auth: AuthContext = Depends(require_admin),
 ) -> ApiResponse:
     platform = _get_managed_platform(platform_id, auth)
-    items = await platform_baseline_service.upload_skill(platform["platform_key"], upload_file=skill_file)
+    try:
+        items = await platform_baseline_service.upload_skill(platform["platform_key"], upload_file=skill_file)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(
         message="平台基线技能上传成功",
         data={"items": [item.model_dump(mode="json") for item in items]},

@@ -21,7 +21,9 @@ import {
   getPlatformRuntimeImageGuide,
   listPlatforms,
   movePlatformBaselinePath,
+  importPlatformBaselineFileTree,
   PlatformIntegrationGuide,
+  PlatformBaselineBulkImportResult,
   savePlatformBaselineTextFile,
   updatePlatformPromptConfig,
   updatePlatformSandboxProxyConfig,
@@ -32,6 +34,7 @@ import {
   uploadPlatformBaselineSkill,
 } from "../api/client";
 import { AdminForms } from "./admin/AdminForms";
+import { BaselineMoveModal } from "./admin/BaselineMoveModal";
 import { BaselineContextMenu } from "./admin/BaselineContextMenu";
 import { BaselineManager } from "./admin/BaselineManager";
 import { AdminIcons as Icons } from "./admin/AdminIcons";
@@ -44,9 +47,9 @@ import { PlatformRuntimeImagePanel } from "./admin/PlatformRuntimeImagePanel";
 import { SkillUploadModal } from "./admin/SkillUploadModal";
 import { useAppPreferences } from "../i18n";
 import type {
+  DirectoryCapableFile,
   LlmConfigFormState,
   PlatformBaselineEntryItem,
-  PlatformBaselineFileItem,
   PlatformItem,
   PlatformSandboxProxyFormState,
   PlatformRuntimeImageFormState,
@@ -79,6 +82,11 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
   const [showSkillUploadModal, setShowSkillUploadModal] = useState(false);
   const [skillUploadBusy, setSkillUploadBusy] = useState(false);
   const [skillUploadError, setSkillUploadError] = useState("");
+  const [moveModalMode, setMoveModalMode] = useState<"move" | "rename">("move");
+  const [moveModalSourcePath, setMoveModalSourcePath] = useState("");
+  const [moveModalTargetPath, setMoveModalTargetPath] = useState("");
+  const [moveModalBusy, setMoveModalBusy] = useState(false);
+  const [moveModalError, setMoveModalError] = useState("");
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; item: PlatformBaselineEntryItem | null }>({ visible: false, x: 0, y: 0, item: null });
@@ -160,7 +168,7 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
     setBaselineError("");
     try {
       const result = await getPlatformBaseline(platformId);
-      const data = (result.data ?? {}) as { files?: PlatformBaselineFileItem[]; entries?: PlatformBaselineEntryItem[]; };
+      const data = (result.data ?? {}) as { entries?: PlatformBaselineEntryItem[]; };
       setBaselineEntries(data.entries ??[]);
       setActivePlatformId(platformId);
     } catch (loadError) {
@@ -374,6 +382,33 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
     } catch (submitError) { setBaselineError(submitError instanceof Error ? submitError.message : "上传平台基线文件失败"); }
   };
 
+  const handleBaselineFolderUpload = async (files: FileList | null) => {
+    if (!files?.length || !activePlatformId) return;
+    const uploadItems = Array.from(files as unknown as DirectoryCapableFile[])
+      .map((file) => {
+        const relativePath = file.webkitRelativePath || file.name;
+        return relativePath ? { file, relativePath } : null;
+      })
+      .filter((item): item is { file: File; relativePath: string } => item !== null);
+
+    if (!uploadItems.length) {
+      setBaselineError("未能从所选文件夹中解析出有效文件。");
+      return;
+    }
+
+    try {
+      setBaselineError("");
+      const result = await importPlatformBaselineFileTree(activePlatformId, getTargetUploadDir(), uploadItems);
+      const data = (result.data ?? null) as PlatformBaselineBulkImportResult | null;
+      await loadPlatformBaseline(activePlatformId);
+      if (data?.imported_count) {
+        setBaselineError(`已导入 ${data.imported_count} 个文件。`);
+      }
+    } catch (submitError) {
+      setBaselineError(submitError instanceof Error ? submitError.message : "导入平台基线文件夹失败");
+    }
+  };
+
   const handleBaselineSkillUpload = async (file: File) => {
     if (!activePlatformId) return;
     try {
@@ -383,6 +418,45 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
       await loadPlatformBaseline(activePlatformId);
     } catch (submitError) {
       setSkillUploadError(submitError instanceof Error ? submitError.message : "上传技能失败");
+    } finally {
+      setSkillUploadBusy(false);
+    }
+  };
+
+  const buildSkillArchiveFromFolder = async (files: FileList | null) => {
+    if (!files?.length) return null;
+    const entries = Array.from(files as unknown as DirectoryCapableFile[])
+      .map((file) => {
+        const relativePath = file.webkitRelativePath || file.name;
+        return relativePath ? { file, relativePath } : null;
+      })
+      .filter((item): item is { file: File; relativePath: string } => item !== null);
+
+    if (!entries.length) {
+      throw new Error("未能从所选技能文件夹中解析出文件。");
+    }
+
+    const JSZipModule = await import("jszip");
+    const zip = new JSZipModule.default();
+    entries.forEach(({ file, relativePath }) => {
+      zip.file(relativePath, file);
+    });
+    const rootName = entries[0]?.relativePath.split("/")[0] || "skill-package";
+    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+    return new File([blob], `${rootName}.zip`, { type: "application/zip" });
+  };
+
+  const handleBaselineSkillFolderUpload = async (files: FileList | null) => {
+    if (!activePlatformId) return;
+    try {
+      setSkillUploadBusy(true);
+      setSkillUploadError("");
+      const archive = await buildSkillArchiveFromFolder(files);
+      if (!archive) return;
+      await uploadPlatformBaselineSkill(activePlatformId, archive);
+      await loadPlatformBaseline(activePlatformId);
+    } catch (submitError) {
+      setSkillUploadError(submitError instanceof Error ? submitError.message : "上传技能文件夹失败");
     } finally {
       setSkillUploadBusy(false);
     }
@@ -416,19 +490,64 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
     } catch (err) { setBaselineError(err instanceof Error ? err.message : "删除失败"); }
   };
 
-  const handleRenameBaselinePath = async (sourcePath: string) => {
-    if (!activePlatformId) return;
+  const buildRenameTargetPath = (sourcePath: string) => {
+    const normalized = sourcePath.replace(/\\/g, "/");
+    const segments = normalized.split("/");
+    const currentName = segments.pop() ?? normalized;
+    const parentPath = segments.join("/");
+    return {
+      currentName,
+      parentPath,
+      targetPath: parentPath ? `${parentPath}/${currentName}` : currentName,
+    };
+  };
+
+  const openPathModal = (sourcePath: string, mode: "move" | "rename") => {
     if (["skills", "work", "logs"].includes(sourcePath)) {
-      setBaselineError("根目录不允许重命名。"); return;
+      setBaselineError(mode === "rename" ? "根目录不允许重命名。" : "根目录不允许移动。");
+      return;
     }
-    const targetPath = window.prompt("输入新的完整路径", sourcePath);
-    if (!targetPath?.trim() || targetPath.trim() === sourcePath) return;
+    setMoveModalMode(mode);
+    setMoveModalSourcePath(sourcePath);
+    if (mode === "rename") {
+      const renameState = buildRenameTargetPath(sourcePath);
+      setMoveModalTargetPath(renameState.targetPath);
+    } else {
+      setMoveModalTargetPath(sourcePath);
+    }
+    setMoveModalError("");
+  };
+
+  const closeMoveModal = () => {
+    setMoveModalMode("move");
+    setMoveModalSourcePath("");
+    setMoveModalTargetPath("");
+    setMoveModalError("");
+    setMoveModalBusy(false);
+  };
+
+  const handleMoveBaselinePath = async () => {
+    if (!activePlatformId || !moveModalSourcePath) return;
+    const targetPath = moveModalTargetPath.trim();
+    if (!targetPath || targetPath === moveModalSourcePath) {
+      setMoveModalError("请输入新的目标路径。");
+      return;
+    }
     try {
-      setBaselineError("");
-      await movePlatformBaselinePath(activePlatformId, sourcePath, targetPath.trim());
-      if (selectedBaselinePath === sourcePath) setSelectedBaselinePath(targetPath.trim());
+      setMoveModalBusy(true);
+      setMoveModalError("");
+      await movePlatformBaselinePath(activePlatformId, moveModalSourcePath, targetPath);
+      if (selectedBaselinePath === moveModalSourcePath) {
+        setSelectedBaselinePath(targetPath);
+      } else if (selectedBaselinePath.startsWith(`${moveModalSourcePath}/`)) {
+        setSelectedBaselinePath(selectedBaselinePath.replace(moveModalSourcePath, targetPath));
+      }
       await loadPlatformBaseline(activePlatformId);
-    } catch (err) { setBaselineError(err instanceof Error ? err.message : "重命名失败"); }
+      closeMoveModal();
+    } catch (err) {
+      setMoveModalError(err instanceof Error ? err.message : moveModalMode === "rename" ? "重命名失败" : "移动失败");
+      setMoveModalBusy(false);
+    }
   };
 
   const handleSaveBaselineText = async () => {
@@ -1018,6 +1137,7 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
               onCreateDirectory={() => void handleCreateBaselineDirectory()}
               onCreateFile={() => void handleCreateBaselineFile()}
               onUploadFile={(file) => void handleBaselineFileUpload(file)}
+              onUploadFolder={(files) => void handleBaselineFolderUpload(files)}
               onOpenSkillUpload={() => {
                 setSkillUploadError("");
                 setShowSkillUploadModal(true);
@@ -1038,7 +1158,8 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         onOpenDirectory={() => { handleDoubleClickItem(contextMenu.item!); setContextMenu({ ...contextMenu, visible: false}); }}
         onEditFile={() => { void handleSelectFile(contextMenu.item!); setContextMenu({ ...contextMenu, visible: false}); }}
         onDownloadFile={() => { void handleDownloadBaselineFile(contextMenu.item!.relative_path, contextMenu.item!.name); setContextMenu({ ...contextMenu, visible: false}); }}
-        onRename={() => { void handleRenameBaselinePath(contextMenu.item!.relative_path); setContextMenu({ ...contextMenu, visible: false}); }}
+        onMove={() => { openPathModal(contextMenu.item!.relative_path, "move"); setContextMenu({ ...contextMenu, visible: false}); }}
+        onRename={() => { openPathModal(contextMenu.item!.relative_path, "rename"); setContextMenu({ ...contextMenu, visible: false}); }}
         onDelete={() => { void handleDeleteBaselineFile(contextMenu.item!.relative_path); setContextMenu({ ...contextMenu, visible: false}); }}
       />
       <IntegrationGuideModal
@@ -1057,6 +1178,18 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         platformName={activePlatform?.display_name ?? ""}
         onClose={() => setShowSkillUploadModal(false)}
         onUpload={(file) => handleBaselineSkillUpload(file)}
+        onUploadFolder={(files) => handleBaselineSkillFolderUpload(files)}
+      />
+      <BaselineMoveModal
+        visible={Boolean(moveModalSourcePath)}
+        busy={moveModalBusy}
+        error={moveModalError}
+        mode={moveModalMode}
+        sourcePath={moveModalSourcePath}
+        targetPath={moveModalTargetPath}
+        onTargetPathChange={setMoveModalTargetPath}
+        onClose={closeMoveModal}
+        onSubmit={() => void handleMoveBaselinePath()}
       />
     </section>
   );

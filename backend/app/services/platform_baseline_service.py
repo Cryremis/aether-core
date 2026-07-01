@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import mimetypes
 import shutil
+import tempfile
 import uuid
 import zipfile
 from pathlib import Path
@@ -25,7 +26,7 @@ from app.schemas.platform import (
 )
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
-from app.services.skill_loader import skill_loader
+from app.services.skill_loader import SkillValidationError, skill_loader
 
 
 class PlatformBaselineService:
@@ -74,6 +75,56 @@ class PlatformBaselineService:
             size=len(content),
             media_type=media_type,
         )
+
+    async def upload_file_tree(
+        self,
+        platform_key: str,
+        *,
+        uploads: list[UploadFile],
+        relative_paths: list[str],
+        target_relative_dir: str = "work",
+    ) -> list[PlatformBaselineEntry]:
+        if not uploads:
+            raise RuntimeError("上传的文件夹为空。")
+        if len(uploads) != len(relative_paths):
+            raise RuntimeError("上传的文件数量与相对路径数量不匹配。")
+
+        root = self.ensure_platform_root(platform_key)
+        normalized_dir = target_relative_dir.replace("\\", "/").strip("/") or "work"
+        section = self._extract_section(normalized_dir)
+        imported: list[PlatformBaselineEntry] = []
+
+        for upload_file, relative_path in zip(uploads, relative_paths, strict=True):
+            normalized_relative = relative_path.replace("\\", "/").strip("/")
+            if not normalized_relative:
+                raise RuntimeError("上传文件夹中存在空的相对路径。")
+
+            path_parts = Path(normalized_relative).parts
+            if any(part in {"", ".", ".."} for part in path_parts):
+                raise RuntimeError(f"上传文件夹中存在非法路径: {relative_path}")
+
+            safe_name = Path(normalized_relative).name
+            if not safe_name:
+                raise RuntimeError(f"上传文件夹中存在无效文件名: {relative_path}")
+
+            target_path = self._ensure_within_root(root, root / normalized_dir / normalized_relative)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            content = await upload_file.read()
+            target_path.write_bytes(content)
+
+            media_type = upload_file.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+            imported.append(
+                PlatformBaselineEntry(
+                    name=safe_name,
+                    relative_path=str(target_path.relative_to(root)).replace("\\", "/"),
+                    section=section,
+                    kind="file",
+                    size=len(content),
+                    media_type=media_type,
+                )
+            )
+
+        return imported
 
     def delete_file(self, platform_key: str, *, relative_path: str) -> None:
         root = self.ensure_platform_root(platform_key)
@@ -237,10 +288,15 @@ class PlatformBaselineService:
             raise RuntimeError("上传的技能文件为空。")
 
         suffix = Path(filename).suffix.lower()
-        if suffix == ".zip":
-            self._install_skill_zip(target_root, raw_bytes)
-        else:
-            self._install_single_skill_file(target_root, filename, raw_bytes)
+        try:
+            if suffix == ".zip":
+                self._install_skill_zip(target_root, raw_bytes)
+            else:
+                self._install_single_skill_file(target_root, filename, raw_bytes)
+        except SkillValidationError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except zipfile.BadZipFile as exc:
+            raise RuntimeError("上传的技能包不是有效的 zip 文件。") from exc
         return self.list_skills(platform_key)
 
     def list_skills(self, platform_key: str) -> list[PlatformBaselineSkill]:
@@ -305,7 +361,7 @@ class PlatformBaselineService:
         resolved_root = root.resolve(strict=False)
         resolved_target = target.resolve(strict=False)
         if resolved_root not in resolved_target.parents and resolved_target != resolved_root:
-            raise ValueError("目标路径超出平台基线环境范围。")
+            raise RuntimeError("目标路径超出平台基线环境范围。")
         return resolved_target
 
     def _extract_section(self, relative_path: str) -> Literal["skills", "work", "logs"]:
@@ -317,32 +373,66 @@ class PlatformBaselineService:
 
     def _install_single_skill_file(self, target_root: Path, filename: str, raw_bytes: bytes) -> None:
         source_name = Path(filename).name
+        fallback_name = Path(filename).parent.name or Path(filename).stem or "uploaded-skill"
+        loaded = skill_loader.load_bytes(
+            raw_bytes,
+            source="platform",
+            path_label=source_name,
+            fallback_name=fallback_name,
+        )
+        if loaded is None:
+            raise SkillValidationError("上传的技能文件为空，请补充技能说明后再上传。")
+
         if source_name.lower() == "skill.md":
             slug = self._slugify(Path(filename).parent.name or "uploaded-skill")
         else:
-            slug = self._slugify(Path(filename).stem)
+            slug = self._slugify(str(loaded.get("name") or Path(filename).stem))
 
         skill_dir = target_root / slug
+        if skill_dir.exists():
+            shutil.rmtree(skill_dir)
         skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "SKILL.md").write_bytes(raw_bytes)
 
     def _install_skill_zip(self, target_root: Path, raw_bytes: bytes) -> None:
-        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
-            members = [member for member in archive.infolist() if not member.is_dir()]
-            if not members:
-                raise RuntimeError("技能压缩包中没有可提取文件。")
+        with tempfile.TemporaryDirectory(prefix="platform-skill-upload-") as temp_dir:
+            staging_root = Path(temp_dir)
+            with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+                members = [member for member in archive.infolist() if not member.is_dir()]
+                if not members:
+                    raise RuntimeError("技能压缩包中没有可提取文件。")
 
-            for member in members:
-                member_path = Path(member.filename)
-                if member_path.is_absolute() or ".." in member_path.parts:
-                    raise RuntimeError(f"非法技能压缩包路径: {member.filename}")
-                target_path = self._ensure_within_root(target_root, target_root / member_path)
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as src:
-                    target_path.write_bytes(src.read())
+                for member in members:
+                    member_path = Path(member.filename)
+                    if member_path.is_absolute() or ".." in member_path.parts:
+                        raise RuntimeError(f"非法技能压缩包路径: {member.filename}")
+                    target_path = self._ensure_within_root(staging_root, staging_root / member_path)
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(member) as src:
+                        target_path.write_bytes(src.read())
 
-        if not skill_loader.load_directory(target_root, source="platform"):
-            raise RuntimeError("技能压缩包中未发现任何 skill-name/SKILL.md 结构。")
+            package_root = self._resolve_skill_package_root(staging_root)
+            discovered = skill_loader.discover_uploaded_skills(package_root, source="platform")
+            for skill in discovered:
+                relative_dir = skill.relative_dir
+                target_dir = target_root / relative_dir
+                target_dir = self._ensure_within_root(target_root, target_dir)
+                if target_dir.exists():
+                    shutil.rmtree(target_dir)
+                shutil.copytree(skill.directory, target_dir)
+
+    def _resolve_skill_package_root(self, staging_root: Path) -> Path:
+        child_directories = [path for path in staging_root.iterdir() if path.is_dir() and path.name != "__MACOSX"]
+        skill_root = staging_root / "skills"
+        if skill_root.exists() and skill_root.is_dir():
+            return skill_root
+        if len(child_directories) == 1 and (child_directories[0] / "SKILL.md").exists():
+            return child_directories[0].parent
+        if len(child_directories) == 1 and (child_directories[0] / "skills").exists():
+            nested_skill_root = child_directories[0] / "skills"
+            if nested_skill_root.is_dir():
+                return nested_skill_root
+        return staging_root
 
     def _slugify(self, value: str) -> str:
         return (

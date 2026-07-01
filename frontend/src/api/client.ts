@@ -254,6 +254,11 @@ export type PlatformBaselineFile = {
   media_type: string;
 };
 
+export type PlatformBaselineBulkImportResult = {
+  imported_count: number;
+  entries: PlatformBaselineEntry[];
+};
+
 export type PlatformBaselineEntry = {
   name: string;
   relative_path: string;
@@ -943,7 +948,29 @@ export async function uploadPlatformBaselineFile(
     },
   );
   if (!response.ok) {
-    throw new Error(`上传平台基线文件失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `上传平台基线文件失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function importPlatformBaselineFileTree(
+  platformId: number,
+  targetRelativeDir: string,
+  files: Array<{ file: File; relativePath: string }>,
+) {
+  const formData = new FormData();
+  const params = new URLSearchParams();
+  params.set("target_relative_dir", targetRelativeDir);
+  files.forEach(({ file, relativePath }) => {
+    formData.append("upload_files", file);
+    params.append("relative_paths", relativePath);
+  });
+  const response = await apiFetch(`/platforms/${platformId}/baseline/files/import?${params.toString()}`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `导入平台基线文件夹失败: ${response.status}`));
   }
   return response.json();
 }
@@ -953,7 +980,7 @@ export async function getPlatformBaselineFileContent(platformId: number, relativ
     `/platforms/${platformId}/baseline/files/content?relative_path=${encodeURIComponent(relativePath)}`,
   );
   if (!response.ok) {
-    throw new Error(`获取平台基线文件内容失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `获取平台基线文件内容失败: ${response.status}`));
   }
   return response.json();
 }
@@ -972,7 +999,7 @@ export async function savePlatformBaselineTextFile(
     }),
   });
   if (!response.ok) {
-    throw new Error(`保存平台基线文件失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `保存平台基线文件失败: ${response.status}`));
   }
   return response.json();
 }
@@ -986,7 +1013,7 @@ export async function createPlatformBaselineDirectory(platformId: number, relati
     }),
   });
   if (!response.ok) {
-    throw new Error(`创建平台基线目录失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `创建平台基线目录失败: ${response.status}`));
   }
   return response.json();
 }
@@ -1005,7 +1032,7 @@ export async function movePlatformBaselinePath(
     }),
   });
   if (!response.ok) {
-    throw new Error(`重命名平台基线路径失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `更新平台基线路径失败: ${response.status}`));
   }
   return response.json();
 }
@@ -1018,7 +1045,7 @@ export async function deletePlatformBaselineFile(platformId: number, relativePat
     },
   );
   if (!response.ok) {
-    throw new Error(`删除平台基线文件失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `删除平台基线文件失败: ${response.status}`));
   }
   return response.json();
 }
@@ -1028,7 +1055,7 @@ export async function downloadPlatformBaselineFile(platformId: number, relativeP
     `/platforms/${platformId}/baseline/files/download?relative_path=${encodeURIComponent(relativePath)}`,
   );
   if (!response.ok) {
-    throw new Error(`下载平台基线文件失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `下载平台基线文件失败: ${response.status}`));
   }
   return response.blob();
 }
@@ -1128,7 +1155,7 @@ export async function uploadPlatformBaselineSkill(platformId: number, skillFile:
     body: formData,
   });
   if (!response.ok) {
-    throw new Error(`上传平台技能失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `上传平台技能失败: ${response.status}`));
   }
   return response.json();
 }
