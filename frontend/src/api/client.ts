@@ -839,7 +839,7 @@ export async function deletePlatformSandboxProxyConfig(platformId: number) {
 export async function getUserLlmConfig() {
   const response = await apiFetch("/llm/user");
   if (!response.ok) {
-    throw new Error(`获取用户 LLM 配置失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `获取用户 LLM 配置失败: ${response.status}`));
   }
   return response.json();
 }
@@ -851,7 +851,7 @@ export async function updateUserLlmConfig(payload: LlmConfigPayload) {
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(`更新用户 LLM 配置失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `更新用户 LLM 配置失败: ${response.status}`));
   }
   return response.json();
 }
@@ -859,7 +859,7 @@ export async function updateUserLlmConfig(payload: LlmConfigPayload) {
 export async function deleteUserLlmConfig() {
   const response = await apiFetch("/llm/user", { method: "DELETE" });
   if (!response.ok) {
-    throw new Error(`删除用户 LLM 配置失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `删除用户 LLM 配置失败: ${response.status}`));
   }
   return response.json();
 }

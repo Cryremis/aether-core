@@ -138,10 +138,11 @@ class AgentEngine:
         if isinstance(payload, dict):
             error = payload.get("error")
             if isinstance(error, dict) and error.get("message"):
-                return str(error["message"])
+                return f"LLM 服务报错: {str(error['message'])}"
             if payload.get("message"):
-                return str(payload["message"])
-        return text or str(exc)
+                return f"LLM 服务报错: {str(payload['message'])}"
+        detail = text or str(exc)
+        return f"LLM 服务报错: {detail}"
 
     def _is_context_overflow_error(self, message: str) -> bool:
         lowered = message.lower()

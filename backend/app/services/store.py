@@ -153,6 +153,23 @@ class StoreService:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS embed_user_llm_configs (
+                    platform_id INTEGER NOT NULL,
+                    external_user_id TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    provider_kind TEXT NOT NULL DEFAULT 'litellm',
+                    api_format TEXT NOT NULL DEFAULT 'openai-compatible',
+                    base_url TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    api_key TEXT,
+                    extra_headers_json TEXT NOT NULL DEFAULT '{}',
+                    extra_body_json TEXT NOT NULL DEFAULT '{}',
+                    network_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (platform_id, external_user_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL UNIQUE,
@@ -212,6 +229,7 @@ class StoreService:
             self._ensure_column(conn, "platform_admins", "updated_at", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "platform_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(conn, "user_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(conn, "embed_user_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(conn, "platforms", "sandbox_image", "TEXT")
             self._ensure_column(conn, "platforms", "sandbox_image_updated_at", "TEXT")
             self._ensure_column(conn, "platforms", "sandbox_proxy_enabled", "INTEGER NOT NULL DEFAULT 0")
@@ -867,6 +885,14 @@ class StoreService:
             row = conn.execute("SELECT * FROM user_llm_configs WHERE user_id = ?", (user_id,)).fetchone()
         return self._row_to_llm_config(row)
 
+    def get_embed_user_llm_config(self, platform_id: int, external_user_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM embed_user_llm_configs WHERE platform_id = ? AND external_user_id = ?",
+                (platform_id, external_user_id),
+            ).fetchone()
+        return self._row_to_llm_config(row)
+
     def upsert_user_llm_config(
         self,
         *,
@@ -922,9 +948,73 @@ class StoreService:
             raise RuntimeError("Failed to save user LLM config")
         return row
 
+    def upsert_embed_user_llm_config(
+        self,
+        *,
+        platform_id: int,
+        external_user_id: str,
+        enabled: bool,
+        provider_kind: str,
+        api_format: str,
+        base_url: str,
+        model: str,
+        api_key: str | None,
+        extra_headers: dict[str, Any],
+        extra_body: dict[str, Any],
+        network: dict[str, Any],
+    ) -> dict[str, Any]:
+        now = utcnow_iso()
+        existing = self.get_embed_user_llm_config(platform_id, external_user_id)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO embed_user_llm_configs(
+                    platform_id, external_user_id, enabled, provider_kind, api_format, base_url, model, api_key,
+                    extra_headers_json, extra_body_json, network_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform_id, external_user_id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    provider_kind = excluded.provider_kind,
+                    api_format = excluded.api_format,
+                    base_url = excluded.base_url,
+                    model = excluded.model,
+                    api_key = excluded.api_key,
+                    extra_headers_json = excluded.extra_headers_json,
+                    extra_body_json = excluded.extra_body_json,
+                    network_json = excluded.network_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    platform_id,
+                    external_user_id,
+                    1 if enabled else 0,
+                    provider_kind,
+                    api_format,
+                    base_url,
+                    model,
+                    api_key,
+                    json.dumps(extra_headers, ensure_ascii=False),
+                    json.dumps(extra_body, ensure_ascii=False),
+                    json.dumps(network, ensure_ascii=False),
+                    existing["created_at"] if existing else now,
+                    now,
+                ),
+            )
+        row = self.get_embed_user_llm_config(platform_id, external_user_id)
+        if row is None:
+            raise RuntimeError("Failed to save embed user LLM config")
+        return row
+
     def delete_user_llm_config(self, user_id: int) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM user_llm_configs WHERE user_id = ?", (user_id,))
+
+    def delete_embed_user_llm_config(self, platform_id: int, external_user_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM embed_user_llm_configs WHERE platform_id = ? AND external_user_id = ?",
+                (platform_id, external_user_id),
+            )
 
     def create_conversation(
         self,

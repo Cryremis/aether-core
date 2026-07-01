@@ -54,6 +54,12 @@ class LlmConfigService:
             return None
         return self._to_summary(row)
 
+    def get_embed_user_summary(self, platform_id: int, external_user_id: str) -> LlmConfigSummary | None:
+        row = store_service.get_embed_user_llm_config(platform_id, external_user_id)
+        if row is None:
+            return None
+        return self._to_summary(row)
+
     def update_platform_config(self, platform_id: int, request: LlmConfigUpdateRequest) -> LlmConfigSummary:
         row = store_service.upsert_platform_llm_config(
             platform_id=platform_id,
@@ -93,20 +99,60 @@ class LlmConfigService:
         )
         return self._to_summary(row)
 
+    def update_embed_user_config(
+        self,
+        *,
+        platform_id: int,
+        external_user_id: str,
+        request: LlmConfigUpdateRequest,
+    ) -> LlmConfigSummary:
+        existing = store_service.get_embed_user_llm_config(platform_id, external_user_id)
+        api_key = None
+        if request.clear_api_key:
+            api_key = None
+        elif (request.api_key or "").strip():
+            api_key = request.api_key.strip()
+        elif existing:
+            api_key = existing.get("api_key")
+
+        row = store_service.upsert_embed_user_llm_config(
+            platform_id=platform_id,
+            external_user_id=external_user_id,
+            enabled=request.enabled,
+            provider_kind=request.provider_kind,
+            api_format=request.api_format,
+            base_url=request.base_url.strip(),
+            model=request.model.strip(),
+            api_key=api_key,
+            extra_headers=request.extra_headers,
+            extra_body=request.extra_body,
+            network=request.network.model_dump(mode="json"),
+        )
+        return self._to_summary(row)
+
     def delete_platform_config(self, platform_id: int) -> None:
         store_service.delete_platform_llm_config(platform_id)
 
     def delete_user_config(self, user_id: int) -> None:
         store_service.delete_user_llm_config(user_id)
 
+    def delete_embed_user_config(self, platform_id: int, external_user_id: str) -> None:
+        store_service.delete_embed_user_llm_config(platform_id, external_user_id)
+
     def resolve_for_conversation(self, conversation: dict[str, Any]) -> RuntimeLlmConfig:
         owner_user_id = conversation.get("owner_user_id")
         platform_id = conversation.get("platform_id")
+        external_user_id = conversation.get("external_user_id")
 
         if owner_user_id:
             user_config = store_service.get_user_llm_config(int(owner_user_id))
             if user_config and user_config.get("enabled"):
                 return self._to_runtime("user", user_config)
+
+        if platform_id and external_user_id:
+            embed_user_config = store_service.get_embed_user_llm_config(int(platform_id), str(external_user_id))
+            if embed_user_config and embed_user_config.get("enabled"):
+                return self._to_runtime("user", embed_user_config)
 
         if platform_id:
             platform_config = store_service.get_platform_llm_config(int(platform_id))
@@ -136,6 +182,18 @@ class LlmConfigService:
             platform_row = store_service.get_platform_llm_config(platform["platform_id"])
             if platform_row and platform_row.get("enabled"):
                 return self._to_resolved("platform", platform_row)
+
+        global_summary = self.get_global_summary()
+        return LlmResolvedConfig(scope="global", **global_summary.model_dump())
+
+    def resolve_summary_for_embed_user(self, platform_id: int, external_user_id: str) -> LlmResolvedConfig:
+        user_row = store_service.get_embed_user_llm_config(platform_id, external_user_id)
+        if user_row and user_row.get("enabled"):
+            return self._to_resolved("user", user_row)
+
+        platform_row = store_service.get_platform_llm_config(platform_id)
+        if platform_row and platform_row.get("enabled"):
+            return self._to_resolved("platform", platform_row)
 
         global_summary = self.get_global_summary()
         return LlmResolvedConfig(scope="global", **global_summary.model_dump())

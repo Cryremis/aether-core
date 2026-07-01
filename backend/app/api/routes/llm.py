@@ -1,9 +1,9 @@
 # backend/app/api/routes/llm.py
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import AuthContext, require_admin
+from app.api.deps import AuthContext, get_auth_context, require_admin
 from app.schemas.common import ApiResponse
 from app.schemas.llm import LlmConfigUpdateRequest
 from app.services.llm_config_service import llm_config_service
@@ -13,10 +13,15 @@ router = APIRouter(prefix="/api/v1/llm", tags=["llm"])
 
 
 @router.get("/user")
-def get_user_llm_config(auth: AuthContext = Depends(require_admin)) -> ApiResponse:
-    assert auth.user is not None
-    summary = llm_config_service.get_user_summary(auth.user.user_id)
-    resolved = llm_config_service.resolve_summary_for_user(auth.user)
+def get_user_llm_config(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    if auth.kind == "user" and auth.user is not None:
+        summary = llm_config_service.get_user_summary(auth.user.user_id)
+        resolved = llm_config_service.resolve_summary_for_user(auth.user)
+    elif auth.kind == "embed" and auth.platform_id is not None and auth.external_user_id is not None:
+        summary = llm_config_service.get_embed_user_summary(auth.platform_id, auth.external_user_id)
+        resolved = llm_config_service.resolve_summary_for_embed_user(auth.platform_id, auth.external_user_id)
+    else:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="需要登录")
     return ApiResponse(
         message="用户 LLM 配置",
         data={
@@ -29,17 +34,29 @@ def get_user_llm_config(auth: AuthContext = Depends(require_admin)) -> ApiRespon
 @router.put("/user")
 def update_user_llm_config(
     request: LlmConfigUpdateRequest,
-    auth: AuthContext = Depends(require_admin),
+    auth: AuthContext = Depends(get_auth_context),
 ) -> ApiResponse:
-    assert auth.user is not None
-    summary = llm_config_service.update_user_config(auth.user, request)
+    if auth.kind == "user" and auth.user is not None:
+        summary = llm_config_service.update_user_config(auth.user, request)
+    elif auth.kind == "embed" and auth.platform_id is not None and auth.external_user_id is not None:
+        summary = llm_config_service.update_embed_user_config(
+            platform_id=auth.platform_id,
+            external_user_id=auth.external_user_id,
+            request=request,
+        )
+    else:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="需要登录")
     return ApiResponse(message="用户 LLM 配置已更新", data=summary.model_dump(mode="json"))
 
 
 @router.delete("/user")
-def delete_user_llm_config(auth: AuthContext = Depends(require_admin)) -> ApiResponse:
-    assert auth.user is not None
-    llm_config_service.delete_user_config(auth.user.user_id)
+def delete_user_llm_config(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    if auth.kind == "user" and auth.user is not None:
+        llm_config_service.delete_user_config(auth.user.user_id)
+    elif auth.kind == "embed" and auth.platform_id is not None and auth.external_user_id is not None:
+        llm_config_service.delete_embed_user_config(auth.platform_id, auth.external_user_id)
+    else:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="需要登录")
     return ApiResponse(message="用户 LLM 配置已删除")
 
 
