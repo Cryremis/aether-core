@@ -106,9 +106,11 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
     assert session.messages[-1]["content"] == "this is the real model answer"
     assert session.transcript[-1]["role"] == "assistant"
     assert session.transcript[-1]["blocks"][-1]["kind"] == "content"
+    assert session.transcript[-1]["blocks"][-1]["content"] == "this is the real model answer"
     event_types = [item["type"] for item in events]
     assert "workboard_snapshot" in event_types
     assert "elicitation_snapshot" in event_types
+    assert "message" not in event_types
     committed = next(item for item in events if item["type"] == "message_committed")
     assert committed["payload"]["message"]["role"] == "user"
     assert committed["payload"]["message"]["content"] == "reply directly"

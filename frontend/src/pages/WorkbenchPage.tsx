@@ -471,37 +471,6 @@ export function WorkbenchPage({
   };
 
   useEffect(() => {
-    const handleCopy = async (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      const btn = target.closest(".copy-button") as HTMLButtonElement | null;
-      if (!btn) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      const rawCode = decodeURIComponent(btn.getAttribute("data-code") || "");
-      try {
-        await navigator.clipboard.writeText(rawCode);
-        const span = btn.querySelector("span");
-        if (span) {
-          const originalText = span.innerText;
-          span.innerText = "已复制!";
-          btn.classList.add("copied");
-          window.setTimeout(() => {
-            span.innerText = originalText;
-            btn.classList.remove("copied");
-          }, 2000);
-        }
-      } catch (err) {
-        console.error("复制失败", err);
-      }
-    };
-
-    document.addEventListener("click", handleCopy);
-    return () => document.removeEventListener("click", handleCopy);
-  }, []);
-
-  useEffect(() => {
     const handleResize = () => {
       const mobile = window.innerWidth <= 1024;
       setIsMobile(mobile);
@@ -1313,24 +1282,6 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
                 }
               : block,
         );
-        return;
-      }
-
-      if (eventType === "message" && typeof payload.summary === "string") {
-        refs.activeContentText.value = payload.summary;
-        if (refs.activeContentId.value) {
-          updateAssistantBlock(assistantId, refs.activeContentId.value, (block) =>
-            block.kind === "content" ? { ...block, content: payload.summary as string, status: "done" } : block,
-          );
-        } else {
-          refs.activeContentId.value = `content-${Date.now()}`;
-          appendAssistantBlock(assistantId, {
-            id: refs.activeContentId.value,
-            kind: "content",
-            content: payload.summary,
-            status: "done",
-          });
-        }
         return;
       }
 

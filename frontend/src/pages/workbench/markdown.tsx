@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -48,6 +48,31 @@ marked.setOptions({ breaks: true, gfm: true });
 
 type MarkdownPart = { type: "html"; content: string } | { type: "code"; code: string; language: string; lineCount: number; key: string; streaming?: boolean };
 
+async function copyTextToClipboard(value: string) {
+    if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-9999px";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+
+    try {
+        const copied = document.execCommand("copy");
+        if (!copied) {
+            throw new Error("copy command rejected");
+        }
+    } finally {
+        document.body.removeChild(textarea);
+    }
+}
+
 function parseMarkdownWithCodeBlocks(text: string): MarkdownPart[] {
   const safeText = text || "";
     const parts: MarkdownPart[] = [];
@@ -92,9 +117,40 @@ function parseMarkdownWithCodeBlocks(text: string): MarkdownPart[] {
 function CodeBlock({ code, language, lineCount, streaming = false }: { code: string; language: string; lineCount: number; streaming?: boolean }) {
     const validLang = hljs.getLanguage(language) ? language : "plaintext";
     const highlighted = useMemo(() => hljs.highlight(code, { language: validLang }).value, [code, validLang]);
-    const encodedCode = encodeURIComponent(code);
     const isOpen = streaming || lineCount <= 15;
     const shouldCollapse = !streaming && lineCount > 15;
+    const [copyLabel, setCopyLabel] = useState("复制");
+    const resetTimerRef = useRef<number | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (resetTimerRef.current !== null) {
+                window.clearTimeout(resetTimerRef.current);
+            }
+        };
+    }, []);
+
+    const handleCopy = async (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (resetTimerRef.current !== null) {
+            window.clearTimeout(resetTimerRef.current);
+        }
+
+        try {
+            await copyTextToClipboard(code);
+            setCopyLabel("已复制!");
+        } catch (err) {
+            console.error("复制失败", err);
+            setCopyLabel("复制失败");
+        }
+
+        resetTimerRef.current = window.setTimeout(() => {
+            setCopyLabel("复制");
+            resetTimerRef.current = null;
+        }, 1800);
+    };
 
     return (
         <details
@@ -108,15 +164,15 @@ function CodeBlock({ code, language, lineCount, streaming = false }: { code: str
                 </div>
                 <div className="code-header-right">
                     {shouldCollapse ? <span className="code-expand-label">{lineCount} 行</span> : ""}
-                    <button className="copy-button" data-code={encodedCode} type="button">
+                    <button className={`copy-button${copyLabel === "已复制!" ? " copied" : ""}`} type="button" onClick={(event) => void handleCopy(event)}>
                         <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                        <span>复制</span>
+                        <span>{copyLabel}</span>
                     </button>
                 </div>
             </summary>
             <div className="code-content-wrapper">
                 <div className="code-content-inner">
-                    <pre><code className={`hljs language-${validLang}`}>{highlighted}</code></pre>
+                    <pre><code className={`hljs language-${validLang}`} dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
                 </div>
             </div>
         </details>

@@ -998,7 +998,6 @@ class AgentEngine:
                     session.session_id,
                     message_count=len(session.messages),
                 )
-                yield make_event(session, "message", summary=final_answer)
                 yield make_event(
                     session,
                     "result",

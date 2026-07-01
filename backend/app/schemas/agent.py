@@ -60,7 +60,6 @@ class AgentEvent(BaseModel):
         "context_compacted",
         "context_recovered",
         "context_blocked",
-        "message",
         "result",
         "completed",
         "error",

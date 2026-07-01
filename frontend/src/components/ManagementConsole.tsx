@@ -200,11 +200,23 @@ export function convertAuditDetailToChatMessages(detail: AuditConversationDetail
     }
     
     const blocks: AssistantBlock[] = [];
-    if (msg.content?.trim()) {
+    const normalizedTopLevelContent = msg.content?.trim() ?? "";
+    const normalizedBlockContents = Array.isArray(msg.blocks)
+      ? msg.blocks
+          .filter((block: Record<string, unknown>) => block.kind === "content" && typeof block.content === "string")
+          .map((block: Record<string, unknown>) => String(block.content).trim())
+          .filter(Boolean)
+      : [];
+    const shouldIncludeTopLevelContent = Boolean(
+      normalizedTopLevelContent &&
+      !normalizedBlockContents.some((content) => content === normalizedTopLevelContent),
+    );
+
+    if (shouldIncludeTopLevelContent) {
       blocks.push({
         id: `audit-${detail.session_id}-m-${index}-c`,
         kind: "content",
-        content: msg.content,
+        content: normalizedTopLevelContent,
         status: "done",
       });
     }
