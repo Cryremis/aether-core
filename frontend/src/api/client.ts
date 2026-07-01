@@ -959,13 +959,12 @@ export async function importPlatformBaselineFileTree(
   files: Array<{ file: File; relativePath: string }>,
 ) {
   const formData = new FormData();
-  const params = new URLSearchParams();
-  params.set("target_relative_dir", targetRelativeDir);
+  formData.append("target_relative_dir", targetRelativeDir);
   files.forEach(({ file, relativePath }) => {
     formData.append("upload_files", file);
-    params.append("relative_paths", relativePath);
+    formData.append("relative_paths", relativePath);
   });
-  const response = await apiFetch(`/platforms/${platformId}/baseline/files/import?${params.toString()}`, {
+  const response = await apiFetch(`/platforms/${platformId}/baseline/files/import`, {
     method: "POST",
     body: formData,
   });

@@ -1,7 +1,7 @@
 # backend/app/api/routes/platforms.py
 import sqlite3
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.api.deps import AuthContext, require_admin, require_platform_secret, require_system_admin
@@ -401,8 +401,8 @@ async def upload_platform_baseline_file(
 async def import_platform_baseline_file_tree(
     platform_id: int,
     upload_files: list[UploadFile] = File(...),
-    relative_paths: list[str] = Query(...),
-    target_relative_dir: str = Query(default="work"),
+    relative_paths: list[str] = Form(...),
+    target_relative_dir: str = Form(default="work"),
     auth: AuthContext = Depends(require_admin),
 ) -> ApiResponse:
     platform = _get_managed_platform(platform_id, auth)
