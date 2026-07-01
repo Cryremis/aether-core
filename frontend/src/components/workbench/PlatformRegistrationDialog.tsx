@@ -67,7 +67,6 @@ export function PlatformRegistrationDialog({
       <section className="dialog-card platform-request-dialog" onClick={(event) => event.stopPropagation()}>
         <div className="dialog-card__header">
           <div>
-            <span className="dialog-card__eyebrow">Platform Registration</span>
             <h2>申请注册新平台</h2>
             <p>申请提交后，系统管理员审批通过即自动生效，你会成为该平台负责人。</p>
           </div>

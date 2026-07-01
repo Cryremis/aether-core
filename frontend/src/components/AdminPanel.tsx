@@ -1,6 +1,6 @@
 
 // frontend/src/components/AdminPanel.tsx
-import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   createPlatformBaselineDirectory,
@@ -62,7 +62,37 @@ type AdminPanelProps = {
   initialPlatformId?: number | null;
 };
 
-type PlatformSettingsView = "image" | "proxy" | "prompt" | "llm";
+type PlatformSettingsView = "image" | "proxy" | "prompt" | "llm" | "baseline";
+type PlatformConfigLoadState = {
+  image: boolean;
+  proxy: boolean;
+  prompt: boolean;
+  llm: boolean;
+  baseline: boolean;
+};
+
+function PlatformWorkbenchSkeleton() {
+  return (
+    <div className="platform-workbench-skeleton">
+      <div className="platform-workbench-skeleton__panel">
+        <span className="platform-workbench-skeleton__line platform-workbench-skeleton__line--lg" />
+        <span className="platform-workbench-skeleton__line platform-workbench-skeleton__line--md" />
+        <div className="platform-workbench-skeleton__tabs">
+          <span className="platform-workbench-skeleton__pill" />
+          <span className="platform-workbench-skeleton__pill" />
+          <span className="platform-workbench-skeleton__pill" />
+          <span className="platform-workbench-skeleton__pill" />
+          <span className="platform-workbench-skeleton__pill" />
+        </div>
+        <div className="platform-workbench-skeleton__card">
+          <span className="platform-workbench-skeleton__line platform-workbench-skeleton__line--sm" />
+          <span className="platform-workbench-skeleton__line platform-workbench-skeleton__line--md" />
+          <span className="platform-workbench-skeleton__line platform-workbench-skeleton__line--md" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function AdminPanel({ role, mode = "overview", initialPlatformId = null }: AdminPanelProps) {
   const { t } = useAppPreferences();
@@ -126,6 +156,7 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
   });
   const [runtimeImageError, setRuntimeImageError] = useState("");
   const [runtimeImageBusy, setRuntimeImageBusy] = useState(false);
+  const [runtimeImageLoaded, setRuntimeImageLoaded] = useState(false);
   const [sandboxProxyForm, setSandboxProxyForm] = useState<PlatformSandboxProxyFormState>({
     enabled: false,
     http_proxy: "",
@@ -137,7 +168,15 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
   });
   const [sandboxProxyError, setSandboxProxyError] = useState("");
   const [sandboxProxyBusy, setSandboxProxyBusy] = useState(false);
+  const [sandboxProxyLoaded, setSandboxProxyLoaded] = useState(false);
   const [settingsView, setSettingsView] = useState<PlatformSettingsView>("image");
+  const [settingsLoaded, setSettingsLoaded] = useState<PlatformConfigLoadState>({
+    image: false,
+    proxy: false,
+    prompt: false,
+    llm: false,
+    baseline: false,
+  });
   const [integrationGuide, setIntegrationGuide] = useState<PlatformIntegrationGuide | null>(null);
   const [integrationGuideError, setIntegrationGuideError] = useState("");
   const [integrationGuideBusy, setIntegrationGuideBusy] = useState(false);
@@ -201,6 +240,7 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         enabled: true,
         system_prompt: "",
       });
+      setSettingsLoaded({ image: false, proxy: false, prompt: false, llm: false, baseline: true });
       setRuntimeImageError("");
       setRuntimeImageForm({
         image: "",
@@ -208,6 +248,7 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         recycledRuntimeCount: null,
         guide: null,
       });
+      setRuntimeImageLoaded(false);
       setSandboxProxyError("");
       setSandboxProxyForm({
         enabled: false,
@@ -218,125 +259,147 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         inherit_host_proxy: true,
         recycledRuntimeCount: null,
       });
+      setSandboxProxyLoaded(false);
       return;
     }
-    void (async () => {
-      try {
-        setPlatformLlmError("");
-        const result = await getPlatformLlmConfig(activePlatformId);
-        const data = (result.data ?? null) as {
-          enabled: boolean;
-          base_url: string;
-          model: string;
-          has_api_key: boolean;
-          extra_headers?: Record<string, string>;
-          extra_body?: Record<string, unknown>;
-          network?: {
-            enabled?: boolean;
-            allowed_domains?: string[];
-            blocked_domains?: string[];
-            max_search_results?: number;
-            fetch_timeout_seconds?: number;
-          };
-        } | null;
-        setPlatformLlmForm({
-          enabled: data?.enabled ?? true,
-          base_url: data?.base_url ?? "",
-          model: data?.model ?? "",
-          api_key: "",
-          extra_headers_text: data?.extra_headers && Object.keys(data.extra_headers).length > 0 ? JSON.stringify(data.extra_headers, null, 2) : "",
-          extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
-          has_api_key: Boolean(data?.has_api_key),
-          network_enabled: data?.network?.enabled ?? true,
-          allowed_domains_text: (data?.network?.allowed_domains ??[]).join("\n"),
-          blocked_domains_text: (data?.network?.blocked_domains ??[]).join("\n"),
-          max_search_results: data?.network?.max_search_results ?? 8,
-          fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
-        });
-        setShowPlatformLlmAdvanced(
-          Boolean(
-            (data?.extra_headers && Object.keys(data.extra_headers).length > 0) ||
-            (data?.extra_body && Object.keys(data.extra_body).length > 0),
-          ),
-        );
-      } catch (err) {
-        setPlatformLlmError(err instanceof Error ? err.message : "加载平台 LLM 配置失败");
-      }
-    })();
-    void (async () => {
-      try {
-        setPromptError("");
-        const result = await getPlatformPromptConfig(activePlatformId);
-        const data = (result.data ?? null) as {
-          enabled: boolean;
-          system_prompt: string;
-        } | null;
-        setPromptForm({
-          enabled: data?.enabled ?? true,
-          system_prompt: data?.system_prompt ?? "",
-        });
-      } catch (err) {
-        setPromptError(err instanceof Error ? err.message : "加载平台提示词配置失败");
-      }
-    })();
-    void (async () => {
-      try {
-        setSandboxProxyError("");
-        const result = await getPlatformSandboxProxyConfig(activePlatformId);
-        const data = (result.data ?? null) as {
-          enabled?: boolean;
-          http_proxy?: string;
-          https_proxy?: string;
-          all_proxy?: string;
-          no_proxy?: string;
-          inherit_host_proxy?: boolean;
-          recycled_runtime_count?: number;
-        } | null;
-        setSandboxProxyForm({
-          enabled: data?.enabled ?? false,
-          http_proxy: data?.http_proxy ?? "",
-          https_proxy: data?.https_proxy ?? "",
-          all_proxy: data?.all_proxy ?? "",
-          no_proxy: data?.no_proxy ?? "",
-          inherit_host_proxy: data?.inherit_host_proxy ?? true,
-          recycledRuntimeCount: data?.recycled_runtime_count ?? null,
-        });
-      } catch (err) {
-        setSandboxProxyError(err instanceof Error ? err.message : "加载平台 sandbox 代理配置失败");
-      }
-    })();
-    void (async () => {
-      try {
-        setRuntimeImageError("");
-        const result = await getPlatformRuntimeImage(activePlatformId);
-        const data = (result.data ?? null) as {
-          custom_image?: string | null;
-          resolved_image?: string;
-          recycled_runtime_count?: number;
-        } | null;
-        setRuntimeImageForm({
-          image: data?.custom_image ?? "",
-          resolvedImage: data?.resolved_image ?? "",
-          recycledRuntimeCount: data?.recycled_runtime_count ?? null,
-          guide: null,
-        });
-      } catch (err) {
-        setRuntimeImageError(err instanceof Error ? err.message : "加载平台运行镜像失败");
-      }
-    })();
-    void (async () => {
-      try {
-        const result = await getPlatformRuntimeImageGuide(activePlatformId);
-        const data = result.data ?? null;
-        setRuntimeImageForm((current) => ({
-          ...current,
-          guide: data as PlatformRuntimeImageFormState["guide"],
-        }));
-      } catch (err) {
-        setRuntimeImageError(err instanceof Error ? err.message : "加载平台运行镜像构建规范失败");
-      }
-    })();
   },[activePlatformId]);
+
+  useEffect(() => {
+    if (!activePlatformId || settingsLoaded[settingsView]) return;
+
+    if (settingsView === "baseline") {
+      setSettingsLoaded((current) => ({ ...current, baseline: true }));
+      return;
+    }
+
+    if (settingsView === "llm") {
+      void (async () => {
+        try {
+          setPlatformLlmError("");
+          const result = await getPlatformLlmConfig(activePlatformId);
+          const data = (result.data ?? null) as {
+            enabled: boolean;
+            base_url: string;
+            model: string;
+            has_api_key: boolean;
+            extra_headers?: Record<string, string>;
+            extra_body?: Record<string, unknown>;
+            network?: {
+              enabled?: boolean;
+              allowed_domains?: string[];
+              blocked_domains?: string[];
+              max_search_results?: number;
+              fetch_timeout_seconds?: number;
+            };
+          } | null;
+          setPlatformLlmForm({
+            enabled: data?.enabled ?? true,
+            base_url: data?.base_url ?? "",
+            model: data?.model ?? "",
+            api_key: "",
+            extra_headers_text: data?.extra_headers && Object.keys(data.extra_headers).length > 0 ? JSON.stringify(data.extra_headers, null, 2) : "",
+            extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
+            has_api_key: Boolean(data?.has_api_key),
+            network_enabled: data?.network?.enabled ?? true,
+            allowed_domains_text: (data?.network?.allowed_domains ??[]).join("\n"),
+            blocked_domains_text: (data?.network?.blocked_domains ??[]).join("\n"),
+            max_search_results: data?.network?.max_search_results ?? 8,
+            fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
+          });
+          setShowPlatformLlmAdvanced(
+            Boolean(
+              (data?.extra_headers && Object.keys(data.extra_headers).length > 0) ||
+              (data?.extra_body && Object.keys(data.extra_body).length > 0),
+            ),
+          );
+          setSettingsLoaded((current) => ({ ...current, llm: true }));
+        } catch (err) {
+          setPlatformLlmError(err instanceof Error ? err.message : "加载平台 LLM 配置失败");
+        }
+      })();
+      return;
+    }
+
+    if (settingsView === "prompt") {
+      void (async () => {
+        try {
+          setPromptError("");
+          const result = await getPlatformPromptConfig(activePlatformId);
+          const data = (result.data ?? null) as {
+            enabled: boolean;
+            system_prompt: string;
+          } | null;
+          setPromptForm({
+            enabled: data?.enabled ?? true,
+            system_prompt: data?.system_prompt ?? "",
+          });
+          setSettingsLoaded((current) => ({ ...current, prompt: true }));
+        } catch (err) {
+          setPromptError(err instanceof Error ? err.message : "加载平台提示词配置失败");
+        }
+      })();
+      return;
+    }
+
+    if (settingsView === "proxy") {
+      void (async () => {
+        try {
+          setSandboxProxyError("");
+          const result = await getPlatformSandboxProxyConfig(activePlatformId);
+          const data = (result.data ?? null) as {
+            enabled?: boolean;
+            http_proxy?: string;
+            https_proxy?: string;
+            all_proxy?: string;
+            no_proxy?: string;
+            inherit_host_proxy?: boolean;
+            recycled_runtime_count?: number;
+          } | null;
+          setSandboxProxyForm({
+            enabled: data?.enabled ?? false,
+            http_proxy: data?.http_proxy ?? "",
+            https_proxy: data?.https_proxy ?? "",
+            all_proxy: data?.all_proxy ?? "",
+            no_proxy: data?.no_proxy ?? "",
+            inherit_host_proxy: data?.inherit_host_proxy ?? true,
+            recycledRuntimeCount: data?.recycled_runtime_count ?? null,
+          });
+          setSandboxProxyLoaded(true);
+          setSettingsLoaded((current) => ({ ...current, proxy: true }));
+        } catch (err) {
+          setSandboxProxyError(err instanceof Error ? err.message : "加载平台 sandbox 代理配置失败");
+        }
+      })();
+      return;
+    }
+
+    if (settingsView === "image") {
+      void (async () => {
+        try {
+          setRuntimeImageError("");
+          const [runtimeResult, guideResult] = await Promise.all([
+            getPlatformRuntimeImage(activePlatformId),
+            getPlatformRuntimeImageGuide(activePlatformId),
+          ]);
+          const runtimeData = (runtimeResult.data ?? null) as {
+            custom_image?: string | null;
+            resolved_image?: string;
+            recycled_runtime_count?: number;
+          } | null;
+          setRuntimeImageForm({
+            image: runtimeData?.custom_image ?? "",
+            resolvedImage: runtimeData?.resolved_image ?? "",
+            recycledRuntimeCount: runtimeData?.recycled_runtime_count ?? null,
+            guide: (guideResult.data ?? null) as PlatformRuntimeImageFormState["guide"],
+          });
+          setRuntimeImageLoaded(true);
+          setSettingsLoaded((current) => ({ ...current, image: true }));
+        } catch (err) {
+          setRuntimeImageError(err instanceof Error ? err.message : "加载平台运行镜像失败");
+        }
+      })();
+    }
+  }, [activePlatformId, settingsLoaded, settingsView]);
 
   useEffect(() => {
     if (!platforms.length) {
@@ -595,6 +658,7 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
     { key: "proxy", title: t("admin.tab.proxy"), description: t("admin.tab.proxyDesc") },
     { key: "prompt", title: t("admin.tab.prompt"), description: t("admin.tab.promptDesc") },
     { key: "llm", title: t("admin.tab.llm"), description: t("admin.tab.llmDesc") },
+    { key: "baseline", title: t("admin.tab.baseline"), description: t("admin.tab.baselineDesc") },
   ];
 
   const parseJsonObject = (raw: string, label: string) => {
@@ -1009,6 +1073,9 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
     });
   };
 
+  const shouldShowWorkbenchSkeleton = Boolean(activePlatformId) && !activePlatform;
+  const isSettingsPanelReady = settingsLoaded[settingsView];
+
   return (
     <section className="admin-panel">
       {error ? <div className="admin-panel__error epic-error">{error}</div> : null}
@@ -1039,116 +1106,118 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         </div>
       ) : null}
 
-      {/* ================= Bento Grid: LLM 与基线资源管理器 ================= */}
+      {/* ================= 平台工作台 ================= */}
+      {shouldShowWorkbenchSkeleton ? <PlatformWorkbenchSkeleton /> : null}
+
       {activePlatform ? (
-        <div className="epic-bento-grid stagger-4">
-          <div className="epic-glass epic-bento-card epic-bento-card--settings">
-            <div className="platform-settings-workbench">
-              <div className="platform-settings-workbench__header">
-                <div className="manager-header__info">
-                  <h4>{t("admin.platformWorkbench.title")}</h4>
-                  <p>{t("admin.platformWorkbench.copy")}</p>
-                </div>
-              </div>
-
-              <div className="platform-settings-tabs" role="tablist" aria-label={t("admin.platformWorkbench.tabsLabel")}>
-                {settingsTabs.map((tab) => (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={settingsView === tab.key}
-                    className={`platform-settings-tab${settingsView === tab.key ? " is-active" : ""}`}
-                    onClick={() => setSettingsView(tab.key)}
-                  >
-                    <span>{tab.title}</span>
-                    <small>{tab.description}</small>
-                  </button>
-                ))}
-              </div>
-
-              <div className="platform-settings-workbench__panel">
-                {settingsView === "image" ? (
-                  <PlatformRuntimeImagePanel
-                    platformName={activePlatform.display_name}
-                    runtimeImageForm={runtimeImageForm}
-                    runtimeImageError={runtimeImageError}
-                    runtimeImageBusy={runtimeImageBusy}
-                    onChange={setRuntimeImageForm}
-                    onSave={() => void handleSavePlatformRuntimeImage()}
-                    onReset={() => void handleResetPlatformRuntimeImage()}
-                    onUpload={(file) => void handleUploadPlatformRuntimeImage(file)}
-                  />
-                ) : null}
-
-                {settingsView === "proxy" ? (
-                  <PlatformSandboxProxyPanel
-                    sandboxProxyForm={sandboxProxyForm}
-                    sandboxProxyError={sandboxProxyError}
-                    sandboxProxyBusy={sandboxProxyBusy}
-                    onChange={setSandboxProxyForm}
-                    onSave={() => void handleSavePlatformSandboxProxy()}
-                    onReset={() => void handleResetPlatformSandboxProxy()}
-                  />
-                ) : null}
-
-                {settingsView === "prompt" ? (
-                  <PlatformPromptPanel
-                    promptForm={promptForm}
-                    promptError={promptError}
-                    promptBusy={promptBusy}
-                    onChange={setPromptForm}
-                    onSave={() => void handleSavePlatformPrompt()}
-                    onReset={() => void handleResetPlatformPrompt()}
-                  />
-                ) : null}
-
-                {settingsView === "llm" ? (
-                  <PlatformLlmPanel
-                    platformLlmForm={platformLlmForm}
-                    platformLlmError={platformLlmError}
-                    platformLlmBusy={platformLlmBusy}
-                    showPlatformLlmAdvanced={showPlatformLlmAdvanced}
-                    onToggleAdvanced={setShowPlatformLlmAdvanced}
-                    onChange={setPlatformLlmForm}
-                    onSave={() => void handleSavePlatformLlm()}
-                    onReset={() => void handleResetPlatformLlm()}
-                  />
-                ) : null}
+        <div className="epic-glass epic-bento-card epic-bento-card--workbench stagger-4">
+          <div className="platform-settings-workbench">
+            <div className="platform-settings-workbench__header">
+              <div className="manager-header__info">
+                <h4>{t("admin.platformWorkbench.title")}</h4>
+                <p>{t("admin.platformWorkbench.copy")}</p>
               </div>
             </div>
-          </div>
 
-          <div className="epic-glass epic-bento-card epic-bento-card--baseline">
-            <BaselineManager
-              activePlatform={activePlatform}
-              baselineError={baselineError}
-              fileManagerRef={fileManagerRef}
-              breadcrumbs={breadcrumbs}
-              currentDirectoryChildren={currentDirectoryChildren}
-              currentBaselineDirectory={currentBaselineDirectory}
-              selectedBaselinePath={selectedBaselinePath}
-              selectedBaselineContent={selectedBaselineContent}
-              selectedBaselineMediaType={selectedBaselineMediaType}
-              selectedBaselineTruncated={selectedBaselineTruncated}
-              baselineDirty={baselineDirty}
-              onGoHome={() => { setCurrentBaselineDirectory(""); setSelectedBaselinePath(""); }}
-              onGoBreadcrumb={(path) => { setCurrentBaselineDirectory(path); setSelectedBaselinePath(""); }}
-              onCreateDirectory={() => void handleCreateBaselineDirectory()}
-              onCreateFile={() => void handleCreateBaselineFile()}
-              onUploadFile={(file) => void handleBaselineFileUpload(file)}
-              onUploadFolder={(files) => void handleBaselineFolderUpload(files)}
-              onOpenSkillUpload={() => {
-                setSkillUploadError("");
-                setShowSkillUploadModal(true);
-              }}
-              onSelectFile={(item) => void handleSelectFile(item)}
-              onDoubleClickItem={handleDoubleClickItem}
-              onContextMenu={handleContextMenu}
-              onContentChange={(value) => { setSelectedBaselineContent(value); setBaselineDirty(true); }}
-              onSaveText={() => void handleSaveBaselineText()}
-              onClosePreview={() => { setSelectedBaselinePath(""); setSelectedBaselineContent(""); }}
-            />
+            <div className="platform-settings-tabs" role="tablist" aria-label={t("admin.platformWorkbench.tabsLabel")}>
+              {settingsTabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsView === tab.key}
+                  className={`platform-settings-tab${settingsView === tab.key ? " is-active" : ""}`}
+                  onClick={() => setSettingsView(tab.key)}
+                >
+                  <span>{tab.title}</span>
+                  <small>{tab.description}</small>
+                </button>
+              ))}
+            </div>
+
+            <div className={`platform-settings-workbench__panel${settingsView === "baseline" ? " platform-settings-workbench__panel--baseline" : ""}`}>
+              {!isSettingsPanelReady ? <div className="platform-settings-loading">{t("common.loading")}</div> : null}
+
+              {settingsView === "image" && isSettingsPanelReady ? (
+                <PlatformRuntimeImagePanel
+                  platformName={activePlatform.display_name}
+                  runtimeImageForm={runtimeImageForm}
+                  runtimeImageError={runtimeImageError}
+                  runtimeImageBusy={runtimeImageBusy}
+                  onChange={setRuntimeImageForm}
+                  onSave={() => void handleSavePlatformRuntimeImage()}
+                  onReset={() => void handleResetPlatformRuntimeImage()}
+                  onUpload={(file) => void handleUploadPlatformRuntimeImage(file)}
+                />
+              ) : null}
+
+              {settingsView === "proxy" && isSettingsPanelReady ? (
+                <PlatformSandboxProxyPanel
+                  sandboxProxyForm={sandboxProxyForm}
+                  sandboxProxyError={sandboxProxyError}
+                  sandboxProxyBusy={sandboxProxyBusy}
+                  onChange={setSandboxProxyForm}
+                  onSave={() => void handleSavePlatformSandboxProxy()}
+                  onReset={() => void handleResetPlatformSandboxProxy()}
+                />
+              ) : null}
+
+              {settingsView === "prompt" && isSettingsPanelReady ? (
+                <PlatformPromptPanel
+                  promptForm={promptForm}
+                  promptError={promptError}
+                  promptBusy={promptBusy}
+                  onChange={setPromptForm}
+                  onSave={() => void handleSavePlatformPrompt()}
+                  onReset={() => void handleResetPlatformPrompt()}
+                />
+              ) : null}
+
+              {settingsView === "llm" && isSettingsPanelReady ? (
+                <PlatformLlmPanel
+                  platformLlmForm={platformLlmForm}
+                  platformLlmError={platformLlmError}
+                  platformLlmBusy={platformLlmBusy}
+                  showPlatformLlmAdvanced={showPlatformLlmAdvanced}
+                  onToggleAdvanced={setShowPlatformLlmAdvanced}
+                  onChange={setPlatformLlmForm}
+                  onSave={() => void handleSavePlatformLlm()}
+                  onReset={() => void handleResetPlatformLlm()}
+                />
+              ) : null}
+
+              {settingsView === "baseline" && isSettingsPanelReady ? (
+                <BaselineManager
+                  activePlatform={activePlatform}
+                  baselineError={baselineError}
+                  fileManagerRef={fileManagerRef}
+                  breadcrumbs={breadcrumbs}
+                  currentDirectoryChildren={currentDirectoryChildren}
+                  currentBaselineDirectory={currentBaselineDirectory}
+                  selectedBaselinePath={selectedBaselinePath}
+                  selectedBaselineContent={selectedBaselineContent}
+                  selectedBaselineMediaType={selectedBaselineMediaType}
+                  selectedBaselineTruncated={selectedBaselineTruncated}
+                  baselineDirty={baselineDirty}
+                  onGoHome={() => { setCurrentBaselineDirectory(""); setSelectedBaselinePath(""); }}
+                  onGoBreadcrumb={(path) => { setCurrentBaselineDirectory(path); setSelectedBaselinePath(""); }}
+                  onCreateDirectory={() => void handleCreateBaselineDirectory()}
+                  onCreateFile={() => void handleCreateBaselineFile()}
+                  onUploadFile={(file) => void handleBaselineFileUpload(file)}
+                  onUploadFolder={(files) => void handleBaselineFolderUpload(files)}
+                  onOpenSkillUpload={() => {
+                    setSkillUploadError("");
+                    setShowSkillUploadModal(true);
+                  }}
+                  onSelectFile={(item) => void handleSelectFile(item)}
+                  onDoubleClickItem={handleDoubleClickItem}
+                  onContextMenu={handleContextMenu}
+                  onContentChange={(value) => { setSelectedBaselineContent(value); setBaselineDirty(true); }}
+                  onSaveText={() => void handleSaveBaselineText()}
+                  onClosePreview={() => { setSelectedBaselinePath(""); setSelectedBaselineContent(""); }}
+                />
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}

@@ -40,9 +40,17 @@ def _get_managed_platform(platform_id: int, auth: AuthContext) -> dict:
     return platform
 
 
-def _serialize_platform_summary(row: dict) -> dict:
-    owner = store_service.get_user_by_id(row["owner_user_id"])
-    admins = store_service.list_platform_admins(row["platform_id"])
+def _serialize_platform_summary(
+    row: dict,
+    *,
+    owner_name: str | None = None,
+    admins: list[dict] | None = None,
+) -> dict:
+    resolved_admins = admins if admins is not None else store_service.list_platform_admins(row["platform_id"])
+    resolved_owner_name = owner_name
+    if resolved_owner_name is None:
+        owner = store_service.get_user_by_id(row["owner_user_id"])
+        resolved_owner_name = owner.full_name if owner else "未知负责人"
     custom_image = str(row.get("sandbox_image") or "").strip() or None
     return PlatformSummary(
         platform_id=row["platform_id"],
@@ -51,7 +59,7 @@ def _serialize_platform_summary(row: dict) -> dict:
         host_type=row["host_type"],
         description=row["description"],
         owner_user_id=row["owner_user_id"],
-        owner_name=owner.full_name if owner else "未知负责人",
+        owner_name=resolved_owner_name,
         host_secret=row["host_secret"],
         sandbox_image=custom_image,
         resolved_sandbox_image=custom_image or platform_runtime_image_service.resolve_for_platform(row["platform_id"]),
@@ -64,8 +72,8 @@ def _serialize_platform_summary(row: dict) -> dict:
         sandbox_proxy_inherit_host_proxy=bool(row.get("sandbox_proxy_inherit_host_proxy", True)),
         sandbox_proxy_updated_at=row.get("sandbox_proxy_updated_at"),
         created_at=row["created_at"],
-        admin_user_ids=[int(item["user_id"]) for item in admins],
-        admin_names=[str(item["full_name"]) for item in admins],
+        admin_user_ids=[int(item["user_id"]) for item in resolved_admins],
+        admin_names=[str(item["full_name"]) for item in resolved_admins],
     ).model_dump(mode="json")
 
 
@@ -171,11 +179,26 @@ def list_platform_admins(platform_id: int, auth: AuthContext = Depends(require_a
 
 @router.get("")
 def list_platforms(auth: AuthContext = Depends(require_admin)) -> ApiResponse:
+    rows = store_service.list_platforms()
+    owner_users = store_service.get_users_by_ids([int(row["owner_user_id"]) for row in rows])
+    admins_by_platform = store_service.list_platform_admins_for_platforms([int(row["platform_id"]) for row in rows])
+    manageable_ids = (
+        set(store_service.list_managed_platform_ids(auth.user.user_id))
+        if auth.role != "system_admin" and auth.user is not None
+        else set()
+    )
     items = []
-    for row in store_service.list_platforms():
-        if auth.role != "system_admin" and (auth.user is None or not store_service.is_platform_admin(platform_id=row["platform_id"], user_id=auth.user.user_id)):
+    for row in rows:
+        if auth.role != "system_admin" and int(row["platform_id"]) not in manageable_ids:
             continue
-        items.append(_serialize_platform_summary(row))
+        owner = owner_users.get(int(row["owner_user_id"]))
+        items.append(
+            _serialize_platform_summary(
+                row,
+                owner_name=owner.full_name if owner else "未知负责人",
+                admins=admins_by_platform.get(int(row["platform_id"]), []),
+            )
+        )
     return ApiResponse(message="平台列表", data=items)
 
 
@@ -290,6 +313,15 @@ def reject_platform_registration_request(
     )
     assert reviewed is not None
     return ApiResponse(message="平台注册申请已驳回", data=PlatformRegistrationRequestSummary(**reviewed).model_dump(mode="json"))
+
+
+@router.get("/{platform_id}")
+def get_platform_detail(
+    platform_id: int,
+    auth: AuthContext = Depends(require_admin),
+) -> ApiResponse:
+    platform = _get_managed_platform(platform_id, auth)
+    return ApiResponse(message="平台详情", data=_serialize_platform_summary(platform))
 
 
 @router.get("/{platform_id}/integration-guide")

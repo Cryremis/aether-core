@@ -735,7 +735,15 @@ export async function getCurrentUser() {
 export async function listPlatforms() {
   const response = await apiFetch("/platforms");
   if (!response.ok) {
-    throw new Error(`获取平台列表失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `获取平台列表失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function getPlatformDetail(platformId: number) {
+  const response = await apiFetch(`/platforms/${platformId}`);
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `获取平台详情失败: ${response.status}`));
   }
   return response.json();
 }
@@ -1208,7 +1216,7 @@ export async function createPlatformRegistrationRequest(payload: PlatformRegistr
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(`提交平台注册申请失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `提交平台注册申请失败: ${response.status}`));
   }
   return response.json();
 }
@@ -1216,7 +1224,7 @@ export async function createPlatformRegistrationRequest(payload: PlatformRegistr
 export async function listMyPlatformRegistrationRequests() {
   const response = await apiFetch("/platforms/registration-requests/mine");
   if (!response.ok) {
-    throw new Error(`获取我的平台注册申请失败: ${response.status}`);
+    throw new Error(await readErrorMessage(response, `获取我的平台注册申请失败: ${response.status}`));
   }
   return response.json();
 }

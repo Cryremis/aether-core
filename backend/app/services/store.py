@@ -367,6 +367,20 @@ class StoreService:
             row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         return self._row_to_user(row)
 
+    def get_users_by_ids(self, user_ids: list[int]) -> dict[int, StoreUser]:
+        normalized_ids = sorted({int(user_id) for user_id in user_ids if int(user_id) > 0})
+        if not normalized_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        with self._connect() as conn:
+            rows = conn.execute(f"SELECT * FROM users WHERE user_id IN ({placeholders})", tuple(normalized_ids)).fetchall()
+        users: dict[int, StoreUser] = {}
+        for row in rows:
+            user = self._row_to_user(row)
+            if user is not None:
+                users[user.user_id] = user
+        return users
+
     def get_user_by_provider(self, provider: str, provider_user_id: str) -> StoreUser | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -588,6 +602,36 @@ class StoreService:
                 (platform_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_platform_admins_for_platforms(self, platform_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+        normalized_ids = sorted({int(platform_id) for platform_id in platform_ids if int(platform_id) > 0})
+        if not normalized_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    pa.platform_id,
+                    pa.user_id,
+                    pa.assigned_by,
+                    pa.is_primary,
+                    pa.created_at,
+                    pa.updated_at,
+                    u.full_name,
+                    u.email,
+                    u.role
+                FROM platform_admins pa
+                JOIN users u ON u.user_id = pa.user_id
+                WHERE pa.platform_id IN ({placeholders})
+                ORDER BY pa.platform_id ASC, pa.is_primary DESC, pa.created_at ASC, pa.user_id ASC
+                """,
+                tuple(normalized_ids),
+            ).fetchall()
+        grouped: dict[int, list[dict[str, Any]]] = {platform_id: [] for platform_id in normalized_ids}
+        for row in rows:
+            grouped.setdefault(int(row["platform_id"]), []).append(dict(row))
+        return grouped
 
     def list_managed_platform_ids(self, user_id: int) -> list[int]:
         with self._connect() as conn:

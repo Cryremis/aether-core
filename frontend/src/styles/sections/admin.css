@@ -37,7 +37,7 @@
 
 .admin-page__content {
   width: 100%;
-  max-width: 1400px; /* 超宽屏适配，给文件管理器充足空间 */
+  max-width: 1240px;
   padding: 112px 32px 100px;
   position: relative;
   z-index: 2;
@@ -121,6 +121,16 @@
 
 .admin-page__title-group {
   display: flex;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.admin-page__title-block {
+  display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 20px;
 }
@@ -401,23 +411,6 @@
   width: 100%;
 }
 
-@media (min-width: 1100px) {
-  .epic-bento-grid {
-    grid-template-columns: minmax(380px, 1.92fr) minmax(760px, 1.08fr);
-    align-items: stretch;
-  }
-
-  .epic-bento-card:nth-child(1) {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .epic-bento-card:nth-child(2) {
-    grid-column: 2;
-    grid-row: 1;
-  }
-}
-
 .epic-bento-card {
   display: flex;
   flex-direction: column;
@@ -426,8 +419,7 @@
   min-height: 500px;
 }
 
-.epic-bento-card--settings,
-.epic-bento-card--baseline {
+.epic-bento-card--workbench {
   min-height: 720px;
 }
 
@@ -454,7 +446,7 @@
 
 .platform-settings-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
 }
 
@@ -511,6 +503,10 @@
   border: 1px solid rgba(226, 232, 240, 0.95);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.96);
   overflow: hidden;
+}
+
+.platform-settings-workbench__panel--baseline {
+  padding: 0;
 }
 
 /* --- LLM 面板特化 --- */
@@ -930,6 +926,10 @@
     align-items: flex-start;
     gap: 12px;
   }
+  .admin-page__title-block {
+    width: 100%;
+    align-items: flex-start;
+  }
   .admin-tabs {
     flex-wrap: wrap;
     border-radius: 16px;
@@ -952,12 +952,14 @@
     grid-template-columns: 1fr;
   }
   .epic-bento-card,
-  .epic-bento-card--settings,
-  .epic-bento-card--baseline {
+  .epic-bento-card--workbench {
     min-height: auto;
   }
   .platform-settings-workbench__panel {
     padding: 16px;
+  }
+  .platform-settings-workbench__panel--baseline {
+    padding: 0;
   }
 }
 
