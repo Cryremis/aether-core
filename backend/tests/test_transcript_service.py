@@ -286,29 +286,3 @@ def test_transcript_service_builds_assistant_item_from_blocks():
     assert item["blocks"][0]["kind"] == "reasoning"
     assert item["blocks"][1]["kind"] == "content"
     assert item["blocks"][2]["kind"] == "tool"
-
-
-def test_transcript_service_filters_message_bound_items_by_message_id():
-    transcript = [
-        {
-            "role": "user",
-            "message_id": "m_user_1",
-            "id": "m_user_1",
-        },
-        {
-            "role": "assistant",
-            "id": "m_assistant_1",
-        },
-        {
-            "role": "system_event",
-            "id": "system-1",
-        },
-        {
-            "role": "assistant",
-            "id": "m_assistant_2",
-        },
-    ]
-
-    filtered = transcript_service.filter_message_bound_items(transcript, {"m_user_1", "m_assistant_2"})
-
-    assert [item["id"] for item in filtered] == ["m_user_1", "m_assistant_2"]

@@ -18,18 +18,30 @@ def initialize_store(tmp_path: Path) -> None:
     store_service.initialize()
 
 
-def test_agent_run_service_finalizes_active_run_view_into_transcript(monkeypatch, tmp_path):
+def test_agent_run_service_finalizes_transcript_from_persisted_messages_only(tmp_path):
     initialize_store(tmp_path)
     session = AgentSession(session_id="sess_run_finalize")
-    session.messages.append(
+    session.messages = [
         {
             "role": "user",
             "content": "hello",
             "message_id": "m_user_1",
             "turn_index": 1,
             "visible_in_transcript": True,
-        }
-    )
+        },
+        {
+            "role": "assistant",
+            "content": "world",
+            "message_id": "m_assistant_1",
+            "turn_index": 1,
+            "visible_in_transcript": True,
+            "blocks": [
+                {"id": "reasoning_1", "kind": "reasoning", "content": "thinking"},
+                {"id": "content_1", "kind": "content", "content": "world", "status": "done"},
+                {"id": "elapsed_1", "kind": "elapsed", "elapsed_ms": 111},
+            ],
+        },
+    ]
     session.transcript = [{"id": "m_user_1", "role": "user", "content": "hello"}]
     session.active_run_view = {
         "run_id": "run_test_1",
@@ -55,11 +67,10 @@ def test_agent_run_service_finalizes_active_run_view_into_transcript(monkeypatch
     assert len(session.transcript) == 2
     assert session.transcript[0]["id"] == "m_user_1"
     assert session.transcript[1]["role"] == "assistant"
-    assert session.transcript[1]["id"] == "live-run_test_1"
-    assert session.transcript[1]["blocks"][0]["content"] == "world"
+    assert session.transcript[1]["id"] == "m_assistant_1"
+    assert session.transcript[1]["blocks"][0]["kind"] == "reasoning"
+    assert session.transcript[1]["blocks"][1]["content"] == "world"
     assert session.transcript[1]["elapsedMs"] == 111
-
-
 def test_agent_run_service_drops_stale_transcript_items_not_backed_by_messages(tmp_path):
     initialize_store(tmp_path)
     session = AgentSession(session_id="sess_run_filter")

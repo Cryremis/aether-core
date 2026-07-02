@@ -252,17 +252,6 @@ class TranscriptService:
                     return next_transcript
         return [*transcript, item]
 
-    def filter_message_bound_items(self, transcript: list[dict[str, Any]], allowed_message_ids: set[str]) -> list[dict[str, Any]]:
-        filtered: list[dict[str, Any]] = []
-        for item in transcript:
-            item_id = str(item.get("id") or "")
-            role = str(item.get("role") or "")
-            if role in {"user", "assistant", "elicitation_response"}:
-                if item_id in allowed_message_ids:
-                    filtered.append(item)
-                continue
-        return filtered
-
     def _assistant_from_message(self, message: dict[str, Any], *, index: int) -> dict[str, Any] | None:
         blocks = message.get("blocks")
         normalized_blocks: list[dict[str, Any]] = []

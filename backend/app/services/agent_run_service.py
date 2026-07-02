@@ -293,37 +293,9 @@ class AgentRunService:
         session_service.persist(session)
 
     def _finalize_transcript(self, session: AgentSession) -> None:
-        allowed_message_ids = {
-            str(message.get("message_id") or "")
-            for message in session.messages
-            if str(message.get("role") or "") in {"user", "assistant", "elicitation_response"}
-        }
-        transcript = transcript_service.filter_message_bound_items(session.transcript, allowed_message_ids)
-
-        active_view = session.active_run_view or {}
-        assistant = active_view.get("assistant")
-        if isinstance(assistant, dict):
-            blocks = assistant.get("blocks")
-            if isinstance(blocks, list) and blocks:
-                persisted_assistant_ids = {
-                    str(item.get("id") or "")
-                    for item in transcript
-                    if str(item.get("role") or "") == "assistant"
-                }
-                live_assistant_id = str(assistant.get("id") or f"live-{active_view.get('run_id') or uuid.uuid4().hex}")
-                if live_assistant_id in persisted_assistant_ids:
-                    session.transcript = transcript
-                    return
-                assistant_item = transcript_service.assistant_item_from_blocks(
-                    message_id=live_assistant_id,
-                    blocks=blocks,
-                    elapsed_ms=assistant.get("elapsedMs") if isinstance(assistant.get("elapsedMs"), int) else None,
-                    streaming=bool(assistant.get("streaming")),
-                    response_started_at=str(assistant.get("response_started_at") or "") or None,
-                )
-                transcript = transcript_service.append_item(transcript, assistant_item)
-
-        session.transcript = transcript
+        # transcript 是历史真相，只能从正式 messages 投影生成；
+        # active_run_view 只是运行态快照，不能回写成 persisted transcript。
+        session.transcript = transcript_service.build_persisted_transcript(session.messages)
 
     def _find_or_create_block(self, blocks: list[dict[str, Any]], *, kind: str, prefix: str) -> dict[str, Any]:
         for block in reversed(blocks):
