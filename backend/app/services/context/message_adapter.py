@@ -151,6 +151,7 @@ class ContextMessageAdapter:
                 "content": content,
                 "is_boundary_marker": True,
                 "visible_in_transcript": False,
+                "ephemeral": True,
                 "compression_meta": {**compression_meta, "boundary_id": boundary_id},
             },
             turn_index=turn_index,
@@ -206,13 +207,22 @@ class ContextMessageAdapter:
     def to_api_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         allowed_roles = {"system", "user", "assistant", "tool"}
         result: list[dict[str, Any]] = []
+        system_contents: list[str] = []
         for message in messages:
-            if message.get("ephemeral"):
+            if message.get("ephemeral") or message.get("is_boundary_marker"):
                 continue
             role = str(message.get("role") or "")
             if role not in allowed_roles:
                 continue
-            result.append(self.strip_runtime_metadata(message))
+            api_message = self.strip_runtime_metadata(message)
+            if role == "system":
+                content = str(api_message.get("content") or "").strip()
+                if content:
+                    system_contents.append(content)
+                continue
+            result.append(api_message)
+        if system_contents:
+            result.insert(0, {"role": "system", "content": "\n\n".join(system_contents)})
         return result
 
     def estimate_text_for_summary(self, message: dict[str, Any], max_chars: int = 800) -> str:

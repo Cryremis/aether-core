@@ -37,35 +37,60 @@ class PromptService:
         session: AgentSession,
         *,
         conversation: dict[str, Any] | None = None,
+        runtime_sections: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
+        compiled = self.build_compiled_system_prompt(
+            session,
+            conversation=conversation,
+            runtime_sections=runtime_sections,
+        )
+        if not compiled:
+            return []
+        return [{"role": "system", "content": compiled}]
+
+    def build_compiled_system_prompt(
+        self,
+        session: AgentSession,
+        *,
+        conversation: dict[str, Any] | None = None,
+        runtime_sections: list[str] | None = None,
+    ) -> str:
+        platform = self._resolve_platform(conversation)
+        sections: list[tuple[str, str]] = []
 
         core_prompt = skill_service.build_core_system_prompt().strip()
         if core_prompt:
-            messages.append({"role": "system", "content": core_prompt})
+            sections.append(("Core Instructions", core_prompt))
 
-        platform = self._resolve_platform(conversation)
         platform_prompt = self._resolve_platform_prompt(session, conversation, platform)
         if platform_prompt:
-            messages.append({"role": "system", "content": platform_prompt})
+            sections.append(("Platform Instructions", platform_prompt))
 
-        for item in session.host_system_prompts:
-            if not item.get("enabled", True):
-                continue
-            rendered = self._render_template(
-                str(item.get("content") or ""),
-                session=session,
-                conversation=conversation,
-                platform=platform,
-            ).strip()
-            if rendered:
-                messages.append({"role": "system", "content": rendered})
+        host_prompts = self._resolve_host_prompts(session, conversation, platform)
+        if host_prompts:
+            sections.append(("Host Instructions", "\n\n".join(host_prompts)))
 
         environment_prompt = skill_service.build_environment_prompt(session).strip()
         if environment_prompt:
-            messages.append({"role": "system", "content": environment_prompt})
+            sections.append(("Environment Rules", environment_prompt))
 
-        return messages
+        if runtime_sections:
+            rendered_runtime = [section.strip() for section in runtime_sections if section and section.strip()]
+            if rendered_runtime:
+                sections.append(
+                    (
+                        "Runtime State",
+                        "Authoritative runtime state follows. Treat it as durable sidecar context for "
+                        "plans, progress, and pending user questions.\n\n" + "\n\n".join(rendered_runtime),
+                    )
+                )
+
+        compiled_sections = [
+            f"## {title}\n{content.strip()}"
+            for title, content in sections
+            if content and content.strip()
+        ]
+        return "\n\n".join(compiled_sections).strip()
 
     def _resolve_platform(self, conversation: dict[str, Any] | None) -> dict[str, Any] | None:
         if not conversation or not conversation.get("platform_id"):
@@ -89,6 +114,26 @@ class PromptService:
             conversation=conversation,
             platform=platform,
         ).strip()
+
+    def _resolve_host_prompts(
+        self,
+        session: AgentSession,
+        conversation: dict[str, Any] | None,
+        platform: dict[str, Any] | None,
+    ) -> list[str]:
+        rendered_prompts: list[str] = []
+        for item in session.host_system_prompts:
+            if not item.get("enabled", True):
+                continue
+            rendered = self._render_template(
+                str(item.get("content") or ""),
+                session=session,
+                conversation=conversation,
+                platform=platform,
+            ).strip()
+            if rendered:
+                rendered_prompts.append(rendered)
+        return rendered_prompts
 
     def _render_template(
         self,
@@ -117,9 +162,9 @@ class PromptService:
             },
             "workspace": {
                 "root_dir": settings.sandbox_docker_workspace_mount if session and session.workspace else "",
-            "skills_dir": settings.sandbox_docker_skills_dir if session and session.workspace else "",
-            "work_dir": settings.sandbox_docker_work_dir if session and session.workspace else "",
-            "logs_dir": settings.sandbox_docker_logs_dir if session and session.workspace else "",
+                "skills_dir": settings.sandbox_docker_skills_dir if session and session.workspace else "",
+                "work_dir": settings.sandbox_docker_work_dir if session and session.workspace else "",
+                "logs_dir": settings.sandbox_docker_logs_dir if session and session.workspace else "",
             },
         }
 

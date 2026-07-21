@@ -109,24 +109,9 @@ class AgentEngine:
     def _emit_context_event(self, session: AgentSession, event_type: ContextEventType, payload: dict[str, Any]):
         return make_event(session, event_type.value, **payload)
 
-    def _build_runtime_state_messages(self, session: AgentSession, turn_index: int) -> list[dict[str, Any]]:
-        sections = runtime_state_service.build_runtime_context_sections(session)
-        if not sections:
-            return []
-        return [
-            context_message_adapter.ensure_runtime_metadata(
-                {
-                    "role": "system",
-                    "content": (
-                        "Authoritative runtime state follows. Treat it as durable sidecar context for "
-                        "plans, progress, and pending user questions.\n\n" + "\n\n".join(sections)
-                    ),
-                    "visible_in_transcript": False,
-                },
-                turn_index=turn_index,
-                kind="runtime_state",
-            )
-        ]
+    def _build_runtime_state_sections(self, session: AgentSession) -> list[str]:
+        return runtime_state_service.build_runtime_context_sections(session)
+
 
     def _extract_llm_error_message(self, exc: httpx.HTTPStatusError) -> str:
         response = exc.response
@@ -438,8 +423,11 @@ class AgentEngine:
                 return
 
             raw_messages: list[dict[str, Any]] = [
-                *self._build_system_messages(session, conversation=conversation),
-                *self._build_runtime_state_messages(session, request_turn_index),
+                *self._build_system_messages(
+                    session,
+                    conversation=conversation,
+                    runtime_sections=self._build_runtime_state_sections(session),
+                ),
                 *session.messages,
             ]
             try:
@@ -1067,8 +1055,13 @@ class AgentEngine:
         session: AgentSession,
         *,
         conversation: dict[str, Any] | None = None,
+        runtime_sections: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        return prompt_service.build_system_messages(session, conversation=conversation)
+        return prompt_service.build_system_messages(
+            session,
+            conversation=conversation,
+            runtime_sections=runtime_sections,
+        )
 
     def _resolve_conversation_seed(self, session: AgentSession) -> dict[str, Any] | None:
         """从已有 conversation 继承身份与平台字段，避免兜底创建时丢失归属。"""
