@@ -626,7 +626,7 @@ class AgentEngine:
                     for context_event in recovered.events:
                         yield self._emit_context_event(session, context_event.type, context_event.payload)
                     continue
-                raise
+                raise RuntimeError(error_message) from exc
             except httpx.TransportError:
                 # 流式传输异常时，如果已有正文则以部分结果收尾，避免整轮失败；
                 # 若尚无正文，继续抛出让上层按错误路径处理。

@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import httpx
+import pytest
 
 from app.core.config import settings
 from app.runtime.engine import agent_engine
@@ -870,3 +871,29 @@ def test_agent_engine_returns_partial_answer_when_stream_interrupted_after_conte
     assert result_event["payload"]["stop_reason"] == "stream_interrupted"
     assert result_event["payload"]["result"] == "partial answer"
     assert not any(item["type"] == "error" for item in events)
+
+
+def test_agent_engine_raises_readable_llm_error_message(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        request = httpx.Request("POST", "http://models.ascend.huawei.com/v1/chat/completions")
+        response = httpx.Response(
+            400,
+            request=request,
+            json={"error": {"message": "invalid model: qwen3.6"}},
+        )
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+        if False:
+            yield {}
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = build_session("sess_engine_llm_error")
+
+    with pytest.raises(RuntimeError, match="LLM 服务报错: invalid model: qwen3.6"):
+        asyncio.run(collect_stream(session, "hello"))

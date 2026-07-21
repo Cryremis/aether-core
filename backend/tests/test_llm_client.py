@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
+import pytest
 
 from app.schemas.llm import LlmNetworkConfig
 from app.services.llm_client import LlmClient
@@ -30,11 +32,13 @@ class FakeResponse:
         *,
         status_code: int = 200,
         json_data: dict | None = None,
+        text: str | None = None,
         lines: list[str] | None = None,
         line_error: Exception | None = None,
     ):
         self.status_code = status_code
         self._json_data = json_data or {}
+        self._text = text
         self._lines = lines or []
         self._line_error = line_error
         self.request = httpx.Request("POST", "http://example.com/v1/chat/completions")
@@ -44,7 +48,7 @@ class FakeResponse:
         return self.status_code >= 400
 
     async def aread(self) -> bytes:
-        return b""
+        return self.text.encode("utf-8")
 
     def raise_for_status(self) -> None:
         if self.is_error:
@@ -56,6 +60,14 @@ class FakeResponse:
 
     def json(self) -> dict:
         return self._json_data
+
+    @property
+    def text(self) -> str:
+        if self._text is not None:
+            return self._text
+        if self._json_data:
+            return json.dumps(self._json_data, ensure_ascii=False)
+        return ""
 
     async def aiter_lines(self):
         for line in self._lines:
@@ -213,3 +225,52 @@ def test_stream_chat_completion_retries_once_when_stream_breaks_before_any_chunk
 
     assert chunks == [{"choices": [{"delta": {"content": "hello"}}]}]
     assert len(FakeAsyncClient.stream_payloads) == 2
+
+
+def test_create_chat_completion_raises_with_downstream_error_body(monkeypatch):
+    FakeAsyncClient.reset()
+    FakeAsyncClient.post_responses = [
+        FakeResponse(status_code=400, json_data={"error": {"message": "invalid model: qwen3.6"}}),
+    ]
+    monkeypatch.setattr("app.services.llm_client.httpx.AsyncClient", FakeAsyncClient)
+
+    client = LlmClient()
+    config = make_runtime_config()
+
+    with pytest.raises(httpx.HTTPStatusError, match="invalid model: qwen3.6"):
+        asyncio.run(
+            client.create_chat_completion(
+                config,
+                [{"role": "user", "content": "hi"}],
+                [],
+            )
+        )
+
+
+def test_stream_chat_completion_keeps_final_downstream_error_body_after_tool_retry(monkeypatch):
+    FakeAsyncClient.reset()
+    FakeAsyncClient.stream_responses = [
+        FakeResponse(status_code=400, json_data={"error": {"message": "tools are not supported"}}),
+        FakeResponse(status_code=400, json_data={"error": {"message": "invalid model: qwen3.6"}}),
+    ]
+    monkeypatch.setattr("app.services.llm_client.httpx.AsyncClient", FakeAsyncClient)
+
+    client = LlmClient()
+    config = make_runtime_config()
+
+    async def collect() -> list[dict]:
+        items: list[dict] = []
+        async for chunk in client.stream_chat_completion(
+            config,
+            [{"role": "user", "content": "hi"}],
+            [{"type": "function", "function": {"name": "demo", "parameters": {}}}],
+        ):
+            items.append(chunk)
+        return items
+
+    with pytest.raises(httpx.HTTPStatusError, match="invalid model: qwen3.6"):
+        asyncio.run(collect())
+
+    assert len(FakeAsyncClient.stream_payloads) == 2
+    assert "tools" in FakeAsyncClient.stream_payloads[0]
+    assert "tools" not in FakeAsyncClient.stream_payloads[1]

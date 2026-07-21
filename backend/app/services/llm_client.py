@@ -70,6 +70,41 @@ class LlmClient:
         payload.pop("tool_stream", None)
         return payload
 
+    def _response_error_detail(self, response: httpx.Response) -> str:
+        try:
+            text = response.text.strip()
+        except Exception:  # noqa: BLE001
+            text = ""
+        if text:
+            return text
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001
+            payload = None
+        if payload is None:
+            return ""
+        if isinstance(payload, (dict, list)):
+            try:
+                return json.dumps(payload, ensure_ascii=False)
+            except Exception:  # noqa: BLE001
+                return str(payload)
+        return str(payload).strip()
+
+    def _raise_for_status_with_detail(self, response: httpx.Response) -> None:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = self._response_error_detail(response)
+            if not detail:
+                raise
+            request_url = str(exc.request.url) if exc.request is not None else ""
+            url_suffix = f" for url '{request_url}'" if request_url else ""
+            raise httpx.HTTPStatusError(
+                f"LLM request failed with HTTP {response.status_code}{url_suffix}: {detail}",
+                request=exc.request,
+                response=exc.response,
+            ) from exc
+
     def _should_retry_without_tools(self, exc: httpx.HTTPStatusError, payload: dict[str, Any]) -> bool:
         if "tools" not in payload:
             return False
@@ -78,7 +113,7 @@ class LlmClient:
     async def _post_json(self, config: RuntimeLlmConfig, payload: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
             response = await client.post(self._endpoint(config), headers=self._headers(config), json=payload)
-            response.raise_for_status()
+            self._raise_for_status_with_detail(response)
             return response.json()
 
     async def _stream_request(
@@ -94,7 +129,7 @@ class LlmClient:
                     async with client.stream("POST", self._endpoint(config), headers=self._headers(config), json=payload) as response:
                         if response.is_error:
                             await response.aread()
-                            response.raise_for_status()
+                            self._raise_for_status_with_detail(response)
                         async for line in response.aiter_lines():
                             if not line or not line.startswith("data:"):
                                 continue
