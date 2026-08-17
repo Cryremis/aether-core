@@ -19,10 +19,10 @@ class HostAuthDescriptor(BaseModel):
 class HostToolDescriptor(BaseModel):
     """宿主注入的工具描述。"""
 
-    name: str
-    description: str
+    name: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    description: str = Field(min_length=1, max_length=16_384)
     input_schema: dict[str, Any] = Field(default_factory=dict)
-    endpoint: str
+    endpoint: str = Field(min_length=1, max_length=2048)
     method: str = "POST"
     headers: dict[str, str] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
@@ -79,6 +79,43 @@ class HostBindRequest(BaseModel):
     skills: list[HostSkillDescriptor] = Field(default_factory=list)
     system_prompts: list[HostSystemPromptDescriptor] = Field(default_factory=list)
     apis: list[HostApiDescriptor] = Field(default_factory=list)
+    tool_source_id: str = Field(default="host:bind", min_length=1, max_length=128)
+    tool_update_mode: Literal[
+        "replace_all",
+        "replace_source",
+        "replace_all_if_source_missing",
+    ] = "replace_all"
+    tool_refresh_policy: Literal["static_run", "round_boundary"] = "static_run"
+
+
+class HostToolCatalogReplaceRequest(BaseModel):
+    """Atomically replace all tools owned by one source, or the complete host catalog."""
+
+    source_id: str = Field(default="host:api", min_length=1, max_length=128)
+    replace_all: bool = False
+    expected_revision: int | None = Field(default=None, ge=0)
+    tools: list[HostToolDescriptor] = Field(default_factory=list, max_length=256)
+
+
+class HostToolUpsertOperation(BaseModel):
+    op: Literal["upsert"]
+    tool: HostToolDescriptor
+
+
+class HostToolRemoveOperation(BaseModel):
+    op: Literal["remove"]
+    name: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class HostToolCatalogPatchRequest(BaseModel):
+    """Apply an atomic set of source-owned tool upserts and removals."""
+
+    source_id: str = Field(default="host:api", min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=0)
+    operations: list[HostToolUpsertOperation | HostToolRemoveOperation] = Field(
+        min_length=1,
+        max_length=256,
+    )
 
 
 class HostBindingSummary(BaseModel):

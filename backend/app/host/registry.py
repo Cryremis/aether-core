@@ -51,6 +51,10 @@ class HostRegistry:
             if session.baseline_root != expected_baseline_root:
                 platform_baseline_service.materialize_to_session(str(platform["platform_key"]), session)
 
+        replace_all_tools = request.tool_update_mode == "replace_all" or (
+            request.tool_update_mode == "replace_all_if_source_missing"
+            and request.tool_source_id not in session.host_tool_collections
+        )
         session_service.attach_host(
             session=session,
             host_name=request.host_name,
@@ -65,6 +69,9 @@ class HostRegistry:
             ],
             system_prompts=[_to_dict(item) for item in request.system_prompts],
             apis=[_to_dict(item) for item in request.apis],
+            tool_source_id=request.tool_source_id,
+            replace_all_tools=replace_all_tools,
+            tool_refresh_policy=request.tool_refresh_policy,
         )
 
         session.conversation_id = conversation["conversation_id"]
@@ -84,6 +91,8 @@ class HostRegistry:
             "conversation_key": conversation.get("conversation_key"),
             "token": token,
             "tool_count": len(request.tools),
+            "tool_catalog_revision": session.host_tools_revision,
+            "tool_catalog_fingerprint": session.host_tools_fingerprint,
             "skill_count": len(request.skills),
             "api_count": len(request.apis),
         }

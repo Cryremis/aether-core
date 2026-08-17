@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import time
 import uuid
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.sandbox.manager import sandbox_manager
 from app.services.context.bootstrap import configure_context_runtime
 from app.services.session_types import AgentSession
 from app.services.transcript_service import transcript_service
+from app.services.tool_catalog_service import tool_catalog_service
 
 
 class SessionService:
@@ -54,10 +56,19 @@ class SessionService:
         skills: list[dict[str, Any]],
         system_prompts: list[dict[str, Any]],
         apis: list[dict[str, Any]],
+        tool_source_id: str = "host:bind",
+        replace_all_tools: bool = True,
+        tool_refresh_policy: str = "static_run",
     ) -> AgentSession:
         session.host_name = host_name
         session.host_context = context
-        session.host_tools = tools
+        tool_catalog_service.replace(
+            session,
+            tools,
+            source_id=tool_source_id,
+            replace_all=replace_all_tools,
+        )
+        session.tool_refresh_policy = tool_refresh_policy
         session.host_skills = skills
         session.host_system_prompts = system_prompts
         session.host_apis = apis
@@ -68,6 +79,22 @@ class SessionService:
     def persist(self, session: AgentSession) -> None:
         session.touch()
         self._write_metadata(session)
+
+    def clone_host_state(self, source: AgentSession, target: AgentSession) -> None:
+        """Clone a coherent host binding, including dynamic tool provenance and policy."""
+        target.host_name = source.host_name
+        target.host_context = copy.deepcopy(source.host_context)
+        target.host_tools = copy.deepcopy(source.host_tools)
+        target.host_tools_revision = source.host_tools_revision
+        target.host_tools_fingerprint = source.host_tools_fingerprint
+        target.host_tool_sources = copy.deepcopy(source.host_tool_sources)
+        target.host_tool_collections = copy.deepcopy(source.host_tool_collections)
+        target.tool_refresh_policy = source.tool_refresh_policy
+        target.host_skills = copy.deepcopy(source.host_skills)
+        target.host_system_prompts = copy.deepcopy(source.host_system_prompts)
+        target.host_apis = copy.deepcopy(source.host_apis)
+        target.touch()
+        self._write_metadata(target)
 
     def set_allow_network(self, session: AgentSession, allow_network: bool) -> None:
         session.allow_network = allow_network
@@ -114,6 +141,18 @@ class SessionService:
             platform_files=payload.get("platform_files", []),
             platform_skills=payload.get("platform_skills", []),
             host_tools=payload.get("host_tools", []),
+            host_tools_revision=int(payload.get("host_tools_revision", 0)),
+            host_tools_fingerprint=str(payload.get("host_tools_fingerprint") or ""),
+            host_tool_sources={
+                str(key): str(value)
+                for key, value in (payload.get("host_tool_sources") or {}).items()
+            },
+            host_tool_collections={
+                str(source_id): [dict(item) for item in tools if isinstance(item, dict)]
+                for source_id, tools in (payload.get("host_tool_collections") or {}).items()
+                if isinstance(tools, list)
+            },
+            tool_refresh_policy=str(payload.get("tool_refresh_policy") or "static_run"),
             host_skills=payload.get("host_skills", []),
             host_system_prompts=payload.get("host_system_prompts", []),
             uploaded_skills=payload.get("uploaded_skills", []),
@@ -147,6 +186,11 @@ class SessionService:
             "platform_files": session.platform_files,
             "platform_skills": session.platform_skills,
             "host_tools": session.host_tools,
+            "host_tools_revision": session.host_tools_revision,
+            "host_tools_fingerprint": session.host_tools_fingerprint,
+            "host_tool_sources": session.host_tool_sources,
+            "host_tool_collections": session.host_tool_collections,
+            "tool_refresh_policy": session.tool_refresh_policy,
             "host_skills": session.host_skills,
             "host_system_prompts": session.host_system_prompts,
             "uploaded_skills": session.uploaded_skills,

@@ -14,6 +14,7 @@ from app.services.context.context_pipeline import context_pipeline
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
+from app.services.tool_catalog_service import tool_catalog_service
 
 
 async def collect_stream(session: AgentSession, message: str) -> list[dict]:
@@ -396,6 +397,109 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
     assert any(block["kind"] == "tool" for block in session.transcript[-1]["blocks"])
     assert any(message.get("tool_calls") for message in session.messages if message.get("role") == "assistant")
     assert any(message.get("role") == "tool" for message in session.messages)
+
+
+def test_agent_engine_refreshes_host_tools_between_model_rounds(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    observed_tool_names: list[set[str]] = []
+    executed_snapshots: list[set[str]] = []
+    rounds = {"value": 0}
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        names = {item["function"]["name"] for item in tools}
+        observed_tool_names.append(names)
+        current_round = rounds["value"]
+        rounds["value"] += 1
+        if current_round == 0:
+            assert "load_dynamic_tool" in names
+            assert "dynamic_task_tool" not in names
+            yield {
+                "choices": [{
+                    "delta": {"tool_calls": [{
+                        "index": 0,
+                        "id": "call_load_dynamic",
+                        "function": {"name": "load_dynamic_tool", "arguments": "{}"},
+                    }]},
+                    "finish_reason": "tool_calls",
+                }]
+            }
+            return
+        if current_round == 1:
+            assert "dynamic_task_tool" in names
+            yield {
+                "choices": [{
+                    "delta": {"tool_calls": [{
+                        "index": 0,
+                        "id": "call_dynamic_task",
+                        "function": {"name": "dynamic_task_tool", "arguments": '{"task_id":"task-1"}'},
+                    }]},
+                    "finish_reason": "tool_calls",
+                }]
+            }
+            return
+        yield {
+            "choices": [{
+                "delta": {"content": "dynamic task completed"},
+                "finish_reason": "stop",
+            }]
+        }
+
+    async def fake_execute(session, tool_name, arguments, *, catalog_snapshot=None):
+        assert catalog_snapshot is not None
+        executed_snapshots.append(set(catalog_snapshot.host_descriptors_by_name))
+        if tool_name == "load_dynamic_tool":
+            assert "dynamic_task_tool" not in catalog_snapshot.host_descriptors_by_name
+            tool_catalog_service.apply_operations(
+                session,
+                source_id="host:dynamic",
+                upserts=[{
+                    "name": "dynamic_task_tool",
+                    "description": "execute a dynamically loaded task",
+                    "endpoint": "/api/tools/dynamic-task",
+                    "method": "POST",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"task_id": {"type": "string"}},
+                        "required": ["task_id"],
+                    },
+                }],
+                removals=[],
+            )
+            return {"summary": "dynamic tool loaded"}
+        assert tool_name == "dynamic_task_tool"
+        assert "dynamic_task_tool" in catalog_snapshot.host_descriptors_by_name
+        return {"summary": f"executed {arguments['task_id']}"}
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
+
+    session = build_session("sess_engine_dynamic_tools")
+    session.tool_refresh_policy = "round_boundary"
+    tool_catalog_service.replace(
+        session,
+        [{
+            "name": "load_dynamic_tool",
+            "description": "load another host tool",
+            "endpoint": "/api/tools/load",
+            "method": "POST",
+            "input_schema": {"type": "object", "properties": {}},
+        }],
+        source_id="host:base",
+        replace_all=True,
+    )
+
+    events = asyncio.run(collect_stream(session, "load and execute the dynamic task"))
+
+    assert len(observed_tool_names) == 3
+    assert "dynamic_task_tool" not in executed_snapshots[0]
+    assert "dynamic_task_tool" in executed_snapshots[1]
+    catalog_events = [item for item in events if item["type"] == "tool_catalog_changed"]
+    assert len(catalog_events) == 1
+    assert catalog_events[0]["payload"]["added"] == ["dynamic_task_tool"]
+    assert next(item for item in events if item["type"] == "result")["payload"]["result"] == "dynamic task completed"
 
 
 def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_path):

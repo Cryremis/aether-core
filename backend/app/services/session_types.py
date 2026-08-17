@@ -52,6 +52,11 @@ class AgentSession:
     platform_files: list[dict[str, Any]] = field(default_factory=list)
     platform_skills: list[dict[str, Any]] = field(default_factory=list)
     host_tools: list[dict[str, Any]] = field(default_factory=list)
+    host_tools_revision: int = 0
+    host_tools_fingerprint: str = ""
+    host_tool_sources: dict[str, str] = field(default_factory=dict)
+    host_tool_collections: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    tool_refresh_policy: str = "static_run"
     host_skills: list[dict[str, Any]] = field(default_factory=list)
     host_system_prompts: list[dict[str, Any]] = field(default_factory=list)
     uploaded_skills: list[dict[str, Any]] = field(default_factory=list)

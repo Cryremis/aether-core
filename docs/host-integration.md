@@ -26,6 +26,30 @@ Host tools are session-level descriptors, not uploaded host code. A descriptor i
 
 The implementation schema lives in [backend/app/schemas/host.py](../backend/app/schemas/host.py). Tool listing and execution are handled in [backend/app/services/tool_service.py](../backend/app/services/tool_service.py).
 
+### Dynamic Tool Catalog
+
+Hosts that need progressive disclosure can update a session's tool catalog after the initial bind:
+
+- `GET /api/v1/host/sessions/{session_id}/tools` returns the current automatic revision, fingerprint, tool names, and owning source IDs. Add `include_descriptors=true` only for diagnostics that need complete descriptors.
+- `PUT /api/v1/host/sessions/{session_id}/tools` atomically replaces all tools owned by one `source_id`. Set `replace_all=true` only when intentionally replacing the complete host catalog.
+- `PATCH /api/v1/host/sessions/{session_id}/tools` atomically applies source-owned upserts and removals.
+
+All three endpoints use the same platform-secret authentication as host bind and verify that the target session belongs to that platform. Revisions and fingerprints are generated and persisted by AetherCore; host operators do not maintain them. `expected_revision` is an optional optimistic-concurrency guard for callers that need compare-and-swap behavior.
+
+Tool ownership is source-aware. A page can own `host:page` while an on-demand loader owns `host:on-demand:devices`; replacing the page source does not remove the on-demand source. Multiple sources may own the same tool only when their complete descriptors are identical. A conflicting definition is rejected instead of choosing one nondeterministically.
+
+For a host that refreshes page tools, bind with:
+
+```json
+{
+  "tool_source_id": "host:page",
+  "tool_update_mode": "replace_all_if_source_missing",
+  "tool_refresh_policy": "round_boundary"
+}
+```
+
+`replace_all_if_source_missing` migrates a legacy session once, then only replaces that source on later binds. `round_boundary` captures an immutable catalog for each model round: calls produced by that round execute against the same snapshot, while catalog updates become visible before the next internal model round. This allows an Agent to discover a capability, load tools, and use them within one user response without changing the tool list during an in-flight model call. Existing hosts remain compatible because omitted fields retain `replace_all` and `static_run` behavior.
+
 ## Documentation Ownership
 
 - Root README: product value, deployer overview, and capability positioning.

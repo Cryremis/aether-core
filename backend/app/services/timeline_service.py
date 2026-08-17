@@ -270,15 +270,7 @@ class TimelineService:
         )
 
     def _clone_host_and_assets(self, source_session: AgentSession, target_session: AgentSession) -> None:
-        session_service.attach_host(
-            session=target_session,
-            host_name=source_session.host_name,
-            context=copy.deepcopy(source_session.host_context),
-            tools=copy.deepcopy(source_session.host_tools),
-            skills=copy.deepcopy(source_session.host_skills),
-            system_prompts=copy.deepcopy(source_session.host_system_prompts),
-            apis=copy.deepcopy(source_session.host_apis),
-        )
+        session_service.clone_host_state(source_session, target_session)
         target_session.platform_files = copy.deepcopy(source_session.platform_files)
         target_session.platform_skills = copy.deepcopy(source_session.platform_skills)
         target_session.uploaded_skills = copy.deepcopy(source_session.uploaded_skills)

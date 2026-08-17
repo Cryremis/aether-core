@@ -25,7 +25,7 @@ from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
-from app.services.tool_service import tool_service
+from app.services.tool_service import ToolCatalogSnapshot, tool_service
 from app.services.tool_display_service import tool_display_service
 from app.services.transcript_service import transcript_service
 
@@ -201,6 +201,7 @@ class AgentEngine:
         run_id: str,
         tool_call_id: str,
         output_event_queue: asyncio.Queue[dict[str, Any]],
+        catalog_snapshot: ToolCatalogSnapshot,
     ) -> asyncio.Task[Any]:
         execute_kwargs: dict[str, Any] = {}
         try:
@@ -225,6 +226,8 @@ class AgentEngine:
                 )
 
             execute_kwargs["output_event_callback"] = emit_output_event
+        if signature is not None and "catalog_snapshot" in signature.parameters:
+            execute_kwargs["catalog_snapshot"] = catalog_snapshot
         return asyncio.create_task(tool_service.execute(session, tool_name, tool_input, **execute_kwargs))
 
     async def stream_chat(
@@ -322,7 +325,7 @@ class AgentEngine:
             )
 
         llm_runtime = llm_config_service.resolve_for_conversation(conversation)
-        tools = tool_service.list_tool_schemas(session)
+        catalog_snapshot = tool_service.create_catalog_snapshot(session)
         turn_count = 0
         last_stop_reason: str | None = None
         last_tool_fingerprint: str | None = None
@@ -359,6 +362,24 @@ class AgentEngine:
 
         while True:
             turn_count += 1
+
+            if session.tool_refresh_policy == "round_boundary" and turn_count > 1:
+                refreshed_snapshot = tool_service.create_catalog_snapshot(session)
+                if refreshed_snapshot.fingerprint != catalog_snapshot.fingerprint:
+                    previous_names = set(catalog_snapshot.host_descriptors_by_name)
+                    current_names = set(refreshed_snapshot.host_descriptors_by_name)
+                    yield make_event(
+                        session,
+                        "tool_catalog_changed",
+                        previous_revision=catalog_snapshot.revision,
+                        current_revision=refreshed_snapshot.revision,
+                        added=sorted(current_names - previous_names),
+                        removed=sorted(previous_names - current_names),
+                        tool_count=len(refreshed_snapshot.schemas),
+                    )
+                catalog_snapshot = refreshed_snapshot
+
+            tools = list(catalog_snapshot.schemas)
 
             if self._run_is_aborted(session, run_id):
                 if persisted_assistant_blocks or session.get_partial_content(run_id):
@@ -733,6 +754,7 @@ class AgentEngine:
                         run_id=run_id,
                         tool_call_id=tool_call["id"],
                         output_event_queue=tool_output_queue,
+                        catalog_snapshot=catalog_snapshot,
                     )
                     session.set_tool_task(run_id, execution_task)
                     try:

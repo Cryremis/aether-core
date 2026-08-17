@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import copy
 import inspect
 import json
 import re
-from typing import Any, Callable, Awaitable
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Awaitable, Callable, Mapping
 from urllib.parse import urlparse
 
 import httpx
@@ -22,6 +25,7 @@ from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.tool_execution_service import ToolOutputEvent, tool_execution_service
+from app.services.tool_catalog_service import HostToolCatalogSnapshot, tool_catalog_service
 from app.services.search_service import search_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
@@ -29,6 +33,16 @@ from app.services.session_runtime_service import RuntimeBusyError, RuntimeStartE
 
 
 ToolHandler = Callable[[AgentSession, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class ToolCatalogSnapshot:
+    """Immutable model-facing schemas and matching host execution descriptors."""
+
+    revision: int
+    fingerprint: str
+    schemas: tuple[dict[str, Any], ...]
+    host_descriptors_by_name: Mapping[str, dict[str, Any]]
 
 
 def _is_absolute_url(value: str) -> bool:
@@ -574,7 +588,12 @@ class ToolService:
             )
         return response
 
-    def list_tool_schemas(self, session: AgentSession) -> list[dict[str, Any]]:
+    def list_tool_schemas(
+        self,
+        session: AgentSession,
+        *,
+        _host_snapshot: HostToolCatalogSnapshot | None = None,
+    ) -> list[dict[str, Any]]:
         """返回会话可用的工具 schema 列表。"""
         tools = self._registry.get_schemas()
         runtime_config = self._resolve_runtime_config(session)
@@ -611,7 +630,12 @@ class ToolService:
             ))
 
         # 添加宿主工具
-        for descriptor in session.host_tools:
+        host_descriptors = (
+            _host_snapshot.descriptors
+            if _host_snapshot is not None
+            else tool_catalog_service.snapshot(session).descriptors
+        )
+        for descriptor in host_descriptors:
             tools.append(self._make_schema(
                 descriptor["name"],
                 f"{descriptor['description']}（宿主工具）",
@@ -619,6 +643,27 @@ class ToolService:
             ))
 
         return tools
+
+    def create_catalog_snapshot(self, session: AgentSession) -> ToolCatalogSnapshot:
+        """Capture one coherent tool catalog for a complete model round."""
+        host_snapshot = tool_catalog_service.snapshot(session)
+        try:
+            signature = inspect.signature(self.list_tool_schemas)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None and "_host_snapshot" in signature.parameters:
+            schemas = self.list_tool_schemas(session, _host_snapshot=host_snapshot)
+        else:
+            # Keeps test and extension monkeypatches that implement the legacy signature compatible.
+            schemas = self.list_tool_schemas(session)
+        return ToolCatalogSnapshot(
+            revision=host_snapshot.revision,
+            fingerprint=host_snapshot.fingerprint,
+            schemas=tuple(copy.deepcopy(schemas)),
+            host_descriptors_by_name=MappingProxyType(
+                {name: copy.deepcopy(item) for name, item in host_snapshot.descriptors_by_name.items()}
+            ),
+        )
 
     async def execute(
         self,
@@ -629,6 +674,7 @@ class ToolService:
         run_id: str | None = None,
         tool_call_id: str | None = None,
         output_event_callback: Callable[[ToolOutputEvent], Awaitable[None]] | None = None,
+        catalog_snapshot: ToolCatalogSnapshot | None = None,
     ) -> dict[str, Any]:
         """执行指定工具。"""
         # 检查注册表中的内置工具
@@ -668,7 +714,11 @@ class ToolService:
             )
 
         # 处理宿主工具
-        descriptor = next((item for item in session.host_tools if item["name"] == tool_name), None)
+        descriptor = (
+            catalog_snapshot.host_descriptors_by_name.get(tool_name)
+            if catalog_snapshot is not None
+            else tool_catalog_service.snapshot(session).descriptors_by_name.get(tool_name)
+        )
         if descriptor:
             return await self._invoke_host_tool(session, descriptor, arguments)
 
@@ -725,10 +775,35 @@ class ToolService:
                             json=request_payload,
                         )
 
-            response.raise_for_status()
+            if response.is_error:
+                detail = self._host_error_detail(response)
+                raise RuntimeError(
+                    f"宿主工具 {descriptor['name']} 调用失败（HTTP {response.status_code}）：{detail}"
+                )
             data = response.json()
 
         return data if isinstance(data, dict) else {"result": data}
+
+    @staticmethod
+    def _host_error_detail(response: httpx.Response) -> str:
+        """Preserve a bounded host explanation so the model can recover intelligently."""
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        candidates: list[Any] = []
+        if isinstance(payload, dict):
+            candidates.extend((payload.get("detail"), payload.get("message"), payload.get("summary")))
+            error = payload.get("error")
+            if isinstance(error, dict):
+                candidates.extend((error.get("message"), error.get("detail")))
+            else:
+                candidates.append(error)
+        candidates.append(response.text)
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()[:2000]
+        return "宿主没有提供错误说明"
 
     def _get_host_base_url(self, session: AgentSession) -> str | None:
         if not session.host_context:

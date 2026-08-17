@@ -844,6 +844,105 @@ def test_host_bind_uses_conversation_key_to_control_reuse(tmp_path):
     assert third["conversation_key"] == "thread-b"
 
 
+def test_host_tool_catalog_api_supports_atomic_source_updates_and_rebind(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+    platform = store_service.create_platform(
+        platform_key="dynamic-host-tools",
+        display_name="Dynamic Host Tools",
+        host_type="embedded",
+        description="dynamic host tool catalog test",
+        owner_user_id=admin.user_id,
+    )
+    client = TestClient(app)
+    headers = {"X-Aether-Platform-Secret": platform["host_secret"]}
+    page_tool = {
+        "name": "current_page_tool",
+        "description": "operate the current page",
+        "endpoint": "/api/tools/current-page",
+        "input_schema": {"type": "object", "properties": {}},
+    }
+    bind_payload = {
+        "platform_key": platform["platform_key"],
+        "host_name": "POC",
+        "conversation_key": "dynamic-tools-thread",
+        "context": {
+            "user": {"id": "user-1", "name": "User 1"},
+            "extras": {"host_callback_base_url": "http://localhost:8000"},
+        },
+        "tools": [page_tool],
+        "tool_source_id": "host:page",
+        "tool_update_mode": "replace_source",
+        "tool_refresh_policy": "round_boundary",
+    }
+    bound = client.post("/api/v1/host/bind", headers=headers, json=bind_payload)
+    assert bound.status_code == 200
+    session_id = bound.json()["data"]["session_id"]
+    initial_revision = bound.json()["data"]["tool_catalog_revision"]
+
+    added = client.patch(
+        f"/api/v1/host/sessions/{session_id}/tools",
+        headers=headers,
+        json={
+            "source_id": "host:on-demand",
+            "expected_revision": initial_revision,
+            "operations": [{
+                "op": "upsert",
+                "tool": {
+                    "name": "on_demand_tool",
+                    "description": "perform an on-demand operation",
+                    "endpoint": "/api/tools/on-demand",
+                    "input_schema": {"type": "object", "properties": {}},
+                },
+            }],
+        },
+    )
+    assert added.status_code == 200
+    assert added.json()["data"]["added"] == ["on_demand_tool"]
+    updated_revision = added.json()["data"]["revision"]
+
+    stale = client.patch(
+        f"/api/v1/host/sessions/{session_id}/tools",
+        headers=headers,
+        json={
+            "source_id": "host:on-demand",
+            "expected_revision": initial_revision,
+            "operations": [{"op": "remove", "name": "on_demand_tool"}],
+        },
+    )
+    assert stale.status_code == 409
+    assert "版本冲突" in stale.json()["detail"]
+
+    rebound = client.post(
+        "/api/v1/host/bind",
+        headers=headers,
+        json={
+            **bind_payload,
+            "tools": [{**page_tool, "name": "next_page_tool"}],
+            "conversation_id": bound.json()["data"]["conversation_id"],
+        },
+    )
+    assert rebound.status_code == 200
+    catalog = client.get(
+        f"/api/v1/host/sessions/{session_id}/tools",
+        headers=headers,
+    )
+    assert catalog.status_code == 200
+    catalog_data = catalog.json()["data"]
+    assert catalog_data["revision"] > updated_revision
+    assert catalog_data["refresh_policy"] == "round_boundary"
+    assert {item["name"] for item in catalog_data["tools"]} == {
+        "next_page_tool",
+        "on_demand_tool",
+    }
+    sources_by_name = {item["name"]: item["source_ids"] for item in catalog_data["tools"]}
+    assert sources_by_name == {
+        "next_page_tool": ["host:page"],
+        "on_demand_tool": ["host:on-demand"],
+    }
+
+
 def test_host_bind_materializes_platform_baseline_skills_for_new_and_existing_sessions(tmp_path):
     initialize_isolated_runtime(tmp_path)
 

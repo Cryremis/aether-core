@@ -42,6 +42,7 @@ class AgentEvent(BaseModel):
         "tool_output_delta",
         "tool_progress",
         "tool_finished",
+        "tool_catalog_changed",
         "run_started",
         "assistant_visible_started",
         "artifact_created",

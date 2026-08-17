@@ -1,6 +1,10 @@
 # backend/tests/test_tool_service.py
 from __future__ import annotations
 
+import asyncio
+
+import httpx
+
 from app.schemas.llm import LlmNetworkConfig
 from app.services.llm_config_service import RuntimeLlmConfig
 from app.services.prompt_service import prompt_service
@@ -8,6 +12,36 @@ from app.services.runtime_state import runtime_state_service
 from app.services.session_types import AgentSession
 from app.services.tool_service import tool_service
 from app.sandbox.models import SandboxCommandResult
+
+
+def test_host_tool_error_preserves_bounded_host_detail(monkeypatch):
+    async def fake_request(_self, method, url, headers, json):
+        request = httpx.Request(method, url, headers=headers, json=json)
+        return httpx.Response(409, request=request, json={"detail": "页面版本已变化，请重新读取后再操作。"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+    session = AgentSession(
+        session_id="sess_host_error",
+        host_context={
+            "extras": {"host_callback_base_url": "http://host.example"},
+        },
+    )
+    descriptor = {
+        "name": "host_edit_page",
+        "endpoint": "/api/tools/edit",
+        "method": "POST",
+        "requires_auth": False,
+        "auth_inject": False,
+    }
+
+    try:
+        asyncio.run(tool_service._invoke_host_tool(session, descriptor, {"value": 1}))
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "HTTP 409" in message
+        assert "页面版本已变化，请重新读取后再操作。" in message
+    else:
+        raise AssertionError("expected host tool failure")
 
 
 def make_runtime_config(*, base_url: str, model: str) -> RuntimeLlmConfig:

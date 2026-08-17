@@ -96,15 +96,7 @@ def bootstrap_session(
             metadata={},
         )
         platform_baseline_service.materialize_to_session(platform["platform_key"], session)
-        session_service.attach_host(
-            session=session,
-            host_name=source_session.host_name,
-            context=dict(source_session.host_context),
-            tools=[dict(item) for item in source_session.host_tools],
-            skills=[dict(item) for item in source_session.host_skills],
-            system_prompts=[dict(item) for item in source_session.host_system_prompts],
-            apis=[dict(item) for item in source_session.host_apis],
-        )
+        session_service.clone_host_state(source_session, session)
         session.conversation_id = conversation["conversation_id"]
         session.allow_network = source_session.allow_network
         session_service.persist(session)
