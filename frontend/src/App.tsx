@@ -31,6 +31,7 @@ type ConversationItem = {
 };
 
 const EMBED_NAVIGATION_EVENT = "aethercore:session-changed";
+const EMBED_ASSISTANT_PREVIEW_EVENT = "aethercore:assistant-preview";
 
 export default function App() {
   const location = useLocation();
@@ -216,6 +217,30 @@ export default function App() {
     updateWorkbenchQuery("", true);
   };
 
+  const handleAssistantPreview = (preview: {
+    sessionId: string;
+    messageId: string;
+    contentId: string;
+    content: string;
+    status: "streaming" | "completed";
+  }) => {
+    if (!isEmbedMode || window.parent === window) return;
+    window.parent.postMessage(
+      {
+        source: "aethercore-workbench",
+        type: EMBED_ASSISTANT_PREVIEW_EVENT,
+        payload: {
+          session_id: preview.sessionId,
+          message_id: preview.messageId,
+          content_id: preview.contentId,
+          content: preview.content,
+          status: preview.status,
+        },
+      },
+      "*",
+    );
+  };
+
   const handleDeleteSession = async (targetSessionId: string) => {
     if (!window.confirm("确定删除该会话吗？")) return;
     try {
@@ -313,6 +338,7 @@ export default function App() {
                       onRenameSession={(id, title) => void handleRenameSession(id, title)}
                       onSessionCreated={handleCreateSessionAndSelect}
                       onSessionRefresh={(id) => void refreshConversations(id || sessionId)}
+                      onAssistantPreview={handleAssistantPreview}
                       onSessionSelect={(id) => {
                         setSessionId(id);
                         setIsNewSession(false);

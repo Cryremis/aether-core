@@ -386,6 +386,8 @@ def test_platform_integration_guide_returns_expected_snippets(tmp_path):
     assert 'workbenchUrl: "https://ac.example.com"' in payload["snippets"]["frontend"]
     assert 'src="https://ac-backend.example.com/api/v1/host/public/embed/aethercore-embed.js"' in payload["snippets"]["frontend"]
     assert 'bindUrl: "/api/v1/aethercore/embed/bind"' in payload["snippets"]["frontend"]
+    assert "assistantPreview:" in payload["snippets"]["frontend"]
+    assert "proactive: { enabled: true }" in payload["snippets"]["frontend"]
     assert "{{YOUR_USER_ID_RESOLVER}}" in payload["snippets"]["frontend"]
     assert payload["snippets"]["backend_env"] == ""
     assert 'AETHERCORE_PLATFORM_KEY = "guide-demo"' in payload["snippets"]["backend_fastapi"]

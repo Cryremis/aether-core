@@ -248,6 +248,7 @@ export function WorkbenchPage({
   onSessionCreated,
   onSessionRefresh,
   onSessionSelect,
+  onAssistantPreview,
 }: WorkbenchPageProps) {
   const { t } = useAppPreferences();
   const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>([]);
@@ -1179,6 +1180,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
             block.kind === "content" ? { ...block, content: refs.activeContentText.value, status: "streaming" } : block,
           );
         }
+        onAssistantPreview?.({
+          sessionId: effectiveSessionId,
+          messageId: assistantId,
+          contentId: refs.activeContentId.value,
+          content: refs.activeContentText.value,
+          status: "streaming",
+        });
         return;
       }
 
@@ -1187,6 +1195,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           updateAssistantBlock(assistantId, refs.activeContentId.value, (block) =>
             block.kind === "content" ? { ...block, content: refs.activeContentText.value, status: "done" } : block,
           );
+          onAssistantPreview?.({
+            sessionId: effectiveSessionId,
+            messageId: assistantId,
+            contentId: refs.activeContentId.value,
+            content: refs.activeContentText.value,
+            status: "completed",
+          });
         }
         refs.activeReasoningId.value = "";
         return;

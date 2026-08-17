@@ -16,6 +16,28 @@
     storagePrefix: "aethercore_conversation_key",
     sessionStoragePrefix: "aethercore_last_session",
     conversationIdStoragePrefix: "aethercore_last_conversation_id",
+    assistantPreview: {
+      enabled: false,
+      autoHideMs: 8000,
+      maxLength: 500,
+      streamThrottleMs: 120,
+      proactive: {
+        enabled: false,
+        sessionStoragePrefix: "aethercore_assistant_prompt_shown",
+        cooldownStoragePrefix: "aethercore_assistant_prompt_next",
+        initialDelayMinMs: 30000,
+        initialDelayMaxMs: 60000,
+        cooldownMinMs: 60 * 60 * 1000,
+        cooldownMaxMs: 4 * 60 * 60 * 1000,
+        editingRetryMinMs: 15000,
+        editingRetryMaxMs: 30000,
+        messages: [
+          "快来试试，我可以帮你操作平台。",
+          "我可以帮你操作当前平台。",
+          "有什么问题可以来问我。",
+        ],
+      },
+    },
     width: 760,
     minWidth: 420,
     maxWidth: 1100,
@@ -62,6 +84,7 @@
     onBindSuccess: null,
     onBindError: null,
     onResize: null,
+    onAssistantPreview: null,
     onError: function (error) {
       console.error("[AetherCore]", error);
     },
@@ -71,7 +94,45 @@
     const next = Object.assign({}, DEFAULTS, options || {});
     next.labels = Object.assign({}, DEFAULTS.labels, (options && options.labels) || {});
     next.theme = Object.assign({}, DEFAULTS.theme, (options && options.theme) || {});
+    const previewOptions = (options && options.assistantPreview) || {};
+    next.assistantPreview = Object.assign({}, DEFAULTS.assistantPreview, previewOptions);
+    next.assistantPreview.proactive = Object.assign(
+      {},
+      DEFAULTS.assistantPreview.proactive,
+      previewOptions.proactive || {}
+    );
     return next;
+  }
+
+  function randomBetween(minimum, maximum) {
+    const min = Math.max(0, Number(minimum) || 0);
+    const max = Math.max(min, Number(maximum) || min);
+    return min + Math.floor(Math.random() * (max - min + 1));
+  }
+
+  function normalizePreviewText(value, maxLength) {
+    let text = String(value || "")
+      .replace(/```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)```/g, "$1")
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/^\s{0,3}(?:#{1,6}|>|[-*+]\s|\d+[.)]\s)\s*/gm, "")
+      .replace(/[*_~`]+/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const limit = Math.max(1, Number(maxLength) || 500);
+    const characters = Array.from(text);
+    if (characters.length > limit) text = `${characters.slice(0, limit).join("")}…`;
+    return text;
+  }
+
+  function isEditingElement(element) {
+    return Boolean(
+      element &&
+        (element.tagName === "INPUT" ||
+          element.tagName === "TEXTAREA" ||
+          element.isContentEditable ||
+          (typeof element.closest === "function" && element.closest("[contenteditable='true']")))
+    );
   }
 
   function uuid() {
@@ -113,6 +174,13 @@
       .ac-embed-bubble__icon{position:relative;z-index:2;display:block;filter:drop-shadow(0 2px 5px rgba(255,255,255,.3))}
       .ac-embed-bubble__icon path{stroke-width:2.1}
       .ac-embed-bubble.is-hidden{display:none}
+      .ac-embed-preview{position:fixed;right:${config.right}px;bottom:${config.bottom + 76}px;display:none;width:min(292px,calc(100vw - 32px));min-height:52px;box-sizing:border-box;padding:11px 38px 11px 14px;color:#1f2937;background:rgba(255,255,255,.98);border:1px solid #d7dee8;border-radius:8px;box-shadow:0 8px 24px rgba(31,41,55,.14);animation:acEmbedPreviewEnter .2s ease-out}
+      .ac-embed-preview.is-visible{display:block}
+      .ac-embed-preview:after{position:absolute;right:24px;bottom:-7px;width:12px;height:12px;content:"";background:#fff;border-right:1px solid #d7dee8;border-bottom:1px solid #d7dee8;transform:rotate(45deg)}
+      .ac-embed-preview__text{display:-webkit-box;width:100%;padding:0;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font:inherit;font-size:13px;line-height:1.55;letter-spacing:0;color:inherit;text-align:left;overflow-wrap:anywhere;cursor:pointer;background:transparent;border:0}
+      .ac-embed-preview__text:hover{color:#166534}
+      .ac-embed-preview__close{position:absolute;z-index:1;top:7px;right:7px;display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;padding:0;color:#6b7280;cursor:pointer;background:transparent;border:0;border-radius:50%;font-size:18px;line-height:1}
+      .ac-embed-preview__close:hover{color:#111827;background:#f1f5f9}
       .ac-embed-modal{position:fixed;inset:0;display:none;background:${config.theme.overlayBackground};z-index:99998;backdrop-filter:blur(2px)}
       .ac-embed-modal.is-open{display:block}
       .ac-embed-modal.is-transparent{background:transparent;backdrop-filter:none}
@@ -136,9 +204,11 @@
       .ac-embed-frame{width:100%;height:100%;border:0;display:block;background:#f3f4f8;opacity:0;transition:opacity .18s ease}
       .ac-embed-frame.is-loaded{opacity:1}
       .ac-embed-shield{position:absolute;inset:0;z-index:3;background:transparent;cursor:ew-resize}
+      @keyframes acEmbedPreviewEnter{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
       @media (prefers-reduced-motion:no-preference){.ac-embed-bubble{animation:acEmbedBubbleFloat 3.8s ease-in-out infinite}.ac-embed-bubble:hover,.ac-embed-bubble:active,.ac-embed-bubble.is-open{animation-play-state:paused}}
       @keyframes acEmbedBubbleFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
-      @media (max-width:640px){.ac-embed-drawer{left:12px;right:12px;width:auto!important;border-radius:20px 20px 0 0}.ac-embed-resize{display:none}.ac-embed-bubble{right:20px;bottom:28px;width:58px;height:58px}.ac-embed-bubble__icon-wrap{width:39px;height:39px}}
+      @media (prefers-reduced-motion:reduce){.ac-embed-preview{animation:none}}
+      @media (max-width:640px){.ac-embed-drawer{left:12px;right:12px;width:auto!important;border-radius:20px 20px 0 0}.ac-embed-resize{display:none}.ac-embed-bubble{right:20px;bottom:28px;width:58px;height:58px}.ac-embed-bubble__icon-wrap{width:39px;height:39px}.ac-embed-preview{right:16px;bottom:98px;width:min(292px,calc(100vw - 32px))}}
     `;
     const style = document.createElement("style");
     style.id = "aethercore-embed-styles";
@@ -158,7 +228,13 @@
       };
       this.width = this.config.width;
       this.cleanupResize = null;
+      this.eventController = new AbortController();
+      this.proactiveTimer = null;
+      this.previewHideTimer = null;
+      this.previewStreamTimer = null;
+      this.pendingStreamPreview = null;
       this.handleWorkbenchMessage = this.handleWorkbenchMessage.bind(this);
+      this.handleWindowResize = this.handleWindowResize.bind(this);
     }
 
     init() {
@@ -166,6 +242,7 @@
       this.render();
       this.applyWidth(this.clampWidth(this.width));
       this.bindEvents();
+      this.scheduleInitialProactivePreview();
       if (this.config.autoOpen) this.open();
       return this;
     }
@@ -237,6 +314,10 @@
       root.id = this.config.rootId;
       root.className = "ac-embed-root";
       root.innerHTML = `
+        <aside class="ac-embed-preview" aria-live="polite" aria-atomic="true">
+          <button type="button" class="ac-embed-preview__text"></button>
+          <button type="button" class="ac-embed-preview__close" aria-label="关闭 Agent 提示" title="关闭">×</button>
+        </aside>
         <button type="button" class="ac-embed-bubble" aria-label="${this.config.labels.openAriaLabel}">
           <span class="ac-embed-bubble__icon-wrap" aria-hidden="true">
             <svg class="ac-embed-bubble__icon" width="25" height="25" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -266,34 +347,214 @@
 
     bindEvents() {
       const root = document.getElementById(this.config.rootId);
-      root.querySelector(".ac-embed-bubble").addEventListener("click", () => this.toggle());
+      const signal = this.eventController.signal;
+      root.querySelector(".ac-embed-bubble").addEventListener("click", () => this.toggle(), { signal });
+      root.querySelector(".ac-embed-preview__text").addEventListener("click", () => this.open(), { signal });
+      root.querySelector(".ac-embed-preview__close").addEventListener("click", () => this.hideAssistantPreview(), { signal });
       root.querySelector(".ac-embed-modal").addEventListener("click", () => {
         if (this.config.closeOnOverlayClick) this.close();
-      });
-      root.querySelector(".ac-embed-close").addEventListener("click", () => this.close());
-      root.querySelector(".ac-embed-card").addEventListener("click", () => this.bindToAetherCore());
-      root.querySelector(".ac-embed-frame").addEventListener("load", () => this.handleFrameLoad());
-      root.querySelector(".ac-embed-resize").addEventListener("pointerdown", (event) => this.startResize(event));
-      window.addEventListener("resize", () => this.applyWidth(this.clampWidth(this.width)));
-      window.addEventListener("message", this.handleWorkbenchMessage);
+      }, { signal });
+      root.querySelector(".ac-embed-close").addEventListener("click", () => this.close(), { signal });
+      root.querySelector(".ac-embed-card").addEventListener("click", () => this.bindToAetherCore(), { signal });
+      root.querySelector(".ac-embed-frame").addEventListener("load", () => this.handleFrameLoad(), { signal });
+      root.querySelector(".ac-embed-resize").addEventListener("pointerdown", (event) => this.startResize(event), { signal });
+      window.addEventListener("resize", this.handleWindowResize, { signal });
+      window.addEventListener("message", this.handleWorkbenchMessage, { signal });
+    }
+
+    handleWindowResize() {
+      this.applyWidth(this.clampWidth(this.width));
+    }
+
+    isWorkbenchMessage(event) {
+      const root = document.getElementById(this.config.rootId);
+      const frame = root && root.querySelector(".ac-embed-frame");
+      if (!frame || event.source !== frame.contentWindow) return false;
+      try {
+        const expectedOrigin = new URL(frame.src, window.location.href).origin;
+        return !event.origin || event.origin === expectedOrigin;
+      } catch (_error) {
+        return false;
+      }
     }
 
     handleWorkbenchMessage(event) {
       const data = event && event.data;
-      if (!data || data.source !== "aethercore-workbench" || data.type !== "aethercore:session-changed") {
+      if (!this.isWorkbenchMessage(event) || !data || data.source !== "aethercore-workbench") {
         return;
       }
       const payload = data.payload || {};
-      if (payload.session_id) {
-        this.setLastSessionId(String(payload.session_id));
+      if (data.type === "aethercore:session-changed") {
+        if (payload.session_id) {
+          this.setLastSessionId(String(payload.session_id));
+        }
+        if (payload.conversation_id) {
+          this.setLastConversationId(String(payload.conversation_id));
+        }
+        return;
       }
-      if (payload.conversation_id) {
-        this.setLastConversationId(String(payload.conversation_id));
+
+      if (data.type !== "aethercore:assistant-preview" || !this.config.assistantPreview.enabled) {
+        return;
       }
+      const preview = {
+        sessionId: String(payload.session_id || ""),
+        messageId: String(payload.message_id || ""),
+        contentId: String(payload.content_id || ""),
+        content: String(payload.content || ""),
+        status: payload.status === "completed" ? "completed" : "streaming",
+      };
+      if (!preview.content || !preview.messageId || !preview.contentId) return;
+      this.queueAssistantPreview(preview);
+    }
+
+    queueAssistantPreview(preview) {
+      if (preview.status === "completed") {
+        if (this.previewStreamTimer) window.clearTimeout(this.previewStreamTimer);
+        this.previewStreamTimer = null;
+        this.pendingStreamPreview = null;
+        this.showAssistantPreview(preview.content, { kind: "assistant", preview });
+        return;
+      }
+      this.pendingStreamPreview = preview;
+      if (this.previewStreamTimer) return;
+      this.previewStreamTimer = window.setTimeout(() => {
+        const pending = this.pendingStreamPreview;
+        this.previewStreamTimer = null;
+        this.pendingStreamPreview = null;
+        if (pending) this.showAssistantPreview(pending.content, { kind: "assistant", preview: pending });
+      }, Math.max(0, Number(this.config.assistantPreview.streamThrottleMs) || 0));
+    }
+
+    getProactiveStorageKey(prefix) {
+      return this.getPerUserStorageKey(prefix);
+    }
+
+    isProactiveSuppressed() {
+      const prefix = this.config.assistantPreview.proactive.sessionStoragePrefix;
+      try {
+        return window.sessionStorage.getItem(this.getProactiveStorageKey(prefix)) === "1";
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    suppressProactiveForSession() {
+      const prefix = this.config.assistantPreview.proactive.sessionStoragePrefix;
+      try {
+        window.sessionStorage.setItem(this.getProactiveStorageKey(prefix), "1");
+      } catch (_error) {
+        // Storage can be unavailable in privacy-restricted embeds.
+      }
+      if (this.proactiveTimer) window.clearTimeout(this.proactiveTimer);
+      this.proactiveTimer = null;
+    }
+
+    getNextProactiveAt() {
+      const prefix = this.config.assistantPreview.proactive.cooldownStoragePrefix;
+      try {
+        return Number(window.localStorage.getItem(this.getProactiveStorageKey(prefix))) || 0;
+      } catch (_error) {
+        return 0;
+      }
+    }
+
+    setNextProactiveAt(timestamp) {
+      const prefix = this.config.assistantPreview.proactive.cooldownStoragePrefix;
+      try {
+        window.localStorage.setItem(this.getProactiveStorageKey(prefix), String(timestamp));
+      } catch (_error) {
+        // The in-memory session guard still prevents repeated prompts in this tab.
+      }
+    }
+
+    scheduleInitialProactivePreview() {
+      const preview = this.config.assistantPreview;
+      const proactive = preview.proactive;
+      if (!preview.enabled || !proactive.enabled || this.isProactiveSuppressed()) return;
+      const initialDelay = randomBetween(proactive.initialDelayMinMs, proactive.initialDelayMaxMs);
+      const cooldownDelay = Math.max(0, this.getNextProactiveAt() - Date.now());
+      this.scheduleProactivePreview(Math.max(initialDelay, cooldownDelay));
+    }
+
+    scheduleProactivePreview(delay) {
+      if (this.proactiveTimer) window.clearTimeout(this.proactiveTimer);
+      this.proactiveTimer = window.setTimeout(() => {
+        this.proactiveTimer = null;
+        this.tryShowProactivePreview();
+      }, Math.max(0, delay));
+    }
+
+    resolveProactiveMessage() {
+      const configured = this.config.assistantPreview.proactive.messages;
+      let messages = configured;
+      if (typeof configured === "function") {
+        try {
+          messages = configured(this.state, this.config);
+        } catch (error) {
+          this.emitHook("onError", error);
+          return "";
+        }
+      }
+      if (typeof messages === "string") return messages;
+      if (!Array.isArray(messages) || messages.length === 0) return "";
+      return String(messages[Math.floor(Math.random() * messages.length)] || "");
+    }
+
+    tryShowProactivePreview() {
+      const proactive = this.config.assistantPreview.proactive;
+      if (this.isProactiveSuppressed() || this.state.open) return;
+      if (isEditingElement(document.activeElement)) {
+        this.scheduleProactivePreview(
+          randomBetween(proactive.editingRetryMinMs, proactive.editingRetryMaxMs)
+        );
+        return;
+      }
+      const message = this.resolveProactiveMessage();
+      if (!message) return;
+      this.suppressProactiveForSession();
+      this.setNextProactiveAt(
+        Date.now() + randomBetween(proactive.cooldownMinMs, proactive.cooldownMaxMs)
+      );
+      this.showAssistantPreview(message, { kind: "proactive" });
+    }
+
+    showAssistantPreview(text, options) {
+      if (!this.config.assistantPreview.enabled || this.state.open) return false;
+      const content = normalizePreviewText(text, this.config.assistantPreview.maxLength);
+      if (!content) return false;
+      const root = document.getElementById(this.config.rootId);
+      if (!root) return false;
+      const preview = root.querySelector(".ac-embed-preview");
+      const textElement = root.querySelector(".ac-embed-preview__text");
+      textElement.textContent = content;
+      preview.classList.add("is-visible");
+      if (this.previewHideTimer) window.clearTimeout(this.previewHideTimer);
+      const autoHideMs = Math.max(0, Number(this.config.assistantPreview.autoHideMs) || 0);
+      if (autoHideMs > 0) {
+        this.previewHideTimer = window.setTimeout(() => this.hideAssistantPreview(), autoHideMs);
+      }
+      this.emitHook("onAssistantPreview", {
+        content,
+        kind: (options && options.kind) || "manual",
+        preview: (options && options.preview) || null,
+      });
+      return true;
+    }
+
+    hideAssistantPreview() {
+      const root = document.getElementById(this.config.rootId);
+      const preview = root && root.querySelector(".ac-embed-preview");
+      if (preview) preview.classList.remove("is-visible");
+      if (this.previewHideTimer) window.clearTimeout(this.previewHideTimer);
+      this.previewHideTimer = null;
     }
 
     open() {
       const root = document.getElementById(this.config.rootId);
+      if (!root) return;
+      this.suppressProactiveForSession();
+      this.hideAssistantPreview();
       this.state.open = true;
       root.querySelector(".ac-embed-drawer").classList.add("is-open");
       root.querySelector(".ac-embed-modal").classList.add("is-open");
@@ -307,6 +568,7 @@
 
     close() {
       const root = document.getElementById(this.config.rootId);
+      if (!root) return;
       this.state.open = false;
       root.querySelector(".ac-embed-drawer").classList.remove("is-open");
       root.querySelector(".ac-embed-modal").classList.remove("is-open");
@@ -447,6 +709,15 @@
       window.addEventListener("pointermove", handleMove);
       window.addEventListener("pointerup", handleUp);
       this.cleanupResize = handleUp;
+    }
+
+    destroy() {
+      if (this.cleanupResize) this.cleanupResize();
+      if (this.proactiveTimer) window.clearTimeout(this.proactiveTimer);
+      if (this.previewHideTimer) window.clearTimeout(this.previewHideTimer);
+      if (this.previewStreamTimer) window.clearTimeout(this.previewStreamTimer);
+      this.eventController.abort();
+      document.getElementById(this.config.rootId)?.remove();
     }
   }
 

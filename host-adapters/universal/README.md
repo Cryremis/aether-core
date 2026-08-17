@@ -8,6 +8,32 @@ Most host platform owners should not use this file as their integration guide. A
 
 - `aethercore-embed.js`: the framework-agnostic browser loader served from `/api/v1/host/public/embed/aethercore-embed.js`.
 
+## Assistant Preview
+
+The universal adapter can show the latest user-visible assistant text beside the launcher. Reasoning, tool calls, and tool results are excluded at the Workbench event source. The preview replaces the previous text, is clamped to two lines, and opens the Workbench when clicked.
+
+The capability is opt-in for existing hosts:
+
+```js
+window.mountAetherCore({
+  // Existing bind options...
+  assistantPreview: {
+    enabled: true,
+    proactive: {
+      enabled: true,
+      messages: [
+        "快来试试，我可以帮你操作平台。",
+        "有什么问题可以来问我。",
+      ],
+    },
+  },
+});
+```
+
+Proactive prompts first appear 30-60 seconds after the page opens. After a prompt is shown, the next eligible prompt time is randomized between one and four hours and persisted per platform user. A prompt appears at most once per browser-tab session, and is deferred while the user is editing an `input`, `textarea`, or `contenteditable` field. These defaults can be overridden through `assistantPreview.proactive`.
+
+Live assistant previews are independent from proactive prompt suppression. Public instance methods `showAssistantPreview(text)`, `hideAssistantPreview()`, and `destroy()` are available for host lifecycle integrations. `onAssistantPreview` observes normalized preview updates.
+
 ## Maintainer Notes
 
 - Keep this adapter framework-neutral. Host products should configure it through `window.mountAetherCore(...)`, not by editing the adapter.

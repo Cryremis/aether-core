@@ -135,6 +135,13 @@ export type WorkbenchPageProps = {
   onSessionCreated?: (sessionId: string) => void;
   onSessionRefresh?: (sessionId?: string) => void;
   onSessionSelect?: (sessionId: string) => void;
+  onAssistantPreview?: (preview: {
+    sessionId: string;
+    messageId: string;
+    contentId: string;
+    content: string;
+    status: "streaming" | "completed";
+  }) => void;
 };
 
 export type WorkboardOperation = ApiWorkboardOperation;

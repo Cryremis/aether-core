@@ -255,6 +255,10 @@ class PlatformIntegrationService:
                   title: "AetherCore",
                   subtitle: "嵌入式工作台",
                   credentials: "include",
+                  assistantPreview: {{
+                    enabled: true,
+                    proactive: {{ enabled: true }}
+                  }},
                   getUserId: function () {{
                     return {{{{YOUR_USER_ID_RESOLVER}}}};
                   }}
@@ -277,6 +281,10 @@ class PlatformIntegrationService:
                   title: "AetherCore",
                   subtitle: "嵌入式工作台",
                   credentials: "omit",
+                  assistantPreview: {{
+                    enabled: true,
+                    proactive: {{ enabled: true }}
+                  }},
                   getUserId: function () {{
                     return {{{{YOUR_USER_ID_RESOLVER}}}};
                   }},
@@ -324,6 +332,10 @@ class PlatformIntegrationService:
                     title: "AetherCore",
                     subtitle: "匿名访客工作台",
                     credentials: "include",
+                    assistantPreview: {{
+                      enabled: true,
+                      proactive: {{ enabled: true }}
+                    }},
                     getUserId: function () {{
                       return guestId;
                     }},
@@ -372,6 +384,10 @@ class PlatformIntegrationService:
                     title: "AetherCore",
                     subtitle: "匿名访客工作台",
                     credentials: "omit",
+                    assistantPreview: {{
+                      enabled: true,
+                      proactive: {{ enabled: true }}
+                    }},
                     getUserId: function () {{
                       return guestId;
                     }},
