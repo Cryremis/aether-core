@@ -32,10 +32,16 @@ function createFixture() {
   const textElement = { textContent: "" };
   const frameWindow = {};
   const frame = { src: "https://agent.example/workbench", contentWindow: frameWindow };
+  const createClassElement = () => ({
+    classList: { add() {}, remove() {} },
+  });
   const elements = {
     ".ac-embed-preview": preview,
     ".ac-embed-preview__text": textElement,
     ".ac-embed-frame": frame,
+    ".ac-embed-drawer": createClassElement(),
+    ".ac-embed-modal": createClassElement(),
+    ".ac-embed-bubble": createClassElement(),
   };
   const root = { querySelector: (selector) => elements[selector] || null, remove() {} };
 
@@ -166,6 +172,49 @@ test("records one-to-four-hour cooldown after a proactive prompt", () => {
     const nextAt = instance.getNextProactiveAt();
     assert.ok(nextAt >= before + 60 * 60 * 1000);
     assert.ok(nextAt <= Date.now() + 60 * 60 * 1000);
+  } finally {
+    Math.random = originalRandom;
+    instance.destroy();
+  }
+});
+
+test("retains assistant正文 received while open and presents it after close", () => {
+  const fixture = createFixture();
+  const instance = new fixture.AetherCoreEmbed({
+    autoBind: false,
+    assistantPreview: { enabled: true, autoHideMs: 0, showLatestOnClose: true },
+  });
+
+  instance.open();
+  assert.equal(
+    instance.showAssistantPreview("窗口内收到的最新正文", { kind: "assistant" }),
+    false,
+  );
+  assert.equal(fixture.visibleClasses.has("is-visible"), false);
+
+  instance.close();
+  assert.equal(fixture.textElement.textContent, "窗口内收到的最新正文");
+  assert.equal(fixture.visibleClasses.has("is-visible"), true);
+  instance.destroy();
+});
+
+test("opening the workbench defers but does not consume a proactive prompt", () => {
+  const fixture = createFixture();
+  const instance = new fixture.AetherCoreEmbed({
+    autoBind: false,
+    assistantPreview: { enabled: true, proactive: { enabled: true } },
+  });
+  const delays = [];
+  instance.scheduleProactivePreview = (delay) => delays.push(delay);
+
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    instance.open();
+    assert.equal(instance.isProactiveSuppressed(), false);
+    instance.tryShowProactivePreview();
+    assert.equal(delays.shift(), 15000);
+    assert.equal(instance.isProactiveSuppressed(), false);
   } finally {
     Math.random = originalRandom;
     instance.destroy();

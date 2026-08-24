@@ -49,7 +49,12 @@ def get_public_embed_loader() -> FileResponse:
     asset_path = settings.project_root / "host-adapters" / "universal" / "aethercore-embed.js"
     if not asset_path.exists():
         raise HTTPException(status_code=404, detail="官方 embed loader 不存在")
-    return FileResponse(path=Path(asset_path), media_type="application/javascript", filename="aethercore-embed.js")
+    return FileResponse(
+        path=Path(asset_path),
+        media_type="application/javascript",
+        filename="aethercore-embed.js",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @router.post("/bind")

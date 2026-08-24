@@ -616,6 +616,7 @@ def test_public_embed_loader_is_served_from_backend(tmp_path):
     assert response.status_code == 200
     assert "window.mountAetherCore" in response.text
     assert "application/javascript" in response.headers["content-type"]
+    assert response.headers["cache-control"] == "no-cache"
 
 
 def test_platform_registration_approval_creates_platform_and_assigns_applicant(tmp_path):

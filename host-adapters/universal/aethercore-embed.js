@@ -21,6 +21,7 @@
       autoHideMs: 8000,
       maxLength: 500,
       streamThrottleMs: 120,
+      showLatestOnClose: true,
       proactive: {
         enabled: false,
         sessionStoragePrefix: "aethercore_assistant_prompt_shown",
@@ -174,10 +175,10 @@
       .ac-embed-bubble__icon{position:relative;z-index:2;display:block;filter:drop-shadow(0 2px 5px rgba(255,255,255,.3))}
       .ac-embed-bubble__icon path{stroke-width:2.1}
       .ac-embed-bubble.is-hidden{display:none}
-      .ac-embed-preview{position:fixed;right:${config.right}px;bottom:${config.bottom + 76}px;display:none;width:min(292px,calc(100vw - 32px));min-height:52px;box-sizing:border-box;padding:11px 38px 11px 14px;color:#1f2937;background:rgba(255,255,255,.98);border:1px solid #d7dee8;border-radius:8px;box-shadow:0 8px 24px rgba(31,41,55,.14);animation:acEmbedPreviewEnter .2s ease-out}
+      .ac-embed-preview{position:fixed;right:${config.right}px;bottom:${config.bottom + 76}px;display:none;width:min(360px,calc(100vw - 32px));min-height:68px;box-sizing:border-box;padding:13px 40px 13px 16px;color:#1f2937;background:rgba(255,255,255,.98);border:1px solid #d7dee8;border-radius:8px;box-shadow:0 8px 24px rgba(31,41,55,.14);animation:acEmbedPreviewEnter .2s ease-out}
       .ac-embed-preview.is-visible{display:block}
       .ac-embed-preview:after{position:absolute;right:24px;bottom:-7px;width:12px;height:12px;content:"";background:#fff;border-right:1px solid #d7dee8;border-bottom:1px solid #d7dee8;transform:rotate(45deg)}
-      .ac-embed-preview__text{display:-webkit-box;width:100%;padding:0;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;font:inherit;font-size:13px;line-height:1.55;letter-spacing:0;color:inherit;text-align:left;overflow-wrap:anywhere;cursor:pointer;background:transparent;border:0}
+      .ac-embed-preview__text{display:-webkit-box;width:100%;max-height:65.1px;padding:0;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:3;font:inherit;font-size:14px;line-height:1.55;letter-spacing:0;color:inherit;text-align:left;overflow-wrap:anywhere;cursor:pointer;background:transparent;border:0}
       .ac-embed-preview__text:hover{color:#166534}
       .ac-embed-preview__close{position:absolute;z-index:1;top:7px;right:7px;display:inline-flex;width:26px;height:26px;align-items:center;justify-content:center;padding:0;color:#6b7280;cursor:pointer;background:transparent;border:0;border-radius:50%;font-size:18px;line-height:1}
       .ac-embed-preview__close:hover{color:#111827;background:#f1f5f9}
@@ -208,7 +209,7 @@
       @media (prefers-reduced-motion:no-preference){.ac-embed-bubble{animation:acEmbedBubbleFloat 3.8s ease-in-out infinite}.ac-embed-bubble:hover,.ac-embed-bubble:active,.ac-embed-bubble.is-open{animation-play-state:paused}}
       @keyframes acEmbedBubbleFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
       @media (prefers-reduced-motion:reduce){.ac-embed-preview{animation:none}}
-      @media (max-width:640px){.ac-embed-drawer{left:12px;right:12px;width:auto!important;border-radius:20px 20px 0 0}.ac-embed-resize{display:none}.ac-embed-bubble{right:20px;bottom:28px;width:58px;height:58px}.ac-embed-bubble__icon-wrap{width:39px;height:39px}.ac-embed-preview{right:16px;bottom:98px;width:min(292px,calc(100vw - 32px))}}
+      @media (max-width:640px){.ac-embed-drawer{left:12px;right:12px;width:auto!important;border-radius:20px 20px 0 0}.ac-embed-resize{display:none}.ac-embed-bubble{right:20px;bottom:28px;width:58px;height:58px}.ac-embed-bubble__icon-wrap{width:39px;height:39px}.ac-embed-preview{right:16px;bottom:98px;width:min(360px,calc(100vw - 32px))}}
     `;
     const style = document.createElement("style");
     style.id = "aethercore-embed-styles";
@@ -233,6 +234,9 @@
       this.previewHideTimer = null;
       this.previewStreamTimer = null;
       this.pendingStreamPreview = null;
+      this.latestAssistantPreview = null;
+      this.assistantPreviewRevision = 0;
+      this.presentedAssistantPreviewRevision = 0;
       this.handleWorkbenchMessage = this.handleWorkbenchMessage.bind(this);
       this.handleWindowResize = this.handleWindowResize.bind(this);
     }
@@ -503,8 +507,8 @@
 
     tryShowProactivePreview() {
       const proactive = this.config.assistantPreview.proactive;
-      if (this.isProactiveSuppressed() || this.state.open) return;
-      if (isEditingElement(document.activeElement)) {
+      if (this.isProactiveSuppressed()) return;
+      if (this.state.open || isEditingElement(document.activeElement)) {
         this.scheduleProactivePreview(
           randomBetween(proactive.editingRetryMinMs, proactive.editingRetryMaxMs)
         );
@@ -520,9 +524,19 @@
     }
 
     showAssistantPreview(text, options) {
-      if (!this.config.assistantPreview.enabled || this.state.open) return false;
+      if (!this.config.assistantPreview.enabled) return false;
       const content = normalizePreviewText(text, this.config.assistantPreview.maxLength);
       if (!content) return false;
+      const previewOptions = options || {};
+      const kind = previewOptions.kind || "manual";
+      if (kind === "assistant" && previewOptions.remember !== false) {
+        this.assistantPreviewRevision += 1;
+        this.latestAssistantPreview = {
+          content,
+          options: Object.assign({}, previewOptions, { remember: false }),
+        };
+      }
+      if (this.state.open) return false;
       const root = document.getElementById(this.config.rootId);
       if (!root) return false;
       const preview = root.querySelector(".ac-embed-preview");
@@ -536,9 +550,12 @@
       }
       this.emitHook("onAssistantPreview", {
         content,
-        kind: (options && options.kind) || "manual",
-        preview: (options && options.preview) || null,
+        kind,
+        preview: previewOptions.preview || null,
       });
+      if (kind === "assistant") {
+        this.presentedAssistantPreviewRevision = this.assistantPreviewRevision;
+      }
       return true;
     }
 
@@ -553,7 +570,6 @@
     open() {
       const root = document.getElementById(this.config.rootId);
       if (!root) return;
-      this.suppressProactiveForSession();
       this.hideAssistantPreview();
       this.state.open = true;
       root.querySelector(".ac-embed-drawer").classList.add("is-open");
@@ -574,6 +590,16 @@
       root.querySelector(".ac-embed-modal").classList.remove("is-open");
       root.querySelector(".ac-embed-bubble").classList.remove("is-hidden");
       root.querySelector(".ac-embed-bubble").classList.remove("is-open");
+      if (
+        this.config.assistantPreview.showLatestOnClose &&
+        this.latestAssistantPreview &&
+        this.assistantPreviewRevision > this.presentedAssistantPreviewRevision
+      ) {
+        this.showAssistantPreview(
+          this.latestAssistantPreview.content,
+          this.latestAssistantPreview.options
+        );
+      }
       this.emitHook("onClose");
     }
 
@@ -716,6 +742,7 @@
       if (this.proactiveTimer) window.clearTimeout(this.proactiveTimer);
       if (this.previewHideTimer) window.clearTimeout(this.previewHideTimer);
       if (this.previewStreamTimer) window.clearTimeout(this.previewStreamTimer);
+      this.latestAssistantPreview = null;
       this.eventController.abort();
       document.getElementById(this.config.rootId)?.remove();
     }

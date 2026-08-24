@@ -10,7 +10,7 @@ Most host platform owners should not use this file as their integration guide. A
 
 ## Assistant Preview
 
-The universal adapter can show the latest user-visible assistant text beside the launcher. Reasoning, tool calls, and tool results are excluded at the Workbench event source. The preview replaces the previous text, is clamped to two lines, and opens the Workbench when clicked.
+The universal adapter can show the latest user-visible assistant text beside the launcher. Reasoning, tool calls, and tool results are excluded at the Workbench event source. The preview replaces the previous text, is clamped to three lines, and opens the Workbench when clicked. Text received while the Workbench is open is retained and the latest unseen preview is shown when the drawer closes.
 
 The capability is opt-in for existing hosts:
 
@@ -30,7 +30,7 @@ window.mountAetherCore({
 });
 ```
 
-Proactive prompts first appear 30-60 seconds after the page opens. After a prompt is shown, the next eligible prompt time is randomized between one and four hours and persisted per platform user. A prompt appears at most once per browser-tab session, and is deferred while the user is editing an `input`, `textarea`, or `contenteditable` field. These defaults can be overridden through `assistantPreview.proactive`.
+Proactive prompts first appear 30-60 seconds after the page opens. After a prompt is actually shown, the next eligible prompt time is randomized between one and four hours and persisted per platform user. A prompt appears at most once per browser-tab session. An open Workbench or active `input`, `textarea`, or `contenteditable` field defers the prompt instead of consuming it. These defaults can be overridden through `assistantPreview.proactive`.
 
 Live assistant previews are independent from proactive prompt suppression. Public instance methods `showAssistantPreview(text)`, `hideAssistantPreview()`, and `destroy()` are available for host lifecycle integrations. `onAssistantPreview` observes normalized preview updates.
 
