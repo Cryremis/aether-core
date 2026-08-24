@@ -15,7 +15,7 @@ docker build -t aethercore-sandbox:latest -f docker/sandbox/Dockerfile .
 4. 启动后端：
 
 ```bash
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8100
+python -m uvicorn app.main:app --loop asyncio --host 127.0.0.1 --port 8100
 ```
 
 ## 沙箱要求

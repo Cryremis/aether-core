@@ -35,6 +35,8 @@ def backend_service() -> ServiceSpec:
             "-m",
             "uvicorn",
             "app.main:app",
+            "--loop",
+            "asyncio",
             "--host",
             settings.backend_host,
             "--port",

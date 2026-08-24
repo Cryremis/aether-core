@@ -1,4 +1,6 @@
 # backend/app/main.py
+import faulthandler
+
 from app.api.routes.auth import router as auth_router
 from contextlib import asynccontextmanager
 
@@ -26,6 +28,7 @@ from app.services.session_runtime_service import session_runtime_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
 
+faulthandler.enable()
 configure_logging()
 skill_service.ensure_built_in_layout()
 store_service.initialize()
