@@ -1083,6 +1083,7 @@ class StoreService:
                     external_org_id, conversation_key, title, host_name, created_at,
                     updated_at, last_message_at, message_count, metadata_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                ON CONFLICT(session_id) DO NOTHING
                 """,
                 (
                     conversation_id,
@@ -1100,7 +1101,10 @@ class StoreService:
                     json.dumps(metadata or {}, ensure_ascii=False),
                 ),
             )
-            row = conn.execute("SELECT * FROM conversations WHERE conversation_id = ?", (conversation_id,)).fetchone()
+            # 命中 session_id 冲突时 INSERT 被跳过,按 session_id 读回已有行,保证返回一致
+            row = conn.execute(
+                "SELECT * FROM conversations WHERE session_id = ?", (session_id,)
+            ).fetchone()
         return dict(row) if row else {}
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:

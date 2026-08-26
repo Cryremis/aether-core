@@ -28,6 +28,12 @@ class HostRegistry:
             conversation_id=request.conversation_id,
         )
 
+        # 幂等保护: find_host_conversation 按 conversation_key/conversation_id 查询,
+        # 当同一 session_id 换了 conversation_key 再绑定时会查不到。此时按 session_id 兜底,
+        # 命中已有对话则复用,避免对同一 session_id 重复 INSERT 撞 UNIQUE 约束。
+        if conversation is None and request.session_id:
+            conversation = store_service.get_conversation_by_session(request.session_id)
+
         if conversation is None:
             session = session_service.get_or_create(request.session_id)
             conversation = store_service.create_conversation(

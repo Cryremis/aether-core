@@ -847,6 +847,66 @@ def test_host_bind_uses_conversation_key_to_control_reuse(tmp_path):
     assert third["conversation_key"] == "thread-b"
 
 
+def test_host_bind_reuses_conversation_when_session_id_collides_with_new_key(tmp_path):
+    """回归: 同一 session_id 换 conversation_key 再绑定时不应撞 UNIQUE 约束。
+
+    触发场景: 宿主首次 bind 生成 session S + conversation(key=A),第二次 bind 复用
+    同一 session_id=S 但传入新 conversation_key=B。find_host_conversation 按 B 查不到,
+    若不做幂等保护会重复 INSERT 同一 session_id 撞 UNIQUE → 500。
+    """
+    initialize_isolated_runtime(tmp_path)
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+
+    platform = store_service.create_platform(
+        platform_key="idempotent-bind",
+        display_name="Idempotent Bind",
+        host_type="embedded",
+        description="session_id idempotency test platform",
+        owner_user_id=admin.user_id,
+    )
+
+    client = TestClient(app)
+    headers = {"X-Aether-Platform-Secret": platform["host_secret"]}
+    base_payload = {
+        "platform_key": platform["platform_key"],
+        "host_name": "POC",
+        "context": {
+            "user": {"id": "user-1", "name": "User 1"},
+            "extras": {"host_callback_base_url": "http://localhost:8000"},
+        },
+        "tools": [],
+        "skills": [],
+        "apis": [],
+    }
+
+    # 第一次 bind: 正常创建会话,key=thread-a
+    first = client.post(
+        "/api/v1/host/bind",
+        headers=headers,
+        json={**base_payload, "conversation_key": "thread-a"},
+    )
+    assert first.status_code == 200
+    session_id = first.json()["data"]["session_id"]
+    first_conv_id = first.json()["data"]["conversation_id"]
+
+    # 第二次 bind: 同一 session_id 但换 conversation_key=thread-b —— 不应 500
+    second = client.post(
+        "/api/v1/host/bind",
+        headers=headers,
+        json={**base_payload, "session_id": session_id, "conversation_key": "thread-b"},
+    )
+    assert second.status_code == 200
+    second_data = second.json()["data"]
+
+    # 复用同一 session_id 和 conversation,不会重复插入
+    assert second_data["session_id"] == session_id
+    assert second_data["conversation_id"] == first_conv_id
+
+    # 确认 conversations 表仍只有该 session_id 的一条记录
+    assert store_service.get_conversation_by_session(session_id) is not None
+
+
 def test_host_tool_catalog_api_supports_atomic_source_updates_and_rebind(tmp_path):
     initialize_isolated_runtime(tmp_path)
     admin = store_service.get_user_by_username(settings.auth_system_admin_username)
