@@ -1230,6 +1230,30 @@ class StoreService:
             )
             return result.rowcount > 0
 
+    def backfill_conversation_metadata(self, session_id: str, updates: dict[str, Any]) -> bool:
+        """补全会话 metadata 中缺失的字段,已有非空值不会被覆盖。
+
+        用于 bind 复用由 engine 运行时自动创建的会话时,回填 external_user_name 等身份信息。
+        """
+        current = self.get_conversation_by_session(session_id)
+        if current is None:
+            return False
+        metadata = json.loads(current.get("metadata_json") or "{}")
+        changed = False
+        for key, value in updates.items():
+            if not metadata.get(key) and value:
+                metadata[key] = value
+                changed = True
+        if not changed:
+            return False
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE conversations SET metadata_json = ?, updated_at = ? WHERE session_id = ?",
+                (json.dumps(metadata, ensure_ascii=False), now, session_id),
+            )
+        return True
+
     def get_session_runtime(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(

@@ -297,6 +297,9 @@ class AgentEngine:
                 owner_user_id=seed.get("owner_user_id"),
                 external_user_id=seed.get("external_user_id"),
                 external_org_id=seed.get("external_org_id"),
+                metadata={"external_user_name": seed.get("external_user_name")}
+                if seed.get("external_user_name")
+                else None,
             )
             session.conversation_id = conversation.get("conversation_id")
             session_service.persist(session)
@@ -1098,6 +1101,7 @@ class AgentEngine:
             "external_user_id": source.get("external_user_id"),
             "external_org_id": source.get("external_org_id"),
             "host_name": source.get("host_name"),
+            "external_user_name": json.loads(source.get("metadata_json") or "{}").get("external_user_name"),
         }
 
 

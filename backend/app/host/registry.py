@@ -57,6 +57,13 @@ class HostRegistry:
             if session.baseline_root != expected_baseline_root:
                 platform_baseline_service.materialize_to_session(str(platform["platform_key"]), session)
 
+            # 回填缺失的 external_user_name: 会话可能由 engine 运行时自动创建(不写用户名),
+            # bind 复用时补写,确保管理界面能显示用户名而非 fallback 到 external_user_id
+            store_service.backfill_conversation_metadata(
+                conversation["session_id"],
+                {"external_user_name": external_user_name},
+            )
+
         replace_all_tools = request.tool_update_mode == "replace_all" or (
             request.tool_update_mode == "replace_all_if_source_missing"
             and request.tool_source_id not in session.host_tool_collections

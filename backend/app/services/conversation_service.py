@@ -77,6 +77,11 @@ class ConversationService:
             platform_baseline_service.materialize_to_session(platform["platform_key"], session)
         else:
             session = session_service.get_or_create(conversation["session_id"])
+            # 回填缺失的 external_user_name(会话可能由 engine 运行时自动创建)
+            store_service.backfill_conversation_metadata(
+                conversation["session_id"],
+                {"external_user_name": external_user_name},
+            )
 
         session.conversation_id = conversation["conversation_id"]
         session_service.persist(session)

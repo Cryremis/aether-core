@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -905,6 +906,63 @@ def test_host_bind_reuses_conversation_when_session_id_collides_with_new_key(tmp
 
     # 确认 conversations 表仍只有该 session_id 的一条记录
     assert store_service.get_conversation_by_session(session_id) is not None
+
+
+def test_host_bind_backfills_external_user_name_on_reuse(tmp_path):
+    """回归: bind 复用已有会话时回填缺失的 external_user_name。
+
+    触发场景: 会话先由 agent 运行时自动创建(engine.py,不写 external_user_name),
+    之后宿主 bind 复用该会话(else 分支)。若不回填,管理界面只能 fallback 到
+    external_user_id(如 "52"),而非显示真实用户名。
+    """
+    initialize_isolated_runtime(tmp_path)
+    admin = store_service.get_user_by_username(settings.auth_system_admin_username)
+    assert admin is not None
+
+    platform = store_service.create_platform(
+        platform_key="backfill-name",
+        display_name="Backfill Name",
+        host_type="embedded",
+        description="external_user_name backfill test",
+        owner_user_id=admin.user_id,
+    )
+
+    # 模拟 engine 运行时自动创建会话(metadata 为空,不含 external_user_name)
+    store_service.create_conversation(
+        session_id="sess_backfill_test",
+        title="新对话",
+        host_name="POC",
+        platform_id=platform["platform_id"],
+        external_user_id="user-1",
+        conversation_key="thread-a",
+        metadata={},
+    )
+
+    client = TestClient(app)
+    headers = {"X-Aether-Platform-Secret": platform["host_secret"]}
+    response = client.post(
+        "/api/v1/host/bind",
+        headers=headers,
+        json={
+            "platform_key": platform["platform_key"],
+            "host_name": "POC",
+            "conversation_key": "thread-a",
+            "context": {
+                "user": {"id": "user-1", "name": "苏雷雷"},
+                "extras": {"host_callback_base_url": "http://localhost:8000"},
+            },
+            "tools": [],
+            "skills": [],
+            "apis": [],
+        },
+    )
+    assert response.status_code == 200
+
+    # 验证 metadata 已回填 external_user_name
+    conversation = store_service.get_conversation_by_session("sess_backfill_test")
+    assert conversation is not None
+    metadata = json.loads(conversation.get("metadata_json") or "{}")
+    assert metadata.get("external_user_name") == "苏雷雷"
 
 
 def test_host_tool_catalog_api_supports_atomic_source_updates_and_rebind(tmp_path):
