@@ -43,7 +43,7 @@ def test_token_service_rejects_empty_algorithm(monkeypatch):
         service._resolved_algorithm()
 
 
-def test_list_80_prefix_ipv4_addresses_returns_unique_matches():
+def test_list_80_prefix_ipv4_addresses_returns_unique_matches(monkeypatch):
     from app.schemas.system_network import NetworkAddress, NetworkInterface, NetworkSummary, SystemNetworkSnapshot
 
     service = SystemNetworkService()

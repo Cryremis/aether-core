@@ -31,11 +31,13 @@ function kindLabel(kind: ElicitationRequest["kind"]) {
 
 export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelProps) {
   const [drafts, setDrafts] = useState<Record<string, DraftAnswer>>({});
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 
   useEffect(() => {
     if (!request) {
       setDrafts({});
-      return;
+      setCurrentQuestionIndex(0);
+      return
     }
     const nextDrafts: Record<string, DraftAnswer> = {};
     request.questions.forEach((question) => {
@@ -46,15 +48,17 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
       };
     });
     setDrafts(nextDrafts);
+    setCurrentQuestionIndex(0);
   }, [request?.id]);
+
+  const hasAnswer = (questionId: string) => {
+    const draft = drafts[questionId];
+    return Boolean(draft && (draft.selected_options.length > 0 || draft.other_text.trim() || draft.notes.trim()));
+  };
 
   const canSubmit = useMemo(() => {
     if (!request) return false;
-    return request.questions.every((question) => {
-      const draft = drafts[question.id];
-      if (!draft) return false;
-      return draft.selected_options.length > 0 || draft.other_text.trim().length > 0 || draft.notes.trim().length > 0;
-    });
+    return request.questions.every((question) => hasAnswer(question.id));
   }, [drafts, request]);
 
   if (!request) return null;
@@ -70,7 +74,7 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
         <span className={`elicitation-panel__kind elicitation-panel__kind--${request.kind}`}>{kindLabel(request.kind)}</span>
       </div>
       <div className="elicitation-panel__questions">
-        {request.questions.map((question) => {
+        {request.questions.slice(currentQuestionIndex, currentQuestionIndex + 1).map((question) => {
           const draft = drafts[question.id] ?? { selected_options: [], other_text: "", notes: "" };
           return (
             <article key={question.id} className="elicitation-question-card">
@@ -151,13 +155,12 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
         })}
       </div>
       <div className="elicitation-panel__footer">
-        <span>{request.blocking ? "AI 会在你回答后继续执行" : "这条回答会立即传给 AI 处理"}</span>
+        <span>{request.blocking ? "AI 会在你回答后继续执行" : "这条回答会立即传给 AI 处理"}</span><span>第 {currentQuestionIndex + 1} / {request.questions.length} 题</span>
         <button
           type="button"
           className="elicitation-panel__submit"
-          disabled={busy || !canSubmit}
-          onClick={() =>
-            onSubmit(
+          disabled={busy || (currentQuestionIndex < request.questions.length - 1 ? hasAnswer(request.questions[currentQuestionIndex].id) === false : canSubmit === false)}
+          onClick={() => { if (currentQuestionIndex < request.questions.length - 1) { setCurrentQuestionIndex((index) => Math.min(request.questions.length - 1, index + 1)); return; } onSubmit(
               request.questions.map((question) => {
                 const draft = drafts[question.id] ?? { selected_options: [], other_text: "", notes: "" };
                 return {
@@ -168,9 +171,9 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
                 };
               }),
             )
-          }
+          }}
         >
-          {busy ? "提交中..." : "提交回答"}
+          提交回答
         </button>
       </div>
     </section>
