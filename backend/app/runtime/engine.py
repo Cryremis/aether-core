@@ -8,6 +8,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -44,17 +45,19 @@ class AgentEngine:
                 block.update(updates)
                 return
 
-    def _ensure_elapsed_block(self, blocks: list[dict[str, Any]], elapsed_ms: int) -> None:
+    def _ensure_elapsed_block(
+        self, blocks: list[dict[str, Any]], elapsed_ms: int, started_at_iso: str | None = None
+    ) -> None:
         if any(str(block.get("kind")) == "elapsed" for block in blocks):
             return
-        blocks.insert(
-            0,
-            {
-                "id": f"elapsed_{uuid.uuid4().hex[:8]}",
-                "kind": "elapsed",
-                "elapsed_ms": elapsed_ms,
-            },
-        )
+        block: dict[str, Any] = {
+            "id": f"elapsed_{uuid.uuid4().hex[:8]}",
+            "kind": "elapsed",
+            "elapsed_ms": elapsed_ms,
+        }
+        if started_at_iso:
+            block["started_at"] = started_at_iso
+        blocks.insert(0, block)
 
     def _persist_assistant_round(
         self,
@@ -243,7 +246,9 @@ class AgentEngine:
         user_message_kind: str = "user",
     ) -> AsyncGenerator:
         started_at = time.perf_counter()
+        started_at_iso = datetime.now(timezone.utc).isoformat()
         response_started_at: float | None = None
+        response_started_at_iso: str | None = None
         visible_started_emitted = False
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         session.begin_run(run_id)
@@ -352,11 +357,12 @@ class AgentEngine:
         )
 
         def maybe_emit_visible_started() -> dict[str, Any] | None:
-            nonlocal response_started_at, visible_started_emitted
+            nonlocal response_started_at, response_started_at_iso, visible_started_emitted
             if visible_started_emitted:
                 return None
             visible_started_emitted = True
             response_started_at = time.perf_counter()
+            response_started_at_iso = datetime.now(timezone.utc).isoformat()
             return make_event(session, "assistant_visible_started")
 
         def current_response_elapsed_ms() -> int:
@@ -390,6 +396,7 @@ class AgentEngine:
                     self._ensure_elapsed_block(
                         persisted_assistant_blocks,
                         int((time.perf_counter() - started_at) * 1000),
+                        response_started_at_iso or started_at_iso,
                     )
                     self._persist_assistant_round(
                         session,
@@ -509,6 +516,7 @@ class AgentEngine:
                             self._ensure_elapsed_block(
                                 persisted_assistant_blocks,
                                 int((time.perf_counter() - started_at) * 1000),
+                                response_started_at_iso or started_at_iso,
                             )
                             self._persist_assistant_round(
                                 session,
@@ -782,6 +790,7 @@ class AgentEngine:
                                 self._ensure_elapsed_block(
                                     persisted_assistant_blocks,
                                     int((time.perf_counter() - started_at) * 1000),
+                                    response_started_at_iso or started_at_iso,
                                 )
                                 self._persist_assistant_round(
                                     session,
@@ -948,6 +957,7 @@ class AgentEngine:
                         self._ensure_elapsed_block(
                             persisted_assistant_blocks,
                             int((time.perf_counter() - started_at) * 1000),
+                            response_started_at_iso or started_at_iso,
                         )
                         self._persist_assistant_round(
                             session,
@@ -969,6 +979,7 @@ class AgentEngine:
                         self._ensure_elapsed_block(
                             persisted_assistant_blocks,
                             int((time.perf_counter() - started_at) * 1000),
+                            response_started_at_iso or started_at_iso,
                         )
                         self._persist_assistant_round(
                             session,
@@ -1000,7 +1011,11 @@ class AgentEngine:
                 if visible_started_event is not None:
                     yield visible_started_event
                 final_elapsed_ms = current_response_elapsed_ms()
-                self._ensure_elapsed_block(persisted_assistant_blocks, final_elapsed_ms)
+                self._ensure_elapsed_block(
+                    persisted_assistant_blocks,
+                    final_elapsed_ms,
+                    response_started_at_iso or started_at_iso,
+                )
                 self._persist_assistant_round(
                     session,
                     turn_index=request_turn_index,

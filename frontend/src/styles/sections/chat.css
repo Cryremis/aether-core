@@ -216,6 +216,23 @@
   color: var(--text-secondary);
 }
 
+.timestamp-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+.timestamp-badge:hover {
+  opacity: 1;
+  color: var(--text-secondary);
+}
+
 .assistant-sidecar {
   display: inline-flex;
   align-items: center;

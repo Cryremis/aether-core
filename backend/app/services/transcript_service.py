@@ -161,6 +161,7 @@ class TranscriptService:
     ) -> dict[str, Any]:
         normalized_blocks: list[dict[str, Any]] = []
         normalized_elapsed = elapsed_ms
+        normalized_started_at: str | None = None
 
         for raw_block in blocks:
             if not isinstance(raw_block, dict):
@@ -172,6 +173,9 @@ class TranscriptService:
                     normalized_elapsed = elapsed_value
                 elif isinstance(elapsed_value, float):
                     normalized_elapsed = int(elapsed_value)
+                started_at_value = raw_block.get("started_at")
+                if isinstance(started_at_value, str):
+                    normalized_started_at = started_at_value
                 continue
             if kind == "content":
                 normalized_blocks.append(
@@ -224,7 +228,7 @@ class TranscriptService:
             "blocks": normalized_blocks,
             "elapsedMs": normalized_elapsed,
             "streaming": streaming,
-            "responseStartedAt": response_started_at,
+            "responseStartedAt": response_started_at or normalized_started_at,
         }
 
     def system_event_item(
@@ -256,6 +260,7 @@ class TranscriptService:
         blocks = message.get("blocks")
         normalized_blocks: list[dict[str, Any]] = []
         elapsed_ms: int | None = None
+        started_at: str | None = None
 
         if isinstance(blocks, list):
             for raw_block in blocks:
@@ -268,6 +273,9 @@ class TranscriptService:
                         elapsed_ms = elapsed_value
                     elif isinstance(elapsed_value, float):
                         elapsed_ms = int(elapsed_value)
+                    started_at_value = raw_block.get("started_at")
+                    if isinstance(started_at_value, str):
+                        started_at = started_at_value
                     continue
                 if kind == "content":
                     normalized_blocks.append(
@@ -360,6 +368,7 @@ class TranscriptService:
             "blocks": normalized_blocks,
             "elapsedMs": elapsed_ms,
             "streaming": False,
+            "responseStartedAt": started_at,
         }
 
     def _index_open_tool_blocks(

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerE
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs } from "../../pages/workbench/markdown";
+import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs, formatTimestamp } from "../../pages/workbench/markdown";
 import type { ChatMessage } from "../../pages/workbench/types";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
@@ -68,6 +68,12 @@ function LiveElapsedBadge({ startTime }: { startTime: number }) {
   }, [startTime]);
 
   return <div className="elapsed-badge">{formatElapsedMs(elapsed)}</div>;
+}
+
+function TimestampBadge({ timestamp }: { timestamp: number }) {
+  const formatted = formatTimestamp(timestamp);
+  if (!formatted) return null;
+  return <time className="timestamp-badge" title={formatted.title}>{formatted.label}</time>;
 }
 
 function getAssistantStreamingStatus(message: Extract<ChatMessage, { role: "assistant" }>) {
@@ -1065,6 +1071,9 @@ export function ChatTimeline({
               )}
             </div>
             <div className="assistant-sidecar">
+              {!message.streaming && message.responseStartedAt ? (
+                <TimestampBadge timestamp={message.responseStartedAt} />
+              ) : null}
               <AssistantStatusBadge message={message} />
               {message.streaming && message.responseStartedAt ? (
                 <LiveElapsedBadge startTime={message.responseStartedAt} />

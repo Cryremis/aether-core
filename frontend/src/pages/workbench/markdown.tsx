@@ -241,3 +241,15 @@ export function formatElapsedMs(ms: number | null) {
     const seconds = Math.round((ms % 60000) / 1000);
     return `${minutes}m ${seconds}s`;
 }
+
+export function formatTimestamp(ms: number): { label: string; title: string } | null {
+    if (!Number.isFinite(ms) || ms <= 0) return null;
+    const date = new Date(ms);
+    if (Number.isNaN(date.getTime())) return null;
+
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const label = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    const title = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+
+    return { label, title };
+}
