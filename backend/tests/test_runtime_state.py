@@ -4,6 +4,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from app.core.config import settings
 from app.services.runtime_state import runtime_state_service
 from app.services.runtime_state.models import WorkItem, WorkboardState
@@ -77,6 +79,79 @@ def test_elicitation_round_trip_generates_resume_message(tmp_path):
     assert state.history[-1].status == "resolved"
     assert "Choose deployment mode" in resume_message
     assert "Multi tenant" in resume_message
+
+
+@pytest.mark.parametrize("responses", [
+    [],
+    [{"question_id": "permission", "selected_options": [], "other_text": "  ", "notes": "\n"}],
+])
+def test_elicitation_all_unanswered_is_not_authorization(tmp_path, responses):
+    session = initialize_session(tmp_path, "sess_elicitation_skipped")
+    request = runtime_state_service.request_user_input(session, {
+        "title": "Permission needed",
+        "kind": "approval",
+        "questions": [{
+            "id": "permission", "header": "Permission", "question": "Allow this action?",
+            "options": [{"label": "Allow"}, {"label": "Deny"}],
+            "allow_notes": True,
+        }],
+    })
+
+    state, resume_message = runtime_state_service.resolve_elicitation(session, request.id, responses)
+
+    assert state.pending is None
+    answer = state.history[-1].answers[0]
+    assert answer.selected_options == []
+    assert answer.other_text is None
+    assert answer.notes is None
+    assert "skipped" in answer.rendered_answer.lower()
+    assert "not consent or authorization" in resume_message.lower()
+    restored = runtime_state_service.get_elicitation(session)
+    assert restored.history[-1].answers == state.history[-1].answers
+
+
+def test_elicitation_partial_answers_preserve_answered_questions(tmp_path):
+    session = initialize_session(tmp_path, "sess_elicitation_partial")
+    request = runtime_state_service.request_user_input(session, {
+        "title": "Deployment preferences",
+        "questions": [
+            {"id": "mode", "header": "Mode", "question": "Which mode?", "options": [{"label": "Local"}]},
+            {"id": "notes", "header": "Notes", "question": "Anything else?"},
+        ],
+    })
+
+    state, resume_message = runtime_state_service.resolve_elicitation(session, request.id, [
+        {"question_id": "mode", "selected_options": ["Local"]},
+        {"question_id": "notes", "selected_options": []},
+    ])
+
+    assert state.history[-1].answers[0].selected_options == ["Local"]
+    assert "- Mode: Local" in resume_message
+    assert "skipped" in state.history[-1].answers[1].rendered_answer.lower()
+
+
+@pytest.mark.parametrize("response, error", [
+    ({"selected_options": ["Unknown"]}, "unsupported option"),
+    ({"selected_options": ["Allow", "Deny"]}, "multiple selections"),
+    ({"other_text": "custom"}, "custom answers"),
+    ({"notes": "note"}, "does not allow notes"),
+])
+def test_elicitation_optional_answers_still_validate_supplied_values(tmp_path, response, error):
+    session = initialize_session(tmp_path, "sess_elicitation_validation")
+    request = runtime_state_service.request_user_input(session, {
+        "title": "Permission needed",
+        "questions": [{
+            "id": "permission", "header": "Permission", "question": "Allow?",
+            "options": [{"label": "Allow"}, {"label": "Deny"}],
+            "allow_other": False, "allow_notes": False,
+        }],
+    })
+
+    with pytest.raises(RuntimeError, match=error):
+        runtime_state_service.resolve_elicitation(session, request.id, [
+            {"question_id": "permission", **response},
+        ])
+    assert runtime_state_service.get_elicitation(session).pending.id == request.id
 
 
 def test_workboard_ops_support_add_update_remove_reorder(tmp_path):
