@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { ElicitationRequest, ElicitationResponseItem } from "../api/client";
+import { WorkbenchIcons as Icons } from "./workbench/WorkbenchIcons";
 
 type DraftAnswer = {
   selected_options: string[];
@@ -31,10 +32,12 @@ function kindLabel(kind: ElicitationRequest["kind"]) {
 
 export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelProps) {
   const [drafts, setDrafts] = useState<Record<string, DraftAnswer>>({});
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 
   useEffect(() => {
     if (!request) {
       setDrafts({});
+      setCurrentQuestionIndex(0);
       return;
     }
     const nextDrafts: Record<string, DraftAnswer> = {};
@@ -46,18 +49,40 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
       };
     });
     setDrafts(nextDrafts);
+    setCurrentQuestionIndex(0);
   }, [request?.id]);
 
-  const canSubmit = useMemo(() => {
-    if (!request) return false;
-    return request.questions.every((question) => {
-      const draft = drafts[question.id];
-      if (!draft) return false;
-      return draft.selected_options.length > 0 || draft.other_text.trim().length > 0 || draft.notes.trim().length > 0;
-    });
-  }, [drafts, request]);
+  if (!request || request.questions.length === 0) return null;
 
-  if (!request) return null;
+  const questions = request.questions;
+  const questionIndex = Math.min(currentQuestionIndex, questions.length - 1);
+  const isLastQuestion = questionIndex === request.questions.length - 1;
+
+  function buildResponses(skippedQuestionId?: string): ElicitationResponseItem[] {
+    return questions.map((question) => {
+      const draft = question.id === skippedQuestionId ? undefined : drafts[question.id];
+      return {
+        question_id: question.id,
+        selected_options: draft?.selected_options ?? [],
+        other_text: draft?.other_text.trim() || null,
+        notes: draft?.notes.trim() || null,
+      };
+    });
+  }
+
+  function skipQuestion() {
+    if (busy) return;
+    const questionId = questions[questionIndex].id;
+    setDrafts((current) => ({
+      ...current,
+      [questionId]: { selected_options: [], other_text: "", notes: "" },
+    }));
+    if (isLastQuestion) {
+      onSubmit(buildResponses(questionId));
+    } else {
+      setCurrentQuestionIndex(questionIndex + 1);
+    }
+  }
 
   return (
     <section className="elicitation-panel">
@@ -70,13 +95,18 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
         <span className={`elicitation-panel__kind elicitation-panel__kind--${request.kind}`}>{kindLabel(request.kind)}</span>
       </div>
       <div className="elicitation-panel__questions">
-        {request.questions.map((question) => {
+        {request.questions.slice(questionIndex, questionIndex + 1).map((question) => {
           const draft = drafts[question.id] ?? { selected_options: [], other_text: "", notes: "" };
           return (
             <article key={question.id} className="elicitation-question-card">
               <header className="elicitation-question-card__header">
-                <span>{question.header}</span>
-                <strong>{question.question}</strong>
+                <div className="elicitation-question-card__header-left">
+                  <span>{question.header}</span>
+                  <strong>{question.question}</strong>
+                </div>
+                <span className="elicitation-question-card__counter" aria-label={`进度 ${questionIndex + 1}/${request.questions.length}`}>
+                  <span>{questionIndex + 1}</span><span aria-hidden="true">/</span><span>{request.questions.length}</span>
+                </span>
               </header>
               {question.options.length > 0 ? (
                 <div className="elicitation-question-card__options">
@@ -87,6 +117,8 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
                         key={option.label}
                         type="button"
                         className={`elicitation-option ${active ? "is-active" : ""}`}
+                        disabled={busy}
+                        aria-pressed={active}
                         onClick={() => {
                           setDrafts((current) => {
                             const currentDraft = current[question.id] ?? { selected_options: [], other_text: "", notes: "" };
@@ -116,6 +148,8 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
                 <textarea
                   className="elicitation-textarea"
                   value={draft.other_text}
+                  disabled={busy}
+                  aria-label="补充你的回答"
                   onChange={(event) =>
                     setDrafts((current) => ({
                       ...current,
@@ -133,6 +167,8 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
                 <textarea
                   className="elicitation-textarea elicitation-textarea--notes"
                   value={draft.notes}
+                  disabled={busy}
+                  aria-label="补充说明"
                   onChange={(event) =>
                     setDrafts((current) => ({
                       ...current,
@@ -151,27 +187,52 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
         })}
       </div>
       <div className="elicitation-panel__footer">
-        <span>{request.blocking ? "AI 会在你回答后继续执行" : "这条回答会立即传给 AI 处理"}</span>
-        <button
-          type="button"
-          className="elicitation-panel__submit"
-          disabled={busy || !canSubmit}
-          onClick={() =>
-            onSubmit(
-              request.questions.map((question) => {
-                const draft = drafts[question.id] ?? { selected_options: [], other_text: "", notes: "" };
-                return {
-                  question_id: question.id,
-                  selected_options: draft.selected_options,
-                  other_text: draft.other_text.trim() || null,
-                  notes: draft.notes.trim() || null,
-                };
-              }),
-            )
-          }
-        >
-          {busy ? "提交中..." : "提交回答"}
-        </button>
+        <div className="elicitation-panel__nav" role="group" aria-label="题目翻页">
+          <button
+            type="button"
+            className="elicitation-panel__nav-btn"
+            disabled={busy || questionIndex === 0}
+            onClick={() => setCurrentQuestionIndex(questionIndex - 1)}
+            aria-label="上一题"
+            title="上一题"
+          >
+            <Icons.ChevronLeft />
+          </button>
+          <button
+            type="button"
+            className="elicitation-panel__nav-btn"
+            disabled={busy || isLastQuestion}
+            onClick={() => setCurrentQuestionIndex(questionIndex + 1)}
+            aria-label="下一题"
+            title="下一题"
+          >
+            <Icons.ChevronRight />
+          </button>
+        </div>
+        <div className="elicitation-panel__actions">
+          <button
+            type="button"
+            className="elicitation-panel__skip"
+            disabled={busy}
+            onClick={skipQuestion}
+            title={isLastQuestion ? "不回答本题并提交已有回答" : "不回答本题，前往下一题"}
+          >
+            <Icons.Skip />
+            {isLastQuestion ? "跳过并提交" : "跳过"}
+          </button>
+          <button
+            type="button"
+            className="elicitation-panel__submit"
+            disabled={busy}
+            onClick={() => {
+              if (busy) return;
+              if (!isLastQuestion) { setCurrentQuestionIndex(questionIndex + 1); return; }
+              onSubmit(buildResponses());
+            }}
+          >
+            {busy ? "提交中…" : isLastQuestion ? "提交回答" : "下一题"}
+          </button>
+        </div>
       </div>
     </section>
   );
