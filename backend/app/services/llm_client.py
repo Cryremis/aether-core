@@ -47,13 +47,22 @@ class LlmClient:
         *,
         stream: bool,
     ) -> dict[str, Any]:
+        sampling = config.sampling or {}
         payload: dict[str, Any] = {
             "model": config.model,
             "messages": messages,
-            "temperature": 0.2,
+            "temperature": sampling.get("temperature", settings.llm_temperature),
+            "frequency_penalty": sampling.get("frequency_penalty", settings.llm_frequency_penalty),
+            "presence_penalty": sampling.get("presence_penalty", settings.llm_presence_penalty),
             "max_tokens": settings.llm_max_tokens,
             "stream": stream,
         }
+        top_p = sampling.get("top_p")
+        if top_p is not None:
+            payload["top_p"] = top_p
+        repetition_penalty = sampling.get("repetition_penalty")
+        if repetition_penalty is not None:
+            payload["repetition_penalty"] = repetition_penalty
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

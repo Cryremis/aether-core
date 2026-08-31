@@ -54,6 +54,11 @@ export type LlmConfigFormState = {
   blocked_domains_text: string;
   max_search_results: number;
   fetch_timeout_seconds: number;
+  sampling_temperature: string;
+  sampling_frequency_penalty: string;
+  sampling_presence_penalty: string;
+  sampling_top_p: string;
+  sampling_repetition_penalty: string;
 };
 
 export type PromptConfigFormState = {

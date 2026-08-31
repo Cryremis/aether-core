@@ -281,6 +281,11 @@ export function WorkbenchPage({
     extra_body_text: "",
     has_api_key: false,
     resolved_scope: "global",
+    sampling_temperature: "",
+    sampling_frequency_penalty: "",
+    sampling_presence_penalty: "",
+    sampling_top_p: "",
+    sampling_repetition_penalty: "",
   });
   const [allowNetwork, setAllowNetwork] = useState(true);
   const [workboard, setWorkboard] = useState<WorkboardState | null>(null);
@@ -576,10 +581,18 @@ window.addEventListener("resize", handleResize);
         has_api_key: boolean;
         extra_headers?: Record<string, string>;
         extra_body?: Record<string, unknown>;
+        sampling?: {
+          temperature?: number | null;
+          frequency_penalty?: number | null;
+          presence_penalty?: number | null;
+          top_p?: number | null;
+          repetition_penalty?: number | null;
+        } | null;
       } | null;
       resolved?: { scope?: "user" | "platform" | "global" };
     };
     const config = data.config;
+    const s = config?.sampling;
     setLlmState({
       enabled: config?.enabled ?? true,
       base_url: config?.base_url ?? "",
@@ -589,6 +602,11 @@ window.addEventListener("resize", handleResize);
       extra_body_text: config?.extra_body && Object.keys(config.extra_body).length > 0 ? JSON.stringify(config.extra_body, null, 2) : "",
       has_api_key: Boolean(config?.has_api_key),
       resolved_scope: data.resolved?.scope ?? "global",
+      sampling_temperature: s?.temperature != null ? String(s.temperature) : "",
+      sampling_frequency_penalty: s?.frequency_penalty != null ? String(s.frequency_penalty) : "",
+      sampling_presence_penalty: s?.presence_penalty != null ? String(s.presence_penalty) : "",
+      sampling_top_p: s?.top_p != null ? String(s.top_p) : "",
+      sampling_repetition_penalty: s?.repetition_penalty != null ? String(s.repetition_penalty) : "",
     });
     setShowAdvancedLlmFields(
       Boolean(
@@ -629,6 +647,13 @@ window.addEventListener("resize", handleResize);
         api_key: llmState.api_key.trim() || undefined,
         extra_headers: parseJsonObject(llmState.extra_headers_text, "扩展请求头") as Record<string, string>,
         extra_body: parseJsonObject(llmState.extra_body_text, "扩展请求体"),
+        sampling: {
+          temperature: llmState.sampling_temperature.trim() ? Number(llmState.sampling_temperature) : null,
+          frequency_penalty: llmState.sampling_frequency_penalty.trim() ? Number(llmState.sampling_frequency_penalty) : null,
+          presence_penalty: llmState.sampling_presence_penalty.trim() ? Number(llmState.sampling_presence_penalty) : null,
+          top_p: llmState.sampling_top_p.trim() ? Number(llmState.sampling_top_p) : null,
+          repetition_penalty: llmState.sampling_repetition_penalty.trim() ? Number(llmState.sampling_repetition_penalty) : null,
+        },
       });
       await loadUserLlmConfig();
     } catch (err) {

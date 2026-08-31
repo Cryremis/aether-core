@@ -17,6 +17,19 @@ class LlmNetworkConfig(BaseModel):
     fetch_timeout_seconds: int = 30
 
 
+class LlmSamplingParams(BaseModel):
+    """LLM 采样参数,支持三层字段级继承(全局 → 平台 → 用户)。
+
+    所有字段默认 None,表示该层未设置、由下层 fallback。
+    """
+
+    temperature: float | None = None
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
+    top_p: float | None = None
+    repetition_penalty: float | None = None
+
+
 class LlmConfigUpdateRequest(BaseModel):
     """更新 LLM 配置请求。"""
 
@@ -30,6 +43,7 @@ class LlmConfigUpdateRequest(BaseModel):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
     network: LlmNetworkConfig = Field(default_factory=LlmNetworkConfig)
+    sampling: LlmSamplingParams = Field(default_factory=LlmSamplingParams)
 
 
 class LlmConfigSummary(BaseModel):
@@ -44,6 +58,7 @@ class LlmConfigSummary(BaseModel):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
     network: LlmNetworkConfig = Field(default_factory=LlmNetworkConfig)
+    sampling: LlmSamplingParams = Field(default_factory=LlmSamplingParams)
     updated_at: datetime | None = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -60,3 +75,4 @@ class LlmResolvedConfig(BaseModel):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     extra_body: dict[str, Any] = Field(default_factory=dict)
     network: LlmNetworkConfig = Field(default_factory=LlmNetworkConfig)
+    sampling: LlmSamplingParams = Field(default_factory=LlmSamplingParams)

@@ -634,6 +634,17 @@
   color: var(--text-primary);
 }
 
+.llm-sampling-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.llm-sampling-grid .admin-panel__field {
+  margin-bottom: 0;
+}
+
 .epic-llm-panel .admin-panel__actions {
   margin-top: auto; /* 推到底部 */
   padding-top: 16px;

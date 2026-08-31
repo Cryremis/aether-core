@@ -35,6 +35,17 @@ export function PlatformLlmPanel({
       <input value={platformLlmForm.base_url} onChange={(e) => onChange((current) => ({ ...current, base_url: e.target.value }))} autoComplete="off" name="platform-llm-base-url" placeholder="LiteLLM/OpenAI 服务地址" />
       <input value={platformLlmForm.model} onChange={(e) => onChange((current) => ({ ...current, model: e.target.value }))} autoComplete="off" name="platform-llm-model-id" placeholder="模型 ID (如 gpt-4o)" />
       <input type="password" value={platformLlmForm.api_key} onChange={(e) => onChange((current) => ({ ...current, api_key: e.target.value }))} autoComplete="new-password" name="platform-llm-api-key" placeholder={platformLlmForm.has_api_key ? "已存在密钥，留空则保持不变" : "API Key"} />
+      <details className="llm-advanced-panel">
+        <summary>采样参数</summary>
+        <p className="llm-advanced-panel__hint">调整温度与重复惩罚。留空表示继承全局默认值，有效值覆盖下层配置。</p>
+        <div className="llm-sampling-grid">
+          <label className="admin-panel__field"><span>Temperature</span><input type="number" step="0.1" min="0" max="2" value={platformLlmForm.sampling_temperature} onChange={(e) => onChange((current) => ({ ...current, sampling_temperature: e.target.value }))} placeholder="继承" /></label>
+          <label className="admin-panel__field"><span>Frequency Penalty</span><input type="number" step="0.1" min="-2" max="2" value={platformLlmForm.sampling_frequency_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_frequency_penalty: e.target.value }))} placeholder="继承" /></label>
+          <label className="admin-panel__field"><span>Presence Penalty</span><input type="number" step="0.1" min="-2" max="2" value={platformLlmForm.sampling_presence_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_presence_penalty: e.target.value }))} placeholder="继承" /></label>
+          <label className="admin-panel__field"><span>Top-P</span><input type="number" step="0.05" min="0" max="1" value={platformLlmForm.sampling_top_p} onChange={(e) => onChange((current) => ({ ...current, sampling_top_p: e.target.value }))} placeholder="继承" /></label>
+          <label className="admin-panel__field"><span>Repetition Penalty</span><input type="number" step="0.05" min="1" max="2" value={platformLlmForm.sampling_repetition_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_repetition_penalty: e.target.value }))} placeholder="继承" /></label>
+        </div>
+      </details>
       <details className="llm-advanced-panel" open={showPlatformLlmAdvanced} onToggle={(e) => onToggleAdvanced((e.currentTarget as HTMLDetailsElement).open)}>
         <summary>高级调度参数</summary>
         <p className="llm-advanced-panel__hint">扩展请求头与结构体将直接透传至模型底层，留空即默认。</p>

@@ -138,6 +138,11 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
     blocked_domains_text: "",
     max_search_results: 8,
     fetch_timeout_seconds: 30,
+    sampling_temperature: "",
+    sampling_frequency_penalty: "",
+    sampling_presence_penalty: "",
+    sampling_top_p: "",
+    sampling_repetition_penalty: "",
   });
   const [platformLlmError, setPlatformLlmError] = useState("");
   const [platformLlmBusy, setPlatformLlmBusy] = useState(false);
@@ -291,7 +296,15 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
               max_search_results?: number;
               fetch_timeout_seconds?: number;
             };
+            sampling?: {
+              temperature?: number | null;
+              frequency_penalty?: number | null;
+              presence_penalty?: number | null;
+              top_p?: number | null;
+              repetition_penalty?: number | null;
+            } | null;
           } | null;
+          const s = data?.sampling;
           setPlatformLlmForm({
             enabled: data?.enabled ?? true,
             base_url: data?.base_url ?? "",
@@ -305,6 +318,11 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
             blocked_domains_text: (data?.network?.blocked_domains ??[]).join("\n"),
             max_search_results: data?.network?.max_search_results ?? 8,
             fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
+            sampling_temperature: s?.temperature != null ? String(s.temperature) : "",
+            sampling_frequency_penalty: s?.frequency_penalty != null ? String(s.frequency_penalty) : "",
+            sampling_presence_penalty: s?.presence_penalty != null ? String(s.presence_penalty) : "",
+            sampling_top_p: s?.top_p != null ? String(s.top_p) : "",
+            sampling_repetition_penalty: s?.repetition_penalty != null ? String(s.repetition_penalty) : "",
           });
           setShowPlatformLlmAdvanced(
             Boolean(
@@ -700,6 +718,13 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
           max_search_results: platformLlmForm.max_search_results,
           fetch_timeout_seconds: platformLlmForm.fetch_timeout_seconds,
         },
+        sampling: {
+          temperature: platformLlmForm.sampling_temperature.trim() ? Number(platformLlmForm.sampling_temperature) : null,
+          frequency_penalty: platformLlmForm.sampling_frequency_penalty.trim() ? Number(platformLlmForm.sampling_frequency_penalty) : null,
+          presence_penalty: platformLlmForm.sampling_presence_penalty.trim() ? Number(platformLlmForm.sampling_presence_penalty) : null,
+          top_p: platformLlmForm.sampling_top_p.trim() ? Number(platformLlmForm.sampling_top_p) : null,
+          repetition_penalty: platformLlmForm.sampling_repetition_penalty.trim() ? Number(platformLlmForm.sampling_repetition_penalty) : null,
+        },
       });
       const latest = await getPlatformLlmConfig(activePlatformId);
       const data = (latest.data ?? null) as {
@@ -716,7 +741,15 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
           max_search_results?: number;
           fetch_timeout_seconds?: number;
         };
+        sampling?: {
+          temperature?: number | null;
+          frequency_penalty?: number | null;
+          presence_penalty?: number | null;
+          top_p?: number | null;
+          repetition_penalty?: number | null;
+        } | null;
       } | null;
+      const s = data?.sampling;
       setPlatformLlmForm({
         enabled: data?.enabled ?? true,
         base_url: data?.base_url ?? "",
@@ -730,6 +763,11 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         blocked_domains_text: (data?.network?.blocked_domains ??[]).join("\n"),
         max_search_results: data?.network?.max_search_results ?? 8,
         fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
+        sampling_temperature: s?.temperature != null ? String(s.temperature) : "",
+        sampling_frequency_penalty: s?.frequency_penalty != null ? String(s.frequency_penalty) : "",
+        sampling_presence_penalty: s?.presence_penalty != null ? String(s.presence_penalty) : "",
+        sampling_top_p: s?.top_p != null ? String(s.top_p) : "",
+        sampling_repetition_penalty: s?.repetition_penalty != null ? String(s.repetition_penalty) : "",
       });
       setShowPlatformLlmAdvanced(
         Boolean(
@@ -764,6 +802,11 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         blocked_domains_text: "",
         max_search_results: 8,
         fetch_timeout_seconds: 30,
+        sampling_temperature: "",
+        sampling_frequency_penalty: "",
+        sampling_presence_penalty: "",
+        sampling_top_p: "",
+        sampling_repetition_penalty: "",
       });
       setShowPlatformLlmAdvanced(false);
     } catch (err) {

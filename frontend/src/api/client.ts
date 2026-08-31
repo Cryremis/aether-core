@@ -290,6 +290,14 @@ export type PlatformBaselineFileContent = {
   truncated: boolean;
 };
 
+export type LlmSamplingParams = {
+  temperature?: number | null;
+  frequency_penalty?: number | null;
+  presence_penalty?: number | null;
+  top_p?: number | null;
+  repetition_penalty?: number | null;
+};
+
 export type LlmConfigPayload = {
   enabled: boolean;
   provider_kind?: "litellm";
@@ -301,6 +309,7 @@ export type LlmConfigPayload = {
   extra_headers?: Record<string, string>;
   extra_body?: Record<string, unknown>;
   network?: LlmNetworkConfigPayload;
+  sampling?: LlmSamplingParams;
 };
 
 export type PromptConfigPayload = {
@@ -328,6 +337,7 @@ export type LlmConfigSummary = {
   extra_headers: Record<string, string>;
   extra_body: Record<string, unknown>;
   network: LlmNetworkConfigSummary;
+  sampling: LlmSamplingParams;
   updated_at?: string | null;
 };
 

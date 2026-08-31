@@ -230,6 +230,9 @@ class StoreService:
             self._ensure_column(conn, "platform_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(conn, "user_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(conn, "embed_user_llm_configs", "network_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(conn, "platform_llm_configs", "sampling_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(conn, "user_llm_configs", "sampling_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(conn, "embed_user_llm_configs", "sampling_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(conn, "platforms", "sandbox_image", "TEXT")
             self._ensure_column(conn, "platforms", "sandbox_image_updated_at", "TEXT")
             self._ensure_column(conn, "platforms", "sandbox_proxy_enabled", "INTEGER NOT NULL DEFAULT 0")
@@ -878,6 +881,7 @@ class StoreService:
         extra_headers: dict[str, Any],
         extra_body: dict[str, Any],
         network: dict[str, Any],
+        sampling: dict[str, Any],
     ) -> dict[str, Any]:
         now = utcnow_iso()
         existing = self.get_platform_llm_config(platform_id)
@@ -886,8 +890,8 @@ class StoreService:
                 """
                 INSERT INTO platform_llm_configs(
                     platform_id, enabled, provider_kind, api_format, base_url, model, api_key,
-                    extra_headers_json, extra_body_json, network_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    extra_headers_json, extra_body_json, network_json, sampling_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(platform_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     provider_kind = excluded.provider_kind,
@@ -898,6 +902,7 @@ class StoreService:
                     extra_headers_json = excluded.extra_headers_json,
                     extra_body_json = excluded.extra_body_json,
                     network_json = excluded.network_json,
+                    sampling_json = excluded.sampling_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -911,6 +916,7 @@ class StoreService:
                     json.dumps(extra_headers, ensure_ascii=False),
                     json.dumps(extra_body, ensure_ascii=False),
                     json.dumps(network, ensure_ascii=False),
+                    json.dumps(sampling, ensure_ascii=False),
                     existing["created_at"] if existing else now,
                     now,
                 ),
@@ -950,6 +956,7 @@ class StoreService:
         extra_headers: dict[str, Any],
         extra_body: dict[str, Any],
         network: dict[str, Any],
+        sampling: dict[str, Any],
     ) -> dict[str, Any]:
         now = utcnow_iso()
         existing = self.get_user_llm_config(user_id)
@@ -958,8 +965,8 @@ class StoreService:
                 """
                 INSERT INTO user_llm_configs(
                     user_id, enabled, provider_kind, api_format, base_url, model, api_key,
-                    extra_headers_json, extra_body_json, network_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    extra_headers_json, extra_body_json, network_json, sampling_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     provider_kind = excluded.provider_kind,
@@ -970,6 +977,7 @@ class StoreService:
                     extra_headers_json = excluded.extra_headers_json,
                     extra_body_json = excluded.extra_body_json,
                     network_json = excluded.network_json,
+                    sampling_json = excluded.sampling_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -983,6 +991,7 @@ class StoreService:
                     json.dumps(extra_headers, ensure_ascii=False),
                     json.dumps(extra_body, ensure_ascii=False),
                     json.dumps(network, ensure_ascii=False),
+                    json.dumps(sampling, ensure_ascii=False),
                     existing["created_at"] if existing else now,
                     now,
                 ),
@@ -1006,6 +1015,7 @@ class StoreService:
         extra_headers: dict[str, Any],
         extra_body: dict[str, Any],
         network: dict[str, Any],
+        sampling: dict[str, Any],
     ) -> dict[str, Any]:
         now = utcnow_iso()
         existing = self.get_embed_user_llm_config(platform_id, external_user_id)
@@ -1014,8 +1024,8 @@ class StoreService:
                 """
                 INSERT INTO embed_user_llm_configs(
                     platform_id, external_user_id, enabled, provider_kind, api_format, base_url, model, api_key,
-                    extra_headers_json, extra_body_json, network_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    extra_headers_json, extra_body_json, network_json, sampling_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(platform_id, external_user_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     provider_kind = excluded.provider_kind,
@@ -1026,6 +1036,7 @@ class StoreService:
                     extra_headers_json = excluded.extra_headers_json,
                     extra_body_json = excluded.extra_body_json,
                     network_json = excluded.network_json,
+                    sampling_json = excluded.sampling_json,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1040,6 +1051,7 @@ class StoreService:
                     json.dumps(extra_headers, ensure_ascii=False),
                     json.dumps(extra_body, ensure_ascii=False),
                     json.dumps(network, ensure_ascii=False),
+                    json.dumps(sampling, ensure_ascii=False),
                     existing["created_at"] if existing else now,
                     now,
                 ),
@@ -1580,6 +1592,7 @@ class StoreService:
             "extra_headers": json.loads(row["extra_headers_json"] or "{}"),
             "extra_body": json.loads(row["extra_body_json"] or "{}"),
             "network": json.loads(row["network_json"] or "{}"),
+            "sampling": json.loads(row["sampling_json"] or "{}"),
         }
 
     def _row_to_prompt_config(self, row: sqlite3.Row | None) -> dict[str, Any] | None:

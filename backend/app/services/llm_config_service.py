@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.config import settings
-from app.schemas.llm import LlmConfigSummary, LlmNetworkConfig, LlmResolvedConfig, LlmConfigUpdateRequest
+from app.schemas.llm import LlmConfigSummary, LlmNetworkConfig, LlmResolvedConfig, LlmSamplingParams, LlmConfigUpdateRequest
 from app.services.store import StoreUser, store_service
 
 
@@ -22,6 +22,7 @@ class RuntimeLlmConfig:
     extra_headers: dict[str, str] = field(default_factory=dict)
     extra_body: dict[str, Any] = field(default_factory=dict)
     network: LlmNetworkConfig = field(default_factory=LlmNetworkConfig)
+    sampling: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
 
 
@@ -39,6 +40,11 @@ class LlmConfigService:
             extra_headers={},
             extra_body={},
             network=self._public_network_config(self._global_network_config()),
+            sampling=LlmSamplingParams(
+                temperature=settings.llm_temperature,
+                frequency_penalty=settings.llm_frequency_penalty,
+                presence_penalty=settings.llm_presence_penalty,
+            ),
             updated_at=None,
         )
 
@@ -72,6 +78,7 @@ class LlmConfigService:
             extra_headers=request.extra_headers,
             extra_body=request.extra_body,
             network=request.network.model_dump(mode="json"),
+            sampling=request.sampling.model_dump(exclude_none=True),
         )
         return self._to_summary(row)
 
@@ -96,6 +103,7 @@ class LlmConfigService:
             extra_headers=request.extra_headers,
             extra_body=request.extra_body,
             network=request.network.model_dump(mode="json"),
+            sampling=request.sampling.model_dump(exclude_none=True),
         )
         return self._to_summary(row)
 
@@ -127,6 +135,7 @@ class LlmConfigService:
             extra_headers=request.extra_headers,
             extra_body=request.extra_body,
             network=request.network.model_dump(mode="json"),
+            sampling=request.sampling.model_dump(exclude_none=True),
         )
         return self._to_summary(row)
 
@@ -144,59 +153,83 @@ class LlmConfigService:
         platform_id = conversation.get("platform_id")
         external_user_id = conversation.get("external_user_id")
 
-        if owner_user_id:
-            user_config = store_service.get_user_llm_config(int(owner_user_id))
-            if user_config and user_config.get("enabled"):
-                return self._to_runtime("user", user_config)
-
-        if platform_id and external_user_id:
-            embed_user_config = store_service.get_embed_user_llm_config(int(platform_id), str(external_user_id))
-            if embed_user_config and embed_user_config.get("enabled"):
-                return self._to_runtime("user", embed_user_config)
-
+        # 一次性查询各层配置,复用于主配置解析和采样参数合并
+        platform_config = None
         if platform_id:
             platform_config = store_service.get_platform_llm_config(int(platform_id))
-            if platform_config and platform_config.get("enabled"):
-                return self._to_runtime("platform", platform_config)
 
-        return RuntimeLlmConfig(
-            scope="global",
-            provider_kind="litellm",
-            api_format="openai-compatible",
-            base_url=settings.llm_base_url,
-            model=settings.llm_model,
-            api_key=settings.llm_api_key,
-            extra_headers={},
-            extra_body={},
-            network=self._global_network_config(),
-            enabled=True,
-        )
+        user_config = None
+        if owner_user_id:
+            user_config = store_service.get_user_llm_config(int(owner_user_id))
+        elif platform_id and external_user_id:
+            user_config = store_service.get_embed_user_llm_config(int(platform_id), str(external_user_id))
+
+        # 主配置: first-match-wins(保持现有行为)
+        if user_config and user_config.get("enabled"):
+            config = self._to_runtime("user", user_config)
+        elif platform_config and platform_config.get("enabled"):
+            config = self._to_runtime("platform", platform_config)
+        else:
+            return RuntimeLlmConfig(
+                scope="global",
+                provider_kind="litellm",
+                api_format="openai-compatible",
+                base_url=settings.llm_base_url,
+                model=settings.llm_model,
+                api_key=settings.llm_api_key,
+                extra_headers={},
+                extra_body={},
+                network=self._global_network_config(),
+                sampling=self._global_sampling_dict(),
+                enabled=True,
+            )
+
+        # 采样参数: 字段级 merge(全局 → 平台 → 用户),非 None 的值逐层覆盖
+        merged_sampling = self._global_sampling_dict()
+        if platform_config and platform_config.get("enabled"):
+            merged_sampling = self._merge_sampling(merged_sampling, platform_config.get("sampling") or {})
+        if user_config and user_config.get("enabled"):
+            merged_sampling = self._merge_sampling(merged_sampling, user_config.get("sampling") or {})
+        config.sampling = merged_sampling
+        return config
 
     def resolve_summary_for_user(self, user: StoreUser) -> LlmResolvedConfig:
         user_row = store_service.get_user_llm_config(user.user_id)
-        if user_row and user_row.get("enabled"):
-            return self._to_resolved("user", user_row)
-
         platform = store_service.get_platform_by_key("standalone")
-        if platform is not None:
-            platform_row = store_service.get_platform_llm_config(platform["platform_id"])
-            if platform_row and platform_row.get("enabled"):
-                return self._to_resolved("platform", platform_row)
+        platform_id = platform["platform_id"] if platform else None
 
-        global_summary = self.get_global_summary()
-        return LlmResolvedConfig(scope="global", **global_summary.model_dump())
+        if user_row and user_row.get("enabled"):
+            resolved = self._to_resolved("user", user_row)
+        elif platform and platform_id:
+            platform_row = store_service.get_platform_llm_config(platform_id)
+            if platform_row and platform_row.get("enabled"):
+                resolved = self._to_resolved("platform", platform_row)
+            else:
+                resolved = LlmResolvedConfig(scope="global", **self.get_global_summary().model_dump())
+        else:
+            resolved = LlmResolvedConfig(scope="global", **self.get_global_summary().model_dump())
+
+        # 采样参数字段级 merge
+        resolved.sampling = LlmSamplingParams(**self._resolve_merged_sampling(
+            platform_id=platform_id, owner_user_id=user.user_id,
+        ))
+        return resolved
 
     def resolve_summary_for_embed_user(self, platform_id: int, external_user_id: str) -> LlmResolvedConfig:
         user_row = store_service.get_embed_user_llm_config(platform_id, external_user_id)
         if user_row and user_row.get("enabled"):
-            return self._to_resolved("user", user_row)
+            resolved = self._to_resolved("user", user_row)
+        else:
+            platform_row = store_service.get_platform_llm_config(platform_id)
+            if platform_row and platform_row.get("enabled"):
+                resolved = self._to_resolved("platform", platform_row)
+            else:
+                resolved = LlmResolvedConfig(scope="global", **self.get_global_summary().model_dump())
 
-        platform_row = store_service.get_platform_llm_config(platform_id)
-        if platform_row and platform_row.get("enabled"):
-            return self._to_resolved("platform", platform_row)
-
-        global_summary = self.get_global_summary()
-        return LlmResolvedConfig(scope="global", **global_summary.model_dump())
+        resolved.sampling = LlmSamplingParams(**self._resolve_merged_sampling(
+            platform_id=platform_id, external_user_id=external_user_id,
+        ))
+        return resolved
 
     def _to_summary(self, row: dict[str, Any]) -> LlmConfigSummary:
         return LlmConfigSummary(
@@ -209,6 +242,7 @@ class LlmConfigService:
             extra_headers=row.get("extra_headers") or {},
             extra_body=row.get("extra_body") or {},
             network=self._public_network_config(self._normalize_network(row.get("network"))),
+            sampling=LlmSamplingParams(**(row.get("sampling") or {})),
             updated_at=row.get("updated_at"),
         )
 
@@ -223,6 +257,7 @@ class LlmConfigService:
             extra_headers=row.get("extra_headers") or {},
             extra_body=row.get("extra_body") or {},
             network=self._normalize_network(row.get("network")),
+            sampling=row.get("sampling") or {},
             enabled=bool(row.get("enabled", True)),
         )
 
@@ -237,6 +272,47 @@ class LlmConfigService:
             max_search_results=settings.llm_network_max_search_results,
             fetch_timeout_seconds=settings.llm_network_fetch_timeout_seconds,
         )
+
+    def _global_sampling_dict(self) -> dict[str, Any]:
+        """全局采样参数默认值(从 env 读取)。"""
+        return {
+            "temperature": settings.llm_temperature,
+            "frequency_penalty": settings.llm_frequency_penalty,
+            "presence_penalty": settings.llm_presence_penalty,
+            "top_p": None,
+            "repetition_penalty": None,
+        }
+
+    def _merge_sampling(self, base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+        """字段级 merge: override 中非 None 的字段覆盖 base 的对应值。"""
+        merged = dict(base)
+        for key, value in override.items():
+            if value is not None:
+                merged[key] = value
+        return merged
+
+    def _resolve_merged_sampling(
+        self,
+        *,
+        platform_id: int | None = None,
+        owner_user_id: int | None = None,
+        external_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """采样参数三层字段级继承(用于 UI summary)。"""
+        merged = self._global_sampling_dict()
+        if platform_id:
+            platform_config = store_service.get_platform_llm_config(int(platform_id))
+            if platform_config and platform_config.get("enabled"):
+                merged = self._merge_sampling(merged, platform_config.get("sampling") or {})
+        if owner_user_id:
+            user_config = store_service.get_user_llm_config(int(owner_user_id))
+            if user_config and user_config.get("enabled"):
+                merged = self._merge_sampling(merged, user_config.get("sampling") or {})
+        elif platform_id and external_user_id:
+            embed_config = store_service.get_embed_user_llm_config(int(platform_id), str(external_user_id))
+            if embed_config and embed_config.get("enabled"):
+                merged = self._merge_sampling(merged, embed_config.get("sampling") or {})
+        return merged
 
     def _normalize_network(self, value: Any) -> LlmNetworkConfig:
         if isinstance(value, LlmNetworkConfig):

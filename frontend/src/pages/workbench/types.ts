@@ -112,6 +112,11 @@ export type LlmDialogState = {
   extra_body_text: string;
   has_api_key: boolean;
   resolved_scope: "user" | "platform" | "global";
+  sampling_temperature: string;
+  sampling_frequency_penalty: string;
+  sampling_presence_penalty: string;
+  sampling_top_p: string;
+  sampling_repetition_penalty: string;
 };
 
 export type WorkbenchConversation = {
