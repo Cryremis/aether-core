@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     llm_model: str = "ep-20260214160206-k72dd"
     llm_api_key: str = ""
     llm_timeout_seconds: int = 180
-    llm_max_tokens: int = 4000
+    llm_max_tokens: int = 32000
     llm_temperature: float = 0.7
     llm_frequency_penalty: float = 0.4
     llm_presence_penalty: float = 0.3

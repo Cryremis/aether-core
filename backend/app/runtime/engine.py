@@ -369,6 +369,8 @@ class AgentEngine:
             baseline = response_started_at if response_started_at is not None else started_at
             return int((time.perf_counter() - baseline) * 1000)
 
+        truncation_recovery_count = 0
+
         while True:
             turn_count += 1
 
@@ -1005,6 +1007,32 @@ class AgentEngine:
             if last_usage_payload:
                 context_pipeline.update_api_usage(session, last_usage_payload)
             context_pipeline.reset_reactive_retry(session)
+
+            # finish_reason="length": 输出被 max_tokens 截断,持久化已有内容后继续对话
+            if last_stop_reason == "length" and truncation_recovery_count < 2:
+                truncation_recovery_count += 1
+                self._ensure_elapsed_block(
+                    persisted_assistant_blocks,
+                    int((time.perf_counter() - started_at) * 1000),
+                    response_started_at_iso or started_at_iso,
+                )
+                self._persist_assistant_round(
+                    session,
+                    turn_index=request_turn_index,
+                    content=assistant_content.strip() or None,
+                    blocks=persisted_assistant_blocks,
+                )
+                store_service.touch_conversation(
+                    session.session_id,
+                    message_count=len(session.messages),
+                )
+                session.messages.append({
+                    "role": "system",
+                    "content": "[系统提示] 该回复因达到 max_tokens 上限已被截断。",
+                })
+                context_pipeline.reset_reactive_retry(session)
+                continue
+
             final_answer = assistant_content.strip()
             if final_answer:
                 visible_started_event = maybe_emit_visible_started()

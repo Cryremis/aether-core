@@ -1001,3 +1001,83 @@ def test_agent_engine_raises_readable_llm_error_message(monkeypatch, tmp_path):
 
     with pytest.raises(RuntimeError, match="LLM 服务报错: invalid model: qwen3.6"):
         asyncio.run(collect_stream(session, "hello"))
+
+
+def test_agent_engine_recovers_from_length_truncation_reasoning_only(monkeypatch, tmp_path):
+    """回归: finish_reason=length 且只有 reasoning 没有 visible content 时,
+    不报 error_empty_response,而是持久化已有内容后继续,最终成功产出回答。
+    """
+    initialize_store(tmp_path)
+
+    call_count = 0
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield {
+                "choices": [
+                    {"delta": {"reasoning_content": "让我思考一下这个问题..."}, "finish_reason": None}
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "length"}]}
+        else:
+            yield {
+                "choices": [
+                    {"delta": {"content": "这是最终回答。"}, "finish_reason": None}
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = build_session("sess_engine_truncation_reasoning")
+    events = asyncio.run(collect_stream(session, "hello"))
+
+    result_event = next(item for item in events if item["type"] == "result")
+    assert result_event["payload"]["subtype"] == "success"
+    assert result_event["payload"]["result"] == "这是最终回答。"
+    assert call_count == 2
+
+
+def test_agent_engine_recovers_from_length_truncation_partial_content(monkeypatch, tmp_path):
+    """回归: finish_reason=length 且有部分 visible content 时,持久化部分内容后继续完成。
+    """
+    initialize_store(tmp_path)
+
+    call_count = 0
+
+    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield {
+                "choices": [
+                    {"delta": {"content": "这是一个很长的回答的开头部分..."}, "finish_reason": None}
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "length"}]}
+        else:
+            yield {
+                "choices": [
+                    {"delta": {"content": "这是回答的结尾。"}, "finish_reason": None}
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = build_session("sess_engine_truncation_partial")
+    events = asyncio.run(collect_stream(session, "hello"))
+
+    result_event = next(item for item in events if item["type"] == "result")
+    assert result_event["payload"]["subtype"] == "success"
+    assert call_count == 2
