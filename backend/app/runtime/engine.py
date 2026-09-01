@@ -370,6 +370,9 @@ class AgentEngine:
             return int((time.perf_counter() - baseline) * 1000)
 
         truncation_recovery_count = 0
+        transport_retry_deadline = 0.0
+        transport_retry_count = 0
+        transport_retry_delays = [1, 3, 5, 10, 10, 10, 10, 10]
 
         while True:
             turn_count += 1
@@ -650,8 +653,20 @@ class AgentEngine:
                     continue
                 raise RuntimeError(error_message) from exc
             except httpx.TransportError:
-                # 流式传输异常时，如果已有正文则以部分结果收尾，避免整轮失败；
-                # 若尚无正文，继续抛出让上层按错误路径处理。
+                if transport_retry_deadline == 0.0:
+                    transport_retry_deadline = time.perf_counter() + 60
+                if time.perf_counter() < transport_retry_deadline:
+                    delay = transport_retry_delays[min(transport_retry_count, len(transport_retry_delays) - 1)]
+                    transport_retry_count += 1
+                    yield make_event(
+                        session,
+                        "stream_retry",
+                        round=turn_count,
+                        attempt=transport_retry_count,
+                        delay=delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
                 if assistant_content.strip():
                     tool_calls = {}
                     last_stop_reason = "stream_interrupted"
@@ -691,23 +706,14 @@ class AgentEngine:
                 last_tool_fingerprint = tool_fingerprint
 
                 if settings.agent_max_stall_rounds > 0 and stall_rounds >= settings.agent_max_stall_rounds:
-                    yield make_event(
-                        session,
-                        "result",
-                        subtype="error_stalled",
-                        is_error=True,
-                        turn_count=turn_count,
-                        repeated_rounds=stall_rounds + 1,
-                        stop_reason=last_stop_reason,
-                    )
-                    yield make_event(
-                        session,
-                        "completed",
-                        elapsed_ms=int((time.perf_counter() - started_at) * 1000),
-                        subtype="error_stalled",
-                        stop_reason=last_stop_reason,
-                    )
-                    return
+                    session.messages.append({
+                        "role": "system",
+                        "content": f"[系统提示] 检测到连续 {stall_rounds + 1} 轮重复调用相同工具,请换一种方法或向用户确认下一步。",
+                    })
+                    stall_rounds = 0
+                    last_tool_fingerprint = None
+                    context_pipeline.reset_reactive_retry(session)
+                    continue
 
                 assistant_message["tool_calls"] = [
                     {
@@ -1029,6 +1035,31 @@ class AgentEngine:
                 session.messages.append({
                     "role": "system",
                     "content": "[系统提示] 该回复因达到 max_tokens 上限已被截断。",
+                })
+                context_pipeline.reset_reactive_retry(session)
+                continue
+
+            # stream_interrupted: 网络中断后重连失败,持久化已有部分内容后继续对话
+            if last_stop_reason == "stream_interrupted" and truncation_recovery_count < 2:
+                truncation_recovery_count += 1
+                self._ensure_elapsed_block(
+                    persisted_assistant_blocks,
+                    int((time.perf_counter() - started_at) * 1000),
+                    response_started_at_iso or started_at_iso,
+                )
+                self._persist_assistant_round(
+                    session,
+                    turn_index=request_turn_index,
+                    content=assistant_content.strip() or None,
+                    blocks=persisted_assistant_blocks,
+                )
+                store_service.touch_conversation(
+                    session.session_id,
+                    message_count=len(session.messages),
+                )
+                session.messages.append({
+                    "role": "system",
+                    "content": "[系统提示] 该回复因网络中断被截断,请基于已有内容继续完成回答。",
                 })
                 context_pipeline.reset_reactive_retry(session)
                 continue

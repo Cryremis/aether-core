@@ -45,6 +45,7 @@ class AgentEvent(BaseModel):
         "tool_catalog_changed",
         "run_started",
         "assistant_visible_started",
+        "stream_retry",
         "artifact_created",
         "files_snapshot",
         "runtime_created",

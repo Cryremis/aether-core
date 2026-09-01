@@ -64,6 +64,8 @@ const RESULT_MESSAGES: Record<string, string> = {
   error_empty_response: "模型未返回可用正文",
   error_max_turns: "执行达到轮次上限",
   error_runtime_limit: "执行达到运行时限",
+  error_stalled: "Agent 陷入重复调用循环，已注入提示并继续",
+  error_context_overflow: "对话过长，上下文窗口超限",
 };
 
 const TEXT_PREVIEW_TYPES = [
@@ -1327,9 +1329,24 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
 
       if (eventType === "artifact_created") return;
 
+      if (eventType === "stream_retry") {
+        const attempt = Number(payload.attempt ?? 0);
+        const delay = Number(payload.delay ?? 0);
+        refs.activeContentText.value = "";
+        refs.activeContentId.value = null;
+        refs.activeReasoningId.value = null;
+        setError(`网络中断，第 ${attempt} 次重连中（${delay}秒）…`);
+        return;
+      }
+
       if (eventType === "result") {
         const subtype = String(payload.subtype ?? "");
-        if (subtype && subtype !== "success") setError(RESULT_MESSAGES[subtype] ?? "执行失败");
+        const stopReason = String(payload.stop_reason ?? "");
+        if (subtype && subtype !== "success") {
+          setError(RESULT_MESSAGES[subtype] ?? "执行失败");
+        } else if (stopReason === "stream_interrupted") {
+          setError("回复因网络中断被截断");
+        }
         return;
       }
 
