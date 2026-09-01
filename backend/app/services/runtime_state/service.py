@@ -344,8 +344,6 @@ class RuntimeStateService:
                 raise RuntimeError(f"question {question.id} does not allow custom answers")
             if notes and not question.allow_notes:
                 raise RuntimeError(f"question {question.id} does not allow notes")
-            if not selected_options and not other_text and not notes:
-                raise RuntimeError(f"question {question.id} is missing an answer")
 
             rendered_parts = [*selected_options]
             if other_text:
@@ -358,7 +356,7 @@ class RuntimeStateService:
                     selected_options=selected_options,
                     other_text=other_text,
                     notes=notes,
-                    rendered_answer="; ".join(rendered_parts),
+                    rendered_answer="; ".join(rendered_parts) or "Skipped by user (no answer; not consent or authorization).",
                 )
             )
 
