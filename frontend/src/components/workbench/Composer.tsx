@@ -11,7 +11,10 @@ type ComposerProps = {
   workboardVisible: boolean;
   workboardCount: number;
   workboardCompleted: number;
+  reasoningEffort: string;
+  reasoningEffortOptions: string[];
   onAllowNetworkChange: (value: boolean) => void;
+  onReasoningEffortChange: (value: string) => void;
   onWorkboardToggle: () => void;
   onSend: (text: string) => void;
   onStop: () => void;
@@ -44,7 +47,10 @@ export function Composer({
   workboardVisible,
   workboardCount,
   workboardCompleted,
+  reasoningEffort,
+  reasoningEffortOptions,
   onAllowNetworkChange,
+  onReasoningEffortChange,
   onWorkboardToggle,
   onSend,
   onStop,
@@ -52,13 +58,24 @@ export function Composer({
   onUpload,
 }: ComposerProps) {
   const [input, setInput] = useState("");
+  const [effortOpen, setEffortOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const effortRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = "auto";
     textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
   }, [input]);
+
+  useEffect(() => {
+    if (!effortOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (effortRef.current && !effortRef.current.contains(e.target as Node)) setEffortOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [effortOpen]);
 
   const canSend = input.trim().length > 0 && !disabled;
 
@@ -131,6 +148,38 @@ export function Composer({
             </button>
           </div>
           <div className="composer-actions__right">
+            <div className="reasoning-effort-dropdown" ref={effortRef}>
+              <button
+                type="button"
+                className={`effort-toggle ${effortOpen ? "active" : ""}`}
+                onClick={() => setEffortOpen((v) => !v)}
+                title="思考深度"
+              >
+                <span>{reasoningEffort || "auto"}</span>
+                <Icons.ChevronDown />
+              </button>
+              {effortOpen ? (
+                <div className="effort-popup">
+                  <button
+                    type="button"
+                    className={`effort-option ${reasoningEffort === "" ? "selected" : ""}`}
+                    onClick={() => { onReasoningEffortChange(""); setEffortOpen(false); }}
+                  >
+                    auto
+                  </button>
+                  {reasoningEffortOptions.map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      className={`effort-option ${reasoningEffort === opt ? "selected" : ""}`}
+                      onClick={() => { onReasoningEffortChange(opt); setEffortOpen(false); }}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
               <Icons.Send />
             </button>

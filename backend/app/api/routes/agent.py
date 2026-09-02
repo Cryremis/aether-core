@@ -72,6 +72,7 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
                     request.message,
                     replace_last_user_message=request.replace_last_user_message,
                     client_message_id=request.client_message_id,
+                    reasoning_effort=request.reasoning_effort,
                 )
                 started_event = AgentEvent(
                     type="run_started",

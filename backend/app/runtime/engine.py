@@ -244,6 +244,7 @@ class AgentEngine:
         persist_user_message: bool = True,
         visible_user_message: bool = True,
         user_message_kind: str = "user",
+        reasoning_effort: str | None = None,
     ) -> AsyncGenerator:
         started_at = time.perf_counter()
         started_at_iso = datetime.now(timezone.utc).isoformat()
@@ -369,7 +370,6 @@ class AgentEngine:
             baseline = response_started_at if response_started_at is not None else started_at
             return int((time.perf_counter() - baseline) * 1000)
 
-        truncation_recovery_count = 0
         transport_retry_deadline = 0.0
         transport_retry_count = 0
         transport_retry_delays = [1, 3, 5, 10, 10, 10, 10, 10]
@@ -514,7 +514,7 @@ class AgentEngine:
             last_usage_payload: dict[str, int] | None = None
 
             try:
-                async for chunk in llm_client.stream_chat_completion(llm_runtime, messages, tools):
+                async for chunk in llm_client.stream_chat_completion(llm_runtime, messages, tools, reasoning_effort=reasoning_effort):
                     if self._run_is_aborted(session, run_id):
                         if persisted_assistant_blocks or session.get_partial_content(run_id):
                             partial_text = session.get_partial_content(run_id).strip() or None
@@ -1014,9 +1014,15 @@ class AgentEngine:
                 context_pipeline.update_api_usage(session, last_usage_payload)
             context_pipeline.reset_reactive_retry(session)
 
-            # finish_reason="length": 输出被 max_tokens 截断,持久化已有内容后继续对话
-            if last_stop_reason == "length" and truncation_recovery_count < 2:
-                truncation_recovery_count += 1
+            # 恢复逻辑: 模型产出了内容(思考或正文)但被截断或未给出可见正文时,
+            # 持久化已有内容后继续对话。不设次数上限,靠 max_turns / max_runtime 自然兜底。
+            # error_empty_response 仅在模型完全未产出任何内容时触发。
+            # 注意: stream_interrupted 有部分正文时不算截断,直接走 success 返回部分内容。
+            has_output = bool(active_reasoning_block_id or active_content_block_id or assistant_content.strip())
+            if not tool_calls and (
+                last_stop_reason == "length"
+                or (not assistant_content.strip() and has_output)
+            ):
                 self._ensure_elapsed_block(
                     persisted_assistant_blocks,
                     int((time.perf_counter() - started_at) * 1000),
@@ -1025,42 +1031,20 @@ class AgentEngine:
                 self._persist_assistant_round(
                     session,
                     turn_index=request_turn_index,
-                    content=assistant_content.strip() or None,
+                    content=None,
                     blocks=persisted_assistant_blocks,
                 )
                 store_service.touch_conversation(
                     session.session_id,
                     message_count=len(session.messages),
                 )
-                session.messages.append({
-                    "role": "system",
-                    "content": "[系统提示] 该回复因达到 max_tokens 上限已被截断。",
-                })
-                context_pipeline.reset_reactive_retry(session)
-                continue
-
-            # stream_interrupted: 网络中断后重连失败,持久化已有部分内容后继续对话
-            if last_stop_reason == "stream_interrupted" and truncation_recovery_count < 2:
-                truncation_recovery_count += 1
-                self._ensure_elapsed_block(
-                    persisted_assistant_blocks,
-                    int((time.perf_counter() - started_at) * 1000),
-                    response_started_at_iso or started_at_iso,
-                )
-                self._persist_assistant_round(
-                    session,
-                    turn_index=request_turn_index,
-                    content=assistant_content.strip() or None,
-                    blocks=persisted_assistant_blocks,
-                )
-                store_service.touch_conversation(
-                    session.session_id,
-                    message_count=len(session.messages),
-                )
-                session.messages.append({
-                    "role": "system",
-                    "content": "[系统提示] 该回复因网络中断被截断,请基于已有内容继续完成回答。",
-                })
+                if last_stop_reason == "length":
+                    recovery_msg = "[系统提示] 该回复因达到 max_tokens 上限已被截断,请基于已有内容继续完成回答。"
+                elif last_stop_reason == "stream_interrupted":
+                    recovery_msg = "[系统提示] 该回复因网络中断被截断,请基于已有内容继续完成回答。"
+                else:
+                    recovery_msg = "[系统提示] 你已完成思考但未给出可见回答,请直接给出回答或调用工具。"
+                session.messages.append({"role": "system", "content": recovery_msg})
                 context_pipeline.reset_reactive_retry(session)
                 continue
 

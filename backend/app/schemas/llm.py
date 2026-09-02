@@ -28,6 +28,7 @@ class LlmSamplingParams(BaseModel):
     presence_penalty: float | None = None
     top_p: float | None = None
     repetition_penalty: float | None = None
+    reasoning_effort: str | None = None
 
 
 class LlmConfigUpdateRequest(BaseModel):
@@ -76,3 +77,4 @@ class LlmResolvedConfig(BaseModel):
     extra_body: dict[str, Any] = Field(default_factory=dict)
     network: LlmNetworkConfig = Field(default_factory=LlmNetworkConfig)
     sampling: LlmSamplingParams = Field(default_factory=LlmSamplingParams)
+    reasoning_effort_options: list[str] = Field(default_factory=lambda: ["low", "medium", "high", "max"])

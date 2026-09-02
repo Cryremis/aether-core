@@ -296,6 +296,7 @@ export type LlmSamplingParams = {
   presence_penalty?: number | null;
   top_p?: number | null;
   repetition_penalty?: number | null;
+  reasoning_effort?: string | null;
 };
 
 export type LlmConfigPayload = {
@@ -343,6 +344,7 @@ export type LlmConfigSummary = {
 
 export type ResolvedLlmConfig = LlmConfigSummary & {
   scope: "user" | "platform" | "global";
+  reasoning_effort_options: string[];
 };
 
 export type PromptConfigSummary = {
@@ -1532,7 +1534,7 @@ export async function streamChat(
   allowNetwork: boolean,
   onEvent: (event: Record<string, unknown>) => void,
   abortSignal?: AbortSignal,
-  options?: { replaceLastUserMessage?: boolean; clientMessageId?: string },
+  options?: { replaceLastUserMessage?: boolean; clientMessageId?: string; reasoningEffort?: string | null },
 ) {
   return streamSse(
     "/agent/chat",
@@ -1542,6 +1544,7 @@ export async function streamChat(
       allow_network: allowNetwork,
       replace_last_user_message: Boolean(options?.replaceLastUserMessage),
       client_message_id: options?.clientMessageId ?? null,
+      reasoning_effort: options?.reasoningEffort ?? null,
     },
     onEvent,
     abortSignal,

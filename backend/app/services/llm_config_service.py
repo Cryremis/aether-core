@@ -23,6 +23,7 @@ class RuntimeLlmConfig:
     extra_body: dict[str, Any] = field(default_factory=dict)
     network: LlmNetworkConfig = field(default_factory=LlmNetworkConfig)
     sampling: dict[str, Any] = field(default_factory=dict)
+    reasoning_effort_options: list[str] = field(default_factory=lambda: ["low", "medium", "high", "max"])
     enabled: bool = True
 
 
@@ -281,6 +282,7 @@ class LlmConfigService:
             "presence_penalty": settings.llm_presence_penalty,
             "top_p": None,
             "repetition_penalty": None,
+            "reasoning_effort": "high",
         }
 
     def _merge_sampling(self, base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

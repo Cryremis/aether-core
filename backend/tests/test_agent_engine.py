@@ -82,7 +82,7 @@ def build_session(session_id: str, **overrides) -> AgentSession:
 def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         yield {
             "choices": [
                 {
@@ -121,7 +121,7 @@ def test_agent_engine_returns_model_content_without_hardcoded_fallback(monkeypat
 def test_agent_engine_emits_committed_user_message_with_client_id(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         yield {
             "choices": [
                 {
@@ -158,7 +158,7 @@ def test_agent_engine_injects_runtime_state_context(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     observed_messages: list[list[dict]] = []
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         observed_messages.append(messages)
         yield {
             "choices": [
@@ -201,7 +201,7 @@ def test_agent_engine_injects_platform_and_host_system_prompts(monkeypatch, tmp_
     initialize_store(tmp_path)
     observed_messages: list[list[dict]] = []
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         observed_messages.append(messages)
         yield {
             "choices": [
@@ -260,7 +260,7 @@ def test_agent_engine_fallback_conversation_inherits_platform_context(monkeypatc
     initialize_store(tmp_path)
     observed_messages: list[list[dict]] = []
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         observed_messages.append(messages)
         yield {
             "choices": [
@@ -362,7 +362,7 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
     ]
     round_index = {"value": 0}
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         current = rounds[round_index["value"]]
         round_index["value"] += 1
         yield current
@@ -405,7 +405,7 @@ def test_agent_engine_refreshes_host_tools_between_model_rounds(monkeypatch, tmp
     executed_snapshots: list[set[str]] = []
     rounds = {"value": 0}
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         names = {item["function"]["name"] for item in tools}
         observed_tool_names.append(names)
         current_round = rounds["value"]
@@ -508,7 +508,7 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
     observed_messages: list[list[dict]] = []
     rounds = {"value": 0}
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         observed_messages.append(messages)
         if rounds["value"] == 0:
             rounds["value"] += 1
@@ -579,7 +579,7 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
     initialize_store(tmp_path)
     rounds = {"value": 0}
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         if rounds["value"] == 0:
             rounds["value"] += 1
             yield {
@@ -657,7 +657,7 @@ def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tm
     initialize_store(tmp_path)
     rounds = {"value": 0}
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         if rounds["value"] == 0:
             rounds["value"] += 1
             yield {
@@ -724,7 +724,7 @@ def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     session = build_session("sess_engine_proactive")
     seed_verbose_history(session, turns=6)
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         yield {
             "choices": [
                 {
@@ -763,7 +763,7 @@ def test_agent_engine_recovers_from_prompt_too_long(monkeypatch, tmp_path):
     seed_verbose_history(session, turns=7)
     call_count = {"value": 0}
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         call_count["value"] += 1
         if call_count["value"] == 1:
             request = httpx.Request("POST", "https://example.invalid/chat/completions")
@@ -799,7 +799,7 @@ def test_agent_engine_recovers_from_prompt_too_long(monkeypatch, tmp_path):
 def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         user_messages = [message for message in messages if message.get("role") == "user"]
         latest_user = str(user_messages[-1].get("content", "")) if user_messages else ""
         if latest_user == "stop me":
@@ -885,7 +885,7 @@ def test_agent_engine_persists_transcript_when_tool_requests_user_input(monkeypa
     initialize_store(tmp_path)
     rounds = {"value": 0}
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         if rounds["value"] == 0:
             rounds["value"] += 1
             yield {
@@ -950,37 +950,57 @@ def test_agent_engine_persists_transcript_when_tool_requests_user_input(monkeypa
 def test_agent_engine_returns_partial_answer_when_stream_interrupted_after_content(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
-        yield {
-            "choices": [
-                {
-                    "delta": {"content": "partial answer"},
-                    "finish_reason": None,
-                }
-            ]
-        }
-        raise httpx.RemoteProtocolError("incomplete chunked read")
+    call_count = 0
+
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield {
+                "choices": [
+                    {
+                        "delta": {"content": "partial answer"},
+                        "finish_reason": None,
+                    }
+                ]
+            }
+            raise httpx.RemoteProtocolError("incomplete chunked read")
+        else:
+            yield {
+                "choices": [
+                    {
+                        "delta": {"content": "complete answer"},
+                        "finish_reason": None,
+                    }
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    async def fake_sleep(_seconds):
+        return
 
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
     monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
     monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
     session = build_session("sess_engine_partial_stream")
     events = asyncio.run(collect_stream(session, "say something"))
 
+    retry_events = [item for item in events if item["type"] == "stream_retry"]
+    assert len(retry_events) == 1
     result_event = next(item for item in events if item["type"] == "result")
     assert result_event["payload"]["subtype"] == "success"
-    assert result_event["payload"]["stop_reason"] == "stream_interrupted"
-    assert result_event["payload"]["result"] == "partial answer"
+    assert result_event["payload"]["result"] == "complete answer"
     assert not any(item["type"] == "error" for item in events)
 
 
 def test_agent_engine_raises_readable_llm_error_message(monkeypatch, tmp_path):
     initialize_store(tmp_path)
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         request = httpx.Request("POST", "http://models.ascend.huawei.com/v1/chat/completions")
         response = httpx.Response(
             400,
@@ -1011,7 +1031,7 @@ def test_agent_engine_recovers_from_length_truncation_reasoning_only(monkeypatch
 
     call_count = 0
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -1050,7 +1070,7 @@ def test_agent_engine_retries_on_transport_error(monkeypatch, tmp_path):
 
     call_count = 0
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -1088,7 +1108,7 @@ def test_agent_engine_recovers_from_length_truncation_partial_content(monkeypatc
 
     call_count = 0
 
-    async def fake_stream_chat_completion(config, messages, tools) -> AsyncGenerator[dict, None]:
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
         nonlocal call_count
         call_count += 1
         if call_count == 1:

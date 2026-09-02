@@ -14,6 +14,7 @@ class AgentChatRequest(BaseModel):
     run_id: str | None = None
     replace_last_user_message: bool = False
     client_message_id: str | None = None
+    reasoning_effort: str | None = None
 
 
 class ElicitationResponseItem(BaseModel):

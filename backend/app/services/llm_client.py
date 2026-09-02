@@ -15,6 +15,22 @@ class LlmClient:
 
     _TOOL_RETRY_STATUS_CODES = {400, 404, 422, 500, 502, 503, 504}
     _STREAM_PRELUDE_RETRY_LIMIT = 1
+    _EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+    def _resolve_effort(self, requested: str, supported: list[str]) -> str | None:
+        """将请求的 reasoning_effort 映射到模型支持的值,优先向更低力度降级。"""
+        if not requested:
+            return None
+        if requested in supported:
+            return requested
+        idx = self._EFFORT_ORDER.index(requested) if requested in self._EFFORT_ORDER else 4
+        for i in range(idx - 1, -1, -1):
+            if self._EFFORT_ORDER[i] in supported:
+                return self._EFFORT_ORDER[i]
+        for i in range(idx + 1, len(self._EFFORT_ORDER)):
+            if self._EFFORT_ORDER[i] in supported:
+                return self._EFFORT_ORDER[i]
+        return None
 
     def _endpoint(self, config: RuntimeLlmConfig) -> str:
         if not config.api_key:
@@ -46,6 +62,7 @@ class LlmClient:
         tools: list[dict[str, Any]],
         *,
         stream: bool,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         sampling = config.sampling or {}
         payload: dict[str, Any] = {
@@ -68,6 +85,12 @@ class LlmClient:
             payload["tool_choice"] = "auto"
             payload["tool_stream"] = True
         payload.update(config.extra_body)
+        # reasoning_effort: per-message 优先,其次 config 级,注入在 extra_body 之后
+        effective_effort = reasoning_effort or sampling.get("reasoning_effort")
+        if effective_effort:
+            resolved = self._resolve_effort(effective_effort, config.reasoning_effort_options)
+            if resolved:
+                payload["reasoning_effort"] = resolved
         return self._strip_tool_fields_when_disabled(payload)
 
     def _strip_tool_fields_when_disabled(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -163,14 +186,16 @@ class LlmClient:
         config: RuntimeLlmConfig,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        *,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
-        payload = self._payload(config, messages, tools, stream=False)
+        payload = self._payload(config, messages, tools, stream=False, reasoning_effort=reasoning_effort)
         try:
             data = await self._post_json(config, payload)
         except httpx.HTTPStatusError as exc:
             if not self._should_retry_without_tools(exc, payload):
                 raise
-            data = await self._post_json(config, self._payload(config, messages, [], stream=False))
+            data = await self._post_json(config, self._payload(config, messages, [], stream=False, reasoning_effort=reasoning_effort))
 
         choices = data.get("choices") or []
         if not choices:
@@ -182,15 +207,17 @@ class LlmClient:
         config: RuntimeLlmConfig,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        *,
+        reasoning_effort: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        payload = self._payload(config, messages, tools, stream=True)
+        payload = self._payload(config, messages, tools, stream=True, reasoning_effort=reasoning_effort)
         try:
             async for item in self._stream_request(config, payload):
                 yield item
         except httpx.HTTPStatusError as exc:
             if not self._should_retry_without_tools(exc, payload):
                 raise
-            async for item in self._stream_request(config, self._payload(config, messages, [], stream=True)):
+            async for item in self._stream_request(config, self._payload(config, messages, [], stream=True, reasoning_effort=reasoning_effort)):
                 yield item
 
 

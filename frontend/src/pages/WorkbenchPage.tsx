@@ -290,6 +290,8 @@ export function WorkbenchPage({
     sampling_repetition_penalty: "",
   });
   const [allowNetwork, setAllowNetwork] = useState(true);
+  const [reasoningEffort, setReasoningEffort] = useState("");
+  const [reasoningEffortOptions, setReasoningEffortOptions] = useState<string[]>(["low", "medium", "high", "max"]);
   const [workboard, setWorkboard] = useState<WorkboardState | null>(null);
   const [workboardVisibilityBySession, setWorkboardVisibilityBySession] = useState<Record<string, boolean>>({});
   const [elicitation, setElicitation] = useState<ElicitationState | null>(null);
@@ -589,12 +591,24 @@ window.addEventListener("resize", handleResize);
           presence_penalty?: number | null;
           top_p?: number | null;
           repetition_penalty?: number | null;
+          reasoning_effort?: string | null;
         } | null;
       } | null;
-      resolved?: { scope?: "user" | "platform" | "global" };
+      resolved?: {
+        scope?: "user" | "platform" | "global";
+        reasoning_effort_options?: string[];
+        sampling?: { reasoning_effort?: string | null } | null;
+      } | null;
     };
     const config = data.config;
     const s = config?.sampling;
+    if (data.resolved?.reasoning_effort_options) {
+      setReasoningEffortOptions(data.resolved.reasoning_effort_options);
+    }
+    const resolvedEffort = data.resolved?.sampling?.reasoning_effort;
+    if (resolvedEffort) {
+      setReasoningEffort(resolvedEffort);
+    }
     setLlmState({
       enabled: config?.enabled ?? true,
       base_url: config?.base_url ?? "",
@@ -1528,6 +1542,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         clientMessageId: skipAddUserBubble && pendingUserBubble
           ? pendingUserBubble.id
           : primaryClientMessageId,
+        reasoningEffort: reasoningEffort || null,
       });
     } catch (chatError) {
       if (chatError instanceof Error && chatError.name === "AbortError") {
@@ -1665,7 +1680,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           allowNetwork,
           handleEvent,
           abortController.signal,
-          { replaceLastUserMessage: true },
+          { replaceLastUserMessage: true, reasoningEffort: reasoningEffort || null },
         );
       } catch (chatError) {
         if (chatError instanceof Error && chatError.name === "AbortError") {
@@ -2056,11 +2071,14 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           busy={busy}
           disabled={composerDisabled}
           allowNetwork={allowNetwork}
+          reasoningEffort={reasoningEffort}
+          reasoningEffortOptions={reasoningEffortOptions}
           queuedMessages={queuedMessages}
           workboardVisible={workboardVisible}
           workboardCount={displayedWorkboard?.items?.length ?? 0}
           workboardCompleted={displayedWorkboard?.items?.filter((i) => i.status === "completed").length ?? 0}
           onAllowNetworkChange={setAllowNetwork}
+          onReasoningEffortChange={setReasoningEffort}
           onWorkboardToggle={() =>
             activeSessionId
               ? setWorkboardVisibilityBySession((current) => ({
