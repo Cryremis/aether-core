@@ -741,6 +741,7 @@ window.addEventListener("resize", handleResize);
         warning_threshold?: number;
         blocking_limit?: number;
         percent_used?: number;
+        last_api_usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       };
       active_run?: ActiveRunSummary | null;
     };
@@ -753,15 +754,19 @@ window.addEventListener("resize", handleResize);
     setWorkboard(summary.workboard ?? null);
     setElicitation(summary.elicitation ?? null);
     if (summary.context_state && summary.context_state.model_id) {
+      const ctx = summary.context_state;
+      const estimatedTokens = ctx.last_known_token_estimate || ctx.last_api_usage?.prompt_tokens || 0;
+      const effectiveWindow = ctx.effective_window ?? 0;
+      const percentUsed = ctx.percent_used || (estimatedTokens && effectiveWindow ? (estimatedTokens / effectiveWindow) * 100 : 0);
       setContextStatus({
-        model: summary.context_state.model_id,
-        estimatedTokens: summary.context_state.last_known_token_estimate ?? 0,
-        effectiveWindow: summary.context_state.effective_window ?? 0,
-        contextWindow: summary.context_state.context_window ?? 0,
-        targetInputTokens: summary.context_state.target_input_tokens ?? 0,
-        warningThreshold: summary.context_state.warning_threshold ?? 0,
-        blockingLimit: summary.context_state.blocking_limit ?? 0,
-        percentUsed: summary.context_state.percent_used ?? 0,
+        model: ctx.model_id,
+        estimatedTokens,
+        effectiveWindow,
+        contextWindow: ctx.context_window ?? 0,
+        targetInputTokens: ctx.target_input_tokens ?? 0,
+        warningThreshold: ctx.warning_threshold ?? 0,
+        blockingLimit: ctx.blocking_limit ?? 0,
+        percentUsed,
         state: "idle",
         detail: "已恢复上下文状态",
       });

@@ -82,10 +82,15 @@ class ContextPipeline:
             for message in messages
         ]
         token_estimate = self.estimator.estimate_messages_tokens(runtime_messages)
-        state.last_known_token_estimate = token_estimate
-        state.percent_used = self._safe_percent(token_estimate, state.effective_window)
+        if token_estimate > 0:
+            state.last_known_token_estimate = token_estimate
+            state.percent_used = self._safe_percent(token_estimate, state.effective_window)
+        elif state.last_api_usage and state.last_api_usage.get("prompt_tokens"):
+            api_tokens = state.last_api_usage["prompt_tokens"]
+            state.last_known_token_estimate = api_tokens
+            state.percent_used = self._safe_percent(api_tokens, state.effective_window)
 
-        events = self._build_status_events(state, token_estimate)
+        events = self._build_status_events(state, state.last_known_token_estimate)
         if token_estimate <= state.target_input_tokens:
             api_messages = context_message_adapter.to_api_messages(runtime_messages)
             self._validate_or_raise(api_messages, state, token_estimate)
