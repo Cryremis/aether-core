@@ -754,6 +754,18 @@
       this.eventController.abort();
       document.getElementById(this.config.rootId)?.remove();
     }
+
+    setTheme(theme) {
+      var frame = this.root && this.root.querySelector(".ac-embed-frame");
+      if (!frame || !frame.contentWindow) return;
+      var origin = "*";
+      try { origin = new URL(this.state.embedUrl || this.config.workbenchUrl).origin; } catch (e) {}
+      frame.contentWindow.postMessage({
+        source: "aethercore-host",
+        type: "aethercore:theme",
+        payload: { theme: theme },
+      }, origin);
+    }
   }
 
   window.AetherCoreEmbed = AetherCoreEmbed;

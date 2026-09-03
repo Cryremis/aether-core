@@ -672,6 +672,7 @@ type PreferencesContextValue = {
   setLanguage: (language: AppLanguage) => void;
   theme: AppTheme;
   setTheme: (theme: AppTheme) => void;
+  setThemeFromHost: (theme: AppTheme) => void;
   resolvedTheme: "light" | "dark";
   themeLocked: boolean;
   setThemeLocked: (locked: boolean) => void;
@@ -725,6 +726,10 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
       theme,
       setTheme: (nextTheme) => {
         if (themeLocked) return;
+        window.localStorage.setItem(THEME_KEY, nextTheme);
+        setThemeState(nextTheme);
+      },
+      setThemeFromHost: (nextTheme) => {
         window.localStorage.setItem(THEME_KEY, nextTheme);
         setThemeState(nextTheme);
       },

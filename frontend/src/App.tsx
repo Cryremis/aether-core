@@ -37,7 +37,7 @@ const EMBED_ASSISTANT_PREVIEW_EVENT = "aethercore:assistant-preview";
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { setTheme, setThemeLocked } = useAppPreferences();
+  const { setTheme, setThemeLocked, setThemeFromHost } = useAppPreferences();
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [sessionId, setSessionId] = useState("");
@@ -160,6 +160,21 @@ export default function App() {
 
     void boot();
   }, []);
+
+  useEffect(() => {
+    if (!isEmbedMode) return;
+    const handler = (event: MessageEvent) => {
+      if (event.source !== window.parent) return;
+      const data = event.data;
+      if (!data || data.source !== "aethercore-host" || data.type !== "aethercore:theme") return;
+      const theme = data.payload?.theme;
+      if (theme === "light" || theme === "dark" || theme === "system") {
+        setThemeFromHost(theme);
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [isEmbedMode, setThemeFromHost]);
 
   useEffect(() => {
     if (!authed || !location.pathname.startsWith("/workbench") || isEmbedMode) return;
