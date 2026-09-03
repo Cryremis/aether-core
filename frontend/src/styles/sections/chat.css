@@ -1112,8 +1112,150 @@
 .composer-actions__left { display: flex; align-items: center; gap: 10px; }
 
 .attach-btn input { display: none; }
-.attach-btn { color: var(--text-tertiary); padding: 6px; border-radius: 50%; }
+.attach-btn { color: var(--text-tertiary); padding: 6px; border-radius: 50%; transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.3s, background 0.3s, box-shadow 0.3s; }
 .attach-btn:hover { color: var(--text-primary); background: var(--bg-hover); transform: rotate(15deg); }
+.main-content.is-drag-over .attach-btn {
+  color: var(--accent);
+  transform: rotate(-25deg) scale(1.25);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 0 16px rgba(37, 99, 235, 0.3);
+}
+.main-content.is-drag-over .composer-box {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 8px 32px -6px rgba(37, 99, 235, 0.25);
+}
+
+/* --- 全区域拖拽覆盖层 --- */
+.drag-over-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  pointer-events: none;
+  animation: drag-overlay-in 0.25s ease-out;
+}
+.drag-over-overlay.is-exiting {
+  animation: drag-overlay-out 0.22s ease-in forwards;
+}
+@keyframes drag-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes drag-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.drag-over-overlay.is-exiting .drag-file-card {
+  animation: drag-card-out 0.22s ease-in forwards;
+}
+@keyframes drag-card-out {
+  to { opacity: 0; transform: translateY(12px) scale(0.92); }
+}
+
+.drag-over-hint {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--accent);
+  opacity: 0.8;
+  animation: drag-hint-in 0.3s ease-out 0.1s both;
+}
+@keyframes drag-hint-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 0.8; transform: translateY(0); }
+}
+
+/* --- 文件卡片堆叠(扑克牌效果) --- */
+.drag-over-card-stack {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  perspective: 800px;
+  min-height: 120px;
+}
+
+.drag-file-card {
+  width: 100px;
+  height: 120px;
+  border-radius: 10px;
+  background: linear-gradient(145deg, var(--surface-0) 0%, var(--surface-1) 100%);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.15), 0 2px 6px -1px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 10px;
+  transition: box-shadow 0.3s;
+  animation: drag-card-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.drag-file-card--single {
+  transform: rotate(-6deg);
+}
+
+.drag-file-card--fan {
+  position: relative;
+  margin-left: -50px;
+  animation: drag-card-fan-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.drag-file-card--fan:first-child {
+  margin-left: 0;
+}
+
+.drag-file-card--more {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+@keyframes drag-card-pop {
+  from { opacity: 0; transform: scale(0.8) translateY(20px) rotate(-12deg); }
+  to { opacity: 1; }
+}
+.drag-file-card--single {
+  animation-name: drag-card-pop-single;
+}
+@keyframes drag-card-pop-single {
+  from { opacity: 0; transform: scale(0.8) translateY(20px) rotate(-18deg); }
+  to { opacity: 1; transform: rotate(-6deg); }
+}
+
+@keyframes drag-card-fan-in {
+  from { opacity: 0; transform: translateY(20px) scale(0.85); }
+}
+
+.drag-file-card__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.drag-file-card__name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: center;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
 
 .network-toggle {
   display: inline-flex;

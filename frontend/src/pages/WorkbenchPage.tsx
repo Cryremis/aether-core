@@ -258,6 +258,14 @@ export function WorkbenchPage({
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFile, setSelectedFile] = useState<FileItem | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [draggedNames, setDraggedNames] = useState<string[]>([]);
+  const [overlayVisible, setOverlayVisible] = useState(false);
+  const overlayExitTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => { if (overlayExitTimer.current) window.clearTimeout(overlayExitTimer.current); };
+  }, []);
   const [filePreviewContent, setFilePreviewContent] = useState("");
   const [filePreviewLoading, setFilePreviewLoading] = useState(false);
   const [filePreviewSaving, setFilePreviewSaving] = useState(false);
@@ -2019,7 +2027,81 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         onLogout={onLogout}
       />
 
-      <section className="main-content">
+      <section
+        className={`main-content ${isDragging ? "is-drag-over" : ""}`}
+        onDragEnter={(e) => {
+          e.preventDefault();
+          if (!isDragging) {
+            const fileCount = Array.from(e.dataTransfer.items || [])
+              .filter((item) => item.kind === "file").length;
+            const count = Math.max(fileCount || e.dataTransfer.files?.length || 1, 1);
+            setDraggedNames(new Array(count).fill(""));
+            setIsDragging(true);
+            setOverlayVisible(true);
+            if (overlayExitTimer.current) { window.clearTimeout(overlayExitTimer.current); overlayExitTimer.current = null; }
+          }
+        }}
+        onDragOver={(e) => { e.preventDefault(); }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setIsDragging(false);
+          if (overlayExitTimer.current) window.clearTimeout(overlayExitTimer.current);
+          overlayExitTimer.current = window.setTimeout(() => {
+            setOverlayVisible(false);
+            setDraggedNames([]);
+          }, 220);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDragging(false);
+          setDraggedNames([]);
+          if (overlayExitTimer.current) { window.clearTimeout(overlayExitTimer.current); overlayExitTimer.current = null; }
+          setOverlayVisible(false);
+          if (e.dataTransfer.files?.length > 0) {
+            Array.from(e.dataTransfer.files).forEach((f) => void handleUpload(f));
+          }
+        }}
+      >
+        {overlayVisible ? (
+          <div className={`drag-over-overlay ${isDragging ? "" : "is-exiting"}`}>
+            <div className="drag-over-card-stack">
+              {draggedNames.length <= 1 ? (
+                <div className="drag-file-card drag-file-card--single">
+                  <div className="drag-file-card__icon"><Icons.File /></div>
+                </div>
+              ) : (
+                <>
+                  {draggedNames.slice(0, 5).map((name, i, arr) => {
+                    const total = arr.length;
+                    const mid = (total - 1) / 2;
+                    const angle = (i - mid) * 7;
+                    const offset = (i - mid) * 10;
+                    return (
+                      <div
+                        key={i}
+                        className="drag-file-card drag-file-card--fan"
+                        style={{
+                          transform: `translateX(${offset}px) rotate(${angle}deg)`,
+                          zIndex: total - i,
+                        }}
+                      >
+                        <div className="drag-file-card__icon"><Icons.File /></div>
+                        {name ? <span className="drag-file-card__name">{name}</span> : null}
+                      </div>
+                    );
+                  })}
+                  {draggedNames.length > 5 ? (
+                    <div className="drag-file-card drag-file-card--fan drag-file-card--more" style={{ transform: `translateX(50px) rotate(35deg)`, zIndex: 0 }}>
+                      <span>+{draggedNames.length - 5}</span>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+            <span className="drag-over-hint">{draggedNames.length > 1 ? `松开以添加 ${draggedNames.length} 个文件到工作区` : "松开以上传文件到工作区"}</span>
+          </div>
+        ) : null}
         <header className="top-nav">
           <div className="nav-left">
             <button className="icon-button subtle nav-trigger" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>

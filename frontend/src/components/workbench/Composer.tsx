@@ -86,6 +86,10 @@ export function Composer({
     if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
+  const handleFiles = (files: FileList | File[]) => {
+    Array.from(files).forEach((f) => onUpload(f));
+  };
+
   const workboardAllDone = workboardCount > 0 && workboardCompleted === workboardCount;
   const workboardPercent = workboardCount > 0 ? Math.round((workboardCompleted / workboardCount) * 100) : 0;
 
@@ -112,8 +116,9 @@ export function Composer({
             <label className="icon-button attach-btn" title="上传文件">
               <input
                 type="file"
+                multiple
                 onChange={(e) => {
-                  if (e.target.files?.[0]) onUpload(e.target.files[0]);
+                  if (e.target.files && e.target.files.length > 0) handleFiles(e.target.files);
                   e.currentTarget.value = "";
                 }}
               />
