@@ -1205,6 +1205,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
             id: refs.activeReasoningId.value,
             kind: "reasoning",
             content: String(payload.delta ?? ""),
+            started_at: new Date().toISOString(),
           });
         } else {
           updateAssistantBlock(assistantId, refs.activeReasoningId.value, (block) =>
@@ -1217,6 +1218,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       if (eventType === "content_delta") {
         refs.activeContentText.value += String(payload.delta ?? "");
         if (!refs.activeContentId.value) {
+          if (refs.activeReasoningId.value) {
+            const endedAt = new Date().toISOString();
+            updateAssistantBlock(assistantId, refs.activeReasoningId.value, (block) =>
+              block.kind === "reasoning" ? { ...block, ended_at: endedAt, status: "completed" } : block,
+            );
+            refs.activeReasoningId.value = null;
+          }
           refs.activeContentId.value = `content-${Date.now()}`;
           appendAssistantBlock(assistantId, {
             id: refs.activeContentId.value,
@@ -1374,6 +1382,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
 
       if (eventType === "completed") {
         const elapsedMs = Number(payload.elapsed_ms ?? 0);
+        const now = new Date().toISOString();
         setTranscriptMessages((current) =>
           current.map((item) =>
             item.id === assistantId && item.role === "assistant"
@@ -1382,6 +1391,11 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
                   elapsedMs: elapsedMs > 0 ? elapsedMs : item.elapsedMs,
                   streaming: false,
                   responseStartedAt: item.responseStartedAt,
+                  blocks: item.blocks?.map((block) =>
+                    block.kind === "reasoning" && !block.ended_at
+                      ? { ...block, ended_at: now, status: "completed" }
+                      : block
+                  ),
                 }
               : item,
           ),
@@ -2021,7 +2035,6 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
       />
 
       <PersonalSettingsDialog
-        currentUser={currentUser}
         open={showPersonalSettingsDialog}
         onClose={() => setShowPersonalSettingsDialog(false)}
         onLogout={onLogout}
@@ -2120,7 +2133,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
                 <span>{theme === "system" ? "auto" : theme}</span>
               </button>
             ) : null}
-            <ContextStatusPill contextStatus={contextStatus} />
+            <ContextStatusPill contextStatus={contextStatus} onOpenLlmConfig={() => void openLlmDialog()} />
           </div>
         </header>
 

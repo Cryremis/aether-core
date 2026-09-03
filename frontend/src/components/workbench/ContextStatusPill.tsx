@@ -3,17 +3,18 @@ import type { ContextStatus } from "../../pages/workbench/types";
 
 type ContextStatusPillProps = {
   contextStatus: ContextStatus | null;
+  onOpenLlmConfig?: () => void;
 };
 
-export function ContextStatusPill({ contextStatus }: ContextStatusPillProps) {
+export function ContextStatusPill({ contextStatus, onOpenLlmConfig }: ContextStatusPillProps) {
   if (!contextStatus) return null;
 
   const contextUsagePercent = Math.max(0, Math.min(100, Math.round(contextStatus.percentUsed ?? 0)));
   const contextStateTone = contextStatus.state ?? "idle";
 
   return (
-    <div className={`context-pill context-pill--${contextStateTone}`}>
-      <div className="context-pill__compact">
+    <div className={`context-pill context-pill--${contextStateTone} ${onOpenLlmConfig ? "context-pill--clickable" : ""}`}>
+      <div className="context-pill__compact" onClick={onOpenLlmConfig}>
         <span className="context-pill__model" title={contextStatus.model || "等待首次对话"}>{contextStatus.model || "Model"}</span>
         <span className="context-pill__usage">
           {formatTokenCount(contextStatus.estimatedTokens)} / {formatTokenCount(contextStatus.effectiveWindow || contextStatus.contextWindow)}

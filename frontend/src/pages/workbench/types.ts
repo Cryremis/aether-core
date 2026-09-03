@@ -18,7 +18,7 @@ export type SkillItem = {
 };
 
 export type AssistantBlock =
-  | { id: string; kind: "reasoning"; content: string }
+  | { id: string; kind: "reasoning"; content: string; started_at?: string | null; ended_at?: string | null; status?: string }
   | { id: string; kind: "content"; content: string; status: "streaming" | "done" | "aborted" }
   | { id: string; kind: "elapsed"; elapsed_ms: number }
   | {

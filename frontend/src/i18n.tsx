@@ -5,6 +5,7 @@ export type AppTheme = "light" | "dark" | "system";
 
 const LANGUAGE_KEY = "aethercore_language";
 const THEME_KEY = "aethercore_theme";
+const HIDE_REASONING_KEY = "aethercore_hide_reasoning";
 
 const messages = {
   "zh-CN": {
@@ -676,6 +677,8 @@ type PreferencesContextValue = {
   resolvedTheme: "light" | "dark";
   themeLocked: boolean;
   setThemeLocked: (locked: boolean) => void;
+  hideReasoning: boolean;
+  setHideReasoning: (hide: boolean) => void;
   t: (key: MessageKey) => string;
 };
 
@@ -701,6 +704,9 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<AppLanguage>(() => readLanguage());
   const [theme, setThemeState] = useState<AppTheme>(() => readTheme());
   const [themeLocked, setThemeLocked] = useState(false);
+  const [hideReasoning, setHideReasoningState] = useState(() => {
+    return window.localStorage.getItem(HIDE_REASONING_KEY) === "true";
+  });
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => getSystemTheme());
   const resolvedTheme = theme === "system" ? systemTheme : theme;
 
@@ -733,6 +739,11 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
         window.localStorage.setItem(THEME_KEY, nextTheme);
         setThemeState(nextTheme);
       },
+      hideReasoning,
+      setHideReasoning: (hide) => {
+        window.localStorage.setItem(HIDE_REASONING_KEY, String(hide));
+        setHideReasoningState(hide);
+      },
       resolvedTheme,
       themeLocked,
       setThemeLocked,
@@ -742,7 +753,7 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
         return localized[key] ?? fallback[key] ?? key;
       },
     }),
-    [language, resolvedTheme, theme, themeLocked],
+    [language, resolvedTheme, theme, themeLocked, hideReasoning],
   );
 
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;

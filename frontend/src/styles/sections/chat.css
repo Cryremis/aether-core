@@ -49,6 +49,12 @@
 .context-pill:hover {
   border-color: rgba(148, 163, 184, 0.4);
 }
+.context-pill--clickable .context-pill__compact {
+  cursor: pointer;
+}
+.context-pill--clickable:hover .context-pill__model {
+  color: var(--accent);
+}
 
 .context-pill--warning {
   border-color: rgba(245, 158, 11, 0.35);
@@ -607,6 +613,7 @@
   display: inline-flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 4px 8px 4px 0; border-radius: 6px; transition: color 0.2s;
 }
 .reasoning-block summary svg { color: #8b5cf6; animation: pulseGlow 2s infinite; }
+.reasoning-summary-label { font-size: 13px; font-weight: 500; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .reasoning-block summary:hover { color: var(--text-secondary); }
 .reasoning-block[open] summary svg { animation: none; color: var(--text-tertiary); }
 

@@ -562,6 +562,8 @@ class AgentEngine:
                                     "id": active_reasoning_block_id,
                                     "kind": "reasoning",
                                     "content": str(reasoning_delta),
+                                    "started_at": datetime.now(timezone.utc).isoformat(),
+                                    "status": "streaming",
                                 },
                             )
                         else:
@@ -573,6 +575,14 @@ class AgentEngine:
 
                     content_delta = delta.get("content") or ""
                     if content_delta:
+                        if active_reasoning_block_id:
+                            self._update_assistant_block(
+                                persisted_assistant_blocks,
+                                active_reasoning_block_id,
+                                status="completed",
+                                ended_at=datetime.now(timezone.utc).isoformat(),
+                            )
+                            active_reasoning_block_id = ""
                         visible_started_event = maybe_emit_visible_started()
                         if visible_started_event is not None:
                             yield visible_started_event
@@ -673,6 +683,14 @@ class AgentEngine:
                 else:
                     raise
 
+            if active_reasoning_block_id:
+                self._update_assistant_block(
+                    persisted_assistant_blocks,
+                    active_reasoning_block_id,
+                    status="completed",
+                    ended_at=datetime.now(timezone.utc).isoformat(),
+                )
+                active_reasoning_block_id = ""
             if assistant_content:
                 if active_content_block_id:
                     self._update_assistant_block(

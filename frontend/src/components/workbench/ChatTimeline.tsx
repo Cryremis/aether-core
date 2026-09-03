@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs, formatTimestamp } from "../../pages/workbench/markdown";
 import type { ChatMessage } from "../../pages/workbench/types";
+import { useAppPreferences } from "../../i18n";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type ChatTimelineProps = {
@@ -74,6 +75,36 @@ function TimestampBadge({ timestamp }: { timestamp: number }) {
   const formatted = formatTimestamp(timestamp);
   if (!formatted) return null;
   return <time className="timestamp-badge" title={formatted.title}>{formatted.label}</time>;
+}
+
+function ReasoningSummary({ message, block }: { message: Extract<ChatMessage, { role: "assistant" }>; block: { content: string; started_at?: string | null; ended_at?: string | null } }) {
+  const [liveElapsed, setLiveElapsed] = useState(0);
+
+  const startedAt = block.started_at ? Date.parse(block.started_at) : null;
+  const endedAt = block.ended_at ? Date.parse(block.ended_at) : null;
+  const isStreaming = message.streaming && startedAt !== null && endedAt === null;
+
+  useEffect(() => {
+    if (!isStreaming || startedAt === null) return;
+    const timer = window.setInterval(() => setLiveElapsed(Date.now() - startedAt), 100);
+    return () => window.clearInterval(timer);
+  }, [isStreaming, startedAt]);
+
+  const elapsed = endedAt !== null && startedAt !== null ? endedAt - startedAt : isStreaming ? liveElapsed : null;
+  const label = isStreaming ? "思考中" : "思考过程";
+  return <span className="reasoning-summary-label">{label}{elapsed !== null ? ` ${formatElapsedMs(elapsed)}` : ""}</span>;
+}
+
+function ReasoningBlock({ block, message, hideReasoning }: { block: Extract<AssistantBlock, { kind: "reasoning" }>; message: Extract<ChatMessage, { role: "assistant" }>; hideReasoning: boolean }) {
+  const [expanded, setExpanded] = useState(!hideReasoning);
+  return (
+    <details key={block.id} className="reasoning-block" open={expanded} onToggle={(e) => setExpanded(e.currentTarget.open)}>
+      <summary><Icons.Sparkles /> <ReasoningSummary message={message} block={block} /></summary>
+      <div className="reasoning-content">
+        <MemoizedMarkdown content={block.content} />
+      </div>
+    </details>
+  );
 }
 
 function getAssistantStreamingStatus(message: Extract<ChatMessage, { role: "assistant" }>) {
@@ -976,6 +1007,7 @@ export function ChatTimeline({
   onEditUserMessage,
   actionsDisabled = false,
 }: ChatTimelineProps) {
+  const { hideReasoning } = useAppPreferences();
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
 
   const handleStartEdit = (messageId: string, content: string) => {
@@ -1054,12 +1086,7 @@ export function ChatTimeline({
                   <div key={segment.id} className="text-bubble">
                     {segment.blocks.map((block) =>
                       block.kind === "reasoning" ? (
-                        <details key={block.id} className="reasoning-block" open>
-                          <summary><Icons.Sparkles /> 思考过程</summary>
-                          <div className="reasoning-content">
-                            <MemoizedMarkdown content={block.content} />
-                          </div>
-                        </details>
+                        <ReasoningBlock key={block.id} block={block} message={message} hideReasoning={hideReasoning} />
                       ) : block.kind === "runtime_notice" ? (
                         <RuntimeNotice key={block.id} title={block.title} detail={block.detail} />
                       ) : (

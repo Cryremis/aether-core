@@ -258,8 +258,8 @@ export function WorkbenchSidebar({
             </div>
           ) : (
             <div className="sidebar-footer">
-              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onOpenLlmDialog}>
-                {t("workbench.sidebar.modelConfig")}
+              <button type="button" className="action-button sidebar-footer__button sidebar-footer__button--ghost" onClick={onOpenPersonalSettings}>
+                {t("workbench.sidebar.personalSettings")}
               </button>
             </div>
           )}
