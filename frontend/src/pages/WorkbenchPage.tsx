@@ -252,7 +252,7 @@ export function WorkbenchPage({
   onSessionSelect,
   onAssistantPreview,
 }: WorkbenchPageProps) {
-  const { t } = useAppPreferences();
+  const { t, theme, setTheme, themeLocked } = useAppPreferences();
   const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>([]);
   const [pendingUserEcho, setPendingUserEcho] = useState<PendingUserEcho | null>(null);
   const [skills, setSkills] = useState<SkillItem[]>([]);
@@ -2028,6 +2028,16 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? t("workbench.session.new") : `Session ID: ${sessionId || localSessionId || t("workbench.session.initializing")}`}</span>
           </div>
           <div className="nav-right">
+            {!themeLocked ? (
+              <button
+                className="theme-toggle-pill"
+                onClick={() => setTheme(theme === "system" ? "light" : theme === "light" ? "dark" : "system")}
+                title={theme === "system" ? "跟随系统" : theme === "light" ? "浅色" : "深色"}
+              >
+                {theme === "light" ? <Icons.Sun /> : theme === "dark" ? <Icons.Moon /> : <Icons.ThemeAuto />}
+                <span>{theme === "system" ? "auto" : theme}</span>
+              </button>
+            ) : null}
             <ContextStatusPill contextStatus={contextStatus} />
           </div>
         </header>

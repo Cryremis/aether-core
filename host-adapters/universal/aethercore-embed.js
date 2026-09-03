@@ -69,6 +69,8 @@
     showToolbar: true,
     closeOnOverlayClick: true,
     showOverlay: true,
+    embedTheme: null,
+    embedThemeChangeable: true,
     getUserId: function () {
       return (
         window.__AETHERCORE_USER_ID__ ||
@@ -679,6 +681,12 @@
         this.state.embedUrl =
           result.workbenchUrl ||
           `${this.config.workbenchUrl}?embed_token=${encodeURIComponent(result.token)}&session_id=${encodeURIComponent(result.sessionId)}`;
+        if (this.config.embedTheme) {
+          this.state.embedUrl += `&embed_theme=${encodeURIComponent(this.config.embedTheme)}`;
+        }
+        if (this.config.embedThemeChangeable === false) {
+          this.state.embedUrl += `&embed_theme_changeable=false`;
+        }
         this.state.iframeLoaded = false;
         root.querySelector(".ac-embed-frame").classList.remove("is-loaded");
         root.querySelector(".ac-embed-frame").src = this.state.embedUrl;

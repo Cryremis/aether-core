@@ -673,6 +673,8 @@ type PreferencesContextValue = {
   theme: AppTheme;
   setTheme: (theme: AppTheme) => void;
   resolvedTheme: "light" | "dark";
+  themeLocked: boolean;
+  setThemeLocked: (locked: boolean) => void;
   t: (key: MessageKey) => string;
 };
 
@@ -697,6 +699,7 @@ function getSystemTheme(): "light" | "dark" {
 export function AppPreferencesProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<AppLanguage>(() => readLanguage());
   const [theme, setThemeState] = useState<AppTheme>(() => readTheme());
+  const [themeLocked, setThemeLocked] = useState(false);
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => getSystemTheme());
   const resolvedTheme = theme === "system" ? systemTheme : theme;
 
@@ -721,17 +724,20 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
       },
       theme,
       setTheme: (nextTheme) => {
+        if (themeLocked) return;
         window.localStorage.setItem(THEME_KEY, nextTheme);
         setThemeState(nextTheme);
       },
       resolvedTheme,
+      themeLocked,
+      setThemeLocked,
       t: (key) => {
         const localized = messages[language] as Record<string, string>;
         const fallback = messages["zh-CN"] as Record<string, string>;
         return localized[key] ?? fallback[key] ?? key;
       },
     }),
-    [language, resolvedTheme, theme],
+    [language, resolvedTheme, theme, themeLocked],
   );
 
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;

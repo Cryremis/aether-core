@@ -7,6 +7,30 @@
 .nav-trigger { margin-left: -8px; }
 .session-badge { font-size: 12px; color: var(--text-tertiary); font-family: monospace; background: var(--bg-sidebar); padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border-color); }
 
+.theme-toggle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+
+.theme-toggle-pill:hover {
+  border-color: var(--border-focus);
+  color: var(--text-primary);
+}
+
+.theme-toggle-pill span {
+  text-transform: capitalize;
+}
+
 .context-pill {
   position: relative;
   display: inline-flex;

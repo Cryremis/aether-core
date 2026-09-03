@@ -13,6 +13,7 @@ import {
   renameSession,
   setAccessToken,
 } from "./api/client";
+import { useAppPreferences } from "./i18n";
 import { AppChrome } from "./components/AppChrome";
 import { AuthModal } from "./components/AuthModal";
 import { PersonalSettingsDialog } from "./components/workbench/PersonalSettingsDialog";
@@ -36,6 +37,7 @@ const EMBED_ASSISTANT_PREVIEW_EVENT = "aethercore:assistant-preview";
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { setTheme, setThemeLocked } = useAppPreferences();
   const [ready, setReady] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [sessionId, setSessionId] = useState("");
@@ -121,6 +123,14 @@ export default function App() {
         setIsEmbedMode(true);
         setSessionId(embedSessionId);
         setIsNewSession(false);
+        const embedTheme = url.searchParams.get("embed_theme");
+        const embedThemeChangeable = url.searchParams.get("embed_theme_changeable");
+        if (embedTheme === "light" || embedTheme === "dark" || embedTheme === "system") {
+          setTheme(embedTheme);
+        }
+        if (embedThemeChangeable === "false") {
+          setThemeLocked(true);
+        }
         await refreshConversations(embedSessionId);
         setReady(true);
         return;
