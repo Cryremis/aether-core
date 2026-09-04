@@ -1265,11 +1265,23 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
             status: "completed",
           });
         }
+        if (refs.activeReasoningId.value) {
+          const endedAt = new Date().toISOString();
+          updateAssistantBlock(assistantId, refs.activeReasoningId.value, (block) =>
+            block.kind === "reasoning" ? { ...block, ended_at: endedAt, status: "completed" } : block,
+          );
+        }
         refs.activeReasoningId.value = "";
         return;
       }
 
       if (eventType === "tool_started") {
+        if (refs.activeReasoningId.value) {
+          const endedAt = new Date().toISOString();
+          updateAssistantBlock(assistantId, refs.activeReasoningId.value, (block) =>
+            block.kind === "reasoning" ? { ...block, ended_at: endedAt, status: "completed" } : block,
+          );
+        }
         refs.activeReasoningId.value = "";
         refs.activeContentId.value = "";
         refs.activeContentText.value = "";

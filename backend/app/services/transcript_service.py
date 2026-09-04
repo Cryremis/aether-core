@@ -190,13 +190,18 @@ class TranscriptService:
                 )
                 continue
             if kind == "reasoning":
-                normalized_blocks.append(
-                    {
-                        "id": str(raw_block.get("id") or f"{message_id}-reasoning-{len(normalized_blocks)}"),
-                        "kind": "reasoning",
-                        "content": str(raw_block.get("content") or ""),
-                    }
-                )
+                block = {
+                    "id": str(raw_block.get("id") or f"{message_id}-reasoning-{len(normalized_blocks)}"),
+                    "kind": "reasoning",
+                    "content": str(raw_block.get("content") or ""),
+                }
+                if isinstance(raw_block.get("started_at"), str):
+                    block["started_at"] = raw_block["started_at"]
+                if isinstance(raw_block.get("ended_at"), str):
+                    block["ended_at"] = raw_block["ended_at"]
+                if isinstance(raw_block.get("status"), str):
+                    block["status"] = raw_block["status"]
+                normalized_blocks.append(block)
                 continue
             if kind == "runtime_notice":
                 normalized_blocks.append(
@@ -290,13 +295,18 @@ class TranscriptService:
                     )
                     continue
                 if kind == "reasoning":
-                    normalized_blocks.append(
-                        {
-                            "id": str(raw_block.get("id") or f"reasoning-{index}-{len(normalized_blocks)}"),
-                            "kind": "reasoning",
-                            "content": str(raw_block.get("content") or ""),
-                        }
-                    )
+                    block = {
+                        "id": str(raw_block.get("id") or f"reasoning-{index}-{len(normalized_blocks)}"),
+                        "kind": "reasoning",
+                        "content": str(raw_block.get("content") or ""),
+                    }
+                    if isinstance(raw_block.get("started_at"), str):
+                        block["started_at"] = raw_block["started_at"]
+                    if isinstance(raw_block.get("ended_at"), str):
+                        block["ended_at"] = raw_block["ended_at"]
+                    if isinstance(raw_block.get("status"), str):
+                        block["status"] = raw_block["status"]
+                    normalized_blocks.append(block)
                     continue
                 if kind == "runtime_notice":
                     normalized_blocks.append(
