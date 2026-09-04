@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.4.0",
+    "pytest-xdist>=3.6.0",
 ]
 
 [build-system]
@@ -26,3 +27,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 默认并行执行(可用 -n 0 退回串行);网络依赖测试需 AETHERCORE_NETWORK_TESTS=1 显式启用
+addopts = "-n auto"

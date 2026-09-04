@@ -7,20 +7,15 @@ EXPERIMENT: 会话记忆压缩
 
 from __future__ import annotations
 
-import json
 import time
-import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any
 
 from app.services.context.token_estimation import TokenEstimator
 from app.services.context.message_compaction import (
     CompactResult,
     CompactBoundaryMarker,
-    MessageCompactor,
 )
-from app.services.context.priority_manager import PriorityManager
 
 
 @dataclass

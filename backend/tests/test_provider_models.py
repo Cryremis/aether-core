@@ -5,25 +5,19 @@
 """
 
 import json
-import pytest
+import os
 import time
-import threading
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
+import pytest
 
 from app.services.provider.models import (
-    ModelInfo,
     ModelLimit,
     ModelCost,
     ModelCapabilities,
-    ProviderInfo,
     ModelsRegistry,
     ModelsDevClient,
-    get_models_registry,
-    get_context_window,
-    get_max_output_tokens,
-    get_model_limit,
-    refresh_models,
     reset_registry,
     _get_minimal_builtin_config,
 )
@@ -426,25 +420,34 @@ class TestBackgroundRefresh:
     
     def test_registry_starts_background_refresh(self, tmp_path):
         cache_file = tmp_path / "models.json"
-        registry = ModelsRegistry(cache_path=cache_file, enable_background_refresh=True)
-        
-        registry._ensure_loaded()
-        assert registry._client._refresh_thread is not None
-        
+        # mock 网络获取(离线可跑,避免 models.dev 超时拖慢测试)
+        with patch.object(ModelsDevClient, "fetch_from_models_dev", return_value={}) as mocked_fetch:
+            registry = ModelsRegistry(cache_path=cache_file, enable_background_refresh=True)
+
+            registry._ensure_loaded()
+            assert registry._client._refresh_thread is not None
+            mocked_fetch.assert_called()
+
         reset_registry()
 
 
 class TestRealModelsDevAPI:
-    """测试真实的 models.dev API（可选，网络依赖）"""
-    
+    """测试真实的 models.dev API（可选，网络依赖）
+
+    默认跳过：网络依赖测试在离线环境/CI 中不可靠（超时、波动）。
+    需要验证真实 API 时通过环境变量 AETHERCORE_NETWORK_TESTS=1 显式启用。
+    """
+
     def test_fetch_real_api(self):
         """测试真实API获取（手动运行时启用）"""
+        if not os.environ.get("AETHERCORE_NETWORK_TESTS"):
+            pytest.skip("network-dependent test; set AETHERCORE_NETWORK_TESTS=1 to enable")
         client = ModelsDevClient()
         data = client.fetch_from_models_dev()
-        
+
         assert data is not None
         assert len(data) > 10
-        
+
         # 验证数据结构正确
         first_provider = list(data.keys())[0]
         assert "models" in data[first_provider]

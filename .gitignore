@@ -24,6 +24,7 @@ backend/storage/uploads/
 backend/storage/platform_baselines/
 backend/storage/aethercore.db
 backend/.pytest_cache/
+backend/.pytest-tmp/
 .pytest-temp/
 .tmp-check/
 frontend/.vite/

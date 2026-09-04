@@ -13,14 +13,11 @@ Tests cover:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone, timedelta
 
-import pytest
 
 from app.services.context.token_estimation import (
     TokenEstimator,
-    TokenEstimationConfig,
     rough_token_count,
     estimate_message_tokens,
     estimate_messages_tokens,
@@ -28,7 +25,6 @@ from app.services.context.token_estimation import (
 from app.services.context.context_budget import (
     ContextBudget,
     ContextBudgetConfig,
-    TokenWarningState,
     WarningLevel,
     calculate_token_warning_state,
     get_auto_compact_threshold,
@@ -42,15 +38,10 @@ from app.services.context.message_compaction import (
     MessageCompactor,
     MicroCompactConfig,
     CompactBoundaryMarker,
-    MicroCompactResult,
-    CompactResult,
-    CompactionStrategy,
 )
 from app.services.context.context_manager import (
     ContextManager,
     ContextManagerConfig,
-    ContextWindowState,
-    AutoCompactTrackingState,
 )
 from app.services.context.truncate import (
     truncate_text,

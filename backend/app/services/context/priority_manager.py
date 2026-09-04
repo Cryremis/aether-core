@@ -266,17 +266,7 @@ class PriorityManager:
         返回 (要压缩的消息, 要保留的消息)。
         """
         priorities = self.build_priority_map(messages)
-        
-        sorted_indices = sorted(
-            range(len(messages)),
-            key=lambda i: (
-                priorities[i] == MessagePriority.Compactable,
-                priorities[i] == MessagePriority.Low,
-                priorities[i] == MessagePriority.Medium,
-                i,
-            ),
-        )
-        
+
         kept_indices: set[int] = set()
         current_tokens = 0
         

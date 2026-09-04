@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from app.services.session_types import CONTEXT_MESSAGE_SCHEMA_VERSION
+# 重导出: app/services/context/__init__.py 通过本模块转发此常量(勿删,静态分析视为未使用)
+from app.services.session_types import CONTEXT_MESSAGE_SCHEMA_VERSION as CONTEXT_MESSAGE_SCHEMA_VERSION
+
+__all__ = ["CONTEXT_MESSAGE_SCHEMA_VERSION"]
 
 
 def utc_now_iso() -> str:

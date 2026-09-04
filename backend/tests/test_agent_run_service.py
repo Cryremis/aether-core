@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from app.core.config import settings
-from app.runtime.event_protocol import make_event
 from app.services.agent_run_service import agent_run_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service

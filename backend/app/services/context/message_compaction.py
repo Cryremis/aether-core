@@ -20,8 +20,7 @@ from enum import Enum
 from typing import Any
 
 from app.services.context.token_estimation import TokenEstimator
-from app.services.context.priority_manager import MessagePriority, PriorityManager
-from app.services.context.truncate import truncate_tool_result
+from app.services.context.priority_manager import PriorityManager
 
 
 class CompactionStrategy(Enum):
@@ -197,9 +196,8 @@ class MessageCompactor:
             return None
         
         compactable_ids = self._collect_compactable_tool_ids(messages)
-        
+
         keep_count = max(1, self.micro_config.keep_recent_count)
-        keep_set = set(compactable_ids[-keep_count:])
         clear_set = set(compactable_ids[:-keep_count]) if len(compactable_ids) > keep_count else set()
         
         if not clear_set:

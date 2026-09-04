@@ -11,11 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 from app.services.provider.models import (
-    get_context_window,
-    get_max_output_tokens,
     get_models_registry,
     ModelsRegistry,
 )

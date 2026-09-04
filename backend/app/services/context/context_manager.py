@@ -16,27 +16,23 @@ AetherCore上下文窗口管理的主协调器。
 
 from __future__ import annotations
 
-import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
-from app.services.context.token_estimation import TokenEstimator, estimate_messages_tokens
+from app.services.context.token_estimation import TokenEstimator
 from app.services.context.context_budget import (
     ContextBudget,
     ContextBudgetConfig,
     TokenWarningState,
-    WarningLevel,
 )
-from app.services.context.priority_manager import PriorityManager, MessagePriority
+from app.services.context.priority_manager import PriorityManager
 from app.services.context.message_compaction import (
     MessageCompactor,
+    CompactBoundaryMarker as CompactBoundaryMarker,
     CompactResult,
-    CompactBoundaryMarker,
     MicroCompactResult,
-    CompactionStrategy,
 )
 
 
@@ -254,12 +250,7 @@ class ContextManager:
             self._state.last_compaction_time = time.time()
             self._state.compact_count += 1
             return True, micro_result
-        
-        savings_estimate = self.compactor.estimate_compaction_savings(
-            messages,
-            int(self._state.effective_window * 0.5),
-        )
-        
+
         return False, None
     
     def get_messages_after_compact_boundary(

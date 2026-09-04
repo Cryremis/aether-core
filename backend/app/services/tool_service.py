@@ -731,7 +731,6 @@ class ToolService:
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
         """调用宿主工具，自动注入认证并处理 token 刷新。"""
-        base_url = self._get_host_base_url(session)
         endpoint = self._resolve_host_url(
             session,
             descriptor["endpoint"],

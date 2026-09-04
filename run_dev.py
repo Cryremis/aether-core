@@ -87,9 +87,11 @@ def show_status() -> None:
 
 
 def show_logs(target: str, *, lines: int, follow: bool) -> None:
+    from pathlib import Path
+
     backend = backend_service()
     frontend = frontend_service()
-    entries: list[tuple[object, str]] = []
+    entries: list[tuple[Path, str]] = []
 
     if target in {"backend", "all"}:
         entries.append((backend.stdout_log, "backend stdout"))

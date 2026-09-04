@@ -7,7 +7,6 @@ from app.api.deps import AuthContext, get_auth_context
 from app.schemas.common import ApiResponse
 from app.schemas.session import SessionSummary, WorkboardUpdateRequest
 from app.services.runtime_state import runtime_state_service
-from app.services.artifact_service import artifact_service
 from app.services.agent_run_service import agent_run_service
 from app.services.conversation_service import conversation_service
 from app.services.file_service import file_service

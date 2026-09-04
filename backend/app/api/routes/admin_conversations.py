@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.deps import AuthContext, require_admin
 from app.schemas.common import ApiResponse
 from app.schemas.session import SessionSummary
-from app.services.artifact_service import artifact_service
 from app.services.file_service import file_service
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service

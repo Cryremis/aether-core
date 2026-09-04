@@ -77,7 +77,7 @@ def test_session_runtime_builds_persistent_container_args(tmp_path, monkeypatch)
 
 
 def test_session_runtime_exec_uses_work_dir_and_sandbox_user(tmp_path):
-    workspace = build_workspace(tmp_path / "sandbox")
+    build_workspace(tmp_path / "sandbox")
     args = session_runtime_service._build_exec_args("test-container", "bash", "pwd")
     assert args[:6] == ["exec", "--user", "sandbox", "--workdir", "/workspace/work", "--env"]
     assert "HOME=/workspace/home" in args

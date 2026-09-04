@@ -3,12 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from app.core.config import settings
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 

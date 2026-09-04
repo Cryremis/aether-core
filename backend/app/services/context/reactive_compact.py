@@ -8,11 +8,7 @@
 
 from __future__ import annotations
 
-import json
-import time
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -25,7 +21,6 @@ from app.services.context.message_compaction import (
     MicroCompactResult,
 )
 from app.services.context.session_memory_compact import SessionMemoryCompact
-from app.services.context.priority_manager import PriorityManager
 
 
 class ReactiveCompactOutcome(Enum):
@@ -271,9 +266,7 @@ class ReactiveCompact:
                 "is_meta": True,
             }
             compacted_messages.insert(0, synthetic_user)
-        
-        post_compact_tokens = self.estimator.estimate_messages_tokens(compacted_messages)
-        
+
         boundary_marker = CompactBoundaryMarker(
             compaction_type="reactive",
             pre_compact_token_count=self.estimator.estimate_messages_tokens(messages),

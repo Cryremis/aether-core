@@ -65,8 +65,10 @@ def show_status() -> None:
 
 
 def show_logs(stream: str, *, lines: int, follow: bool) -> None:
+    from pathlib import Path
+
     backend = backend_service()
-    targets: list[tuple[object, str]] = []
+    targets: list[tuple[Path, str]] = []
     if stream in {"out", "stdout", "all"}:
         targets.append((backend.stdout_log, "backend stdout"))
     if stream in {"err", "stderr", "all"}:
