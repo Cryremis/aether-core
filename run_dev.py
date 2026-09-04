@@ -41,6 +41,9 @@ def backend_service() -> ServiceSpec:
             settings.backend_host,
             "--port",
             str(settings.backend_port),
+            # 与 process_control.stop_service 的优雅停止窗口配套
+            "--timeout-graceful-shutdown",
+            "10",
         ],
     )
 

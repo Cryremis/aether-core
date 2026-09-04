@@ -39,6 +39,10 @@ def backend_service() -> ServiceSpec:
             settings.backend_host,
             "--port",
             str(settings.backend_port),
+            # SIGTERM 后最多等待 10s 处理在途请求(SSE 长连接会被切断),
+            # 与 stop_service 的优雅窗口(GRACEFUL_STOP_TIMEOUT_SECONDS=15s)配套
+            "--timeout-graceful-shutdown",
+            "10",
         ],
     )
 

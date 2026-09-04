@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 
@@ -19,7 +20,28 @@ BACKEND_ROOT = PROJECT_ROOT / "backend"
 FRONTEND_ROOT = PROJECT_ROOT / "frontend"
 FRONTEND_DIST_ROOT = FRONTEND_ROOT / "dist"
 BACKEND_ENV_FILE = BACKEND_ROOT / ".env"
+
+# 启动后等待端口就绪的窗口
 START_TIMEOUT_SECONDS = 20
+# SIGTERM 后的优雅退出窗口,应大于 uvicorn --timeout-graceful-shutdown(10s)
+GRACEFUL_STOP_TIMEOUT_SECONDS = 15
+# SIGKILL 后等待进程消亡的窗口
+SIGKILL_TIMEOUT_SECONDS = 5
+# 进程退出后等待端口释放的窗口(TIME_WAIT/内核清理)
+PORT_RELEASE_TIMEOUT_SECONDS = 5
+
+
+class ProcessState(Enum):
+    """进程活性三态。
+
+    ZOMBIE 表示进程已退出但尚未被父进程收割(wait/reap)。
+    僵尸不持有端口、不消耗 CPU、不可被信号唤醒——对服务管理而言等价于死,
+    但 os.kill(pid, 0) 会误报为存活,这正是 stale pid 死锁的根源。
+    """
+
+    ALIVE = "alive"
+    ZOMBIE = "zombie"
+    DEAD = "dead"
 
 
 @dataclass(frozen=True)
@@ -122,9 +144,10 @@ def read_pid(path: Path) -> int | None:
     return int(content)
 
 
-def is_running(pid: int | None) -> bool:
+def get_process_state(pid: int | None) -> ProcessState:
+    """判定进程活性三态,僵尸感知,不受 pid 复用伪装影响的只是存在性。"""
     if not pid:
-        return False
+        return ProcessState.DEAD
     if os.name == "nt":
         result = subprocess.run(
             [
@@ -137,12 +160,59 @@ def is_running(pid: int | None) -> bool:
             text=True,
             check=False,
         )
-        return "running" in result.stdout
+        return ProcessState.ALIVE if "running" in result.stdout else ProcessState.DEAD
+
+    # POSIX: /proc/<pid>/stat 的 state 字段(comm 含空格/括号,须从最后一个 ')' 之后解析)
     try:
-        os.kill(pid, 0)
-    except OSError:
+        stat_content = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except (FileNotFoundError, ProcessLookupError):
+        return ProcessState.DEAD
+    except PermissionError:
+        # 进程存在但无权读取,保守视为存活
+        return ProcessState.ALIVE
+    try:
+        state_char = stat_content[stat_content.rfind(")") + 2 :].split()[0]
+    except (IndexError, ValueError):
+        return ProcessState.DEAD
+    if state_char == "Z":
+        return ProcessState.ZOMBIE
+    return ProcessState.ALIVE
+
+
+def is_running(pid: int | None) -> bool:
+    """向后兼容的布尔视图:僵尸与死进程都返回 False。"""
+    return get_process_state(pid) == ProcessState.ALIVE
+
+
+def pid_matches_spec(pid: int, spec: ServiceSpec) -> bool:
+    """核对 pid 对应的命令行是否仍是本服务,防 pid 复用误判。
+
+    POSIX 读 /proc/<pid>/cmdline;Windows 无对应机制,恒真
+    (由端口校验兜底)。
+    """
+    if os.name == "nt":
+        return True
+    try:
+        cmdline_blob = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "ignore")
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
         return False
-    return True
+    args = [part for part in cmdline_blob.split("\0") if part]
+    if not args:
+        # 僵尸/内核线程的 cmdline 为空
+        return False
+    marker = _command_marker(spec)
+    if marker is None:
+        return True
+    return marker in cmdline_blob
+
+
+def _command_marker(spec: ServiceSpec) -> str | None:
+    """从命令定义提取稳定标识(如 `-m uvicorn` 的模块名),用于命令行核对。"""
+    command = spec.command
+    for index, part in enumerate(command):
+        if part == "-m" and index + 1 < len(command):
+            return command[index + 1]
+    return None
 
 
 def port_is_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -204,16 +274,26 @@ def remove_pid(path: Path) -> None:
 
 
 def resolve_service_pid(spec: ServiceSpec) -> int | None:
+    """解析服务 pid:pid 文件 + 端口双源,僵尸/死进程/pid 复用均自动清理。
+
+    返回 None 表示服务未在运行(此时 pid 文件已被自愈清理或本就不存在)。
+    """
     pid = read_pid(spec.pid_file)
-    if pid and is_running(pid):
-        return pid
+    if pid is not None:
+        state = get_process_state(pid)
+        if state == ProcessState.ALIVE and pid_matches_spec(pid, spec):
+            return pid
+        if state != ProcessState.ALIVE:
+            # 僵尸或死进程:pid 文件已过期,清理
+            remove_pid(spec.pid_file)
+        # 存活但命令行不匹配(pid 被复用):pid 文件指向了别人的进程,同样过期
+        else:
+            remove_pid(spec.pid_file)
     port_pid = pid_by_port(spec.port)
-    if port_pid and is_running(port_pid):
+    if port_pid and get_process_state(port_pid) == ProcessState.ALIVE:
         if port_pid != pid:
             write_pid(spec.pid_file, spec, port_pid)
         return port_pid
-    if pid and not is_running(pid):
-        remove_pid(spec.pid_file)
     return None
 
 
@@ -294,17 +374,61 @@ def follow_log_files(paths: list[tuple[Path, str]], *, lines: int = 50, poll_int
         print("\nlog follow stopped", flush=True)
 
 
-def start_service(spec: ServiceSpec) -> bool:
-    pid = resolve_service_pid(spec)
-    if pid or port_is_open(spec.port):
-        print(f"{spec.name} already running, pid={pid or '-'}")
-        return True
+def _wait_for(predicate, timeout_seconds: float, poll_interval: float = 0.2) -> bool:
+    """在超时窗口内轮询等待条件成立,返回最终一次判定结果。"""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(poll_interval)
+    return predicate()
 
-    popen_kwargs: dict[str, object] = {}
+
+def start_service(spec: ServiceSpec) -> bool:
+    """启动服务。端口是唯一真相:
+
+    - 端口已被本服务进程监听 → 收养(pid 文件自动回写),幂等成功
+    - 端口被外来进程占用 → 明确报错(不覆盖别人的服务)
+    - pid 文件指向死/僵尸/复用进程 → 自愈清理后正常启动
+    - pid 对应进程活着但没监听 → 可能仍在启动中,短暂等待后报告
+    """
+    # 预检:端口裁决
+    if port_is_open(spec.port):
+        holder_pid = pid_by_port(spec.port)
+        if holder_pid and get_process_state(holder_pid) == ProcessState.ALIVE:
+            if read_pid(spec.pid_file) != holder_pid:
+                write_pid(spec.pid_file, spec, holder_pid)
+            print(f"{spec.name} already running, pid={holder_pid}")
+            return True
+        print(
+            f"{spec.name} cannot start: port {spec.port} is occupied "
+            f"but no live owning process was identified (holder pid={holder_pid or 'unknown'})"
+        )
+        return False
+
+    # 端口空闲:核对 pid 文件
+    recorded_pid = read_pid(spec.pid_file)
+    if recorded_pid is not None:
+        state = get_process_state(recorded_pid)
+        if state == ProcessState.ALIVE and pid_matches_spec(recorded_pid, spec):
+            # 进程活着但尚未监听:可能正在启动(uvicorn 冷启动/依赖加载),给一个短窗口
+            if _wait_for(lambda: port_is_open(spec.port), timeout_seconds=8):
+                print(f"{spec.name} already running, pid={recorded_pid}")
+                return True
+            print(
+                f"{spec.name} pid={recorded_pid} is alive but not listening on port {spec.port}; "
+                f"it may be wedged — check {spec.stderr_log}"
+            )
+            return False
+        # 死进程 / 僵尸 / pid 被复用:pid 文件过期,自愈
+        remove_pid(spec.pid_file)
+
+    # 启动
+    popen_kwargs: dict[str, int] = {}
     if os.name == "nt":
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
     else:
-        popen_kwargs["start_new_session"] = True
+        popen_kwargs["start_new_session"] = 1
 
     with spec.stdout_log.open("ab") as stdout, spec.stderr_log.open("ab") as stderr:
         process = subprocess.Popen(
@@ -313,22 +437,32 @@ def start_service(spec: ServiceSpec) -> bool:
             stdout=stdout,
             stderr=stderr,
             shell=False,
-            **popen_kwargs,
+            **popen_kwargs,  # type: ignore[arg-type]
         )
     write_pid(spec.pid_file, spec, process.pid)
 
-    deadline = time.time() + START_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        current_pid = resolve_service_pid(spec)
-        if current_pid and port_is_open(spec.port):
-            print(f"{spec.name} started, pid={current_pid}")
+    deadline = time.monotonic() + START_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if port_is_open(spec.port):
+            print(f"{spec.name} started, pid={process.pid}")
             return True
         if process.poll() is not None:
             break
         time.sleep(0.2)
 
-    remove_pid(spec.pid_file)
+    # 启动失败:收敛到干净状态(不留半死进程和脏 pid 文件)
     print(f"{spec.name} failed to start")
+    if get_process_state(process.pid) == ProcessState.ALIVE:
+        try:
+            process.terminate()
+            process.wait(timeout=3)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+                process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    remove_pid(spec.pid_file)
     stderr_tail = tail_log(spec.stderr_log)
     if stderr_tail:
         print(stderr_tail)
@@ -336,8 +470,27 @@ def start_service(spec: ServiceSpec) -> bool:
 
 
 def stop_service(spec: ServiceSpec) -> bool:
+    """停止服务,分级收敛,保证终态干净:
+
+    POSIX:  SIGTERM(优雅窗口 15s) → SIGKILL(强制窗口 5s) → 端口释放等待(5s) → pid 清理
+    Windows: Stop-Process(强停) → 端口释放等待 → pid 清理
+
+    僵尸视为已停止(惰性进程,等父进程收割,不影响服务语义)。
+    无论走哪条路径,只要进程死透且端口释放,pid 文件必然被清理。
+    """
     pid = resolve_service_pid(spec)
     if not pid:
+        # 无可识别的运行进程:清理可能残留的 stale pid 文件
+        stale_pid = read_pid(spec.pid_file)
+        if stale_pid is not None and get_process_state(stale_pid) != ProcessState.ALIVE:
+            remove_pid(spec.pid_file)
+        if port_is_open(spec.port):
+            holder = pid_by_port(spec.port)
+            print(
+                f"{spec.name} cannot stop: port {spec.port} is held by an unmanaged process "
+                f"(pid={holder or 'unknown'}) — stop it manually"
+            )
+            return False
         print(f"{spec.name} is not running")
         return True
 
@@ -353,32 +506,61 @@ def stop_service(spec: ServiceSpec) -> bool:
             text=True,
             check=False,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 and get_process_state(pid) == ProcessState.ALIVE:
             print(f"{spec.name} failed to stop, pid={pid}")
             if result.stderr.strip():
                 print(result.stderr.strip())
             return False
     else:
+        # 第一级:优雅停止。uvicorn 配置了 --timeout-graceful-shutdown,
+        # 收到 SIGTERM 后会在内部宽限期内处理完在途请求再退出。
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
+        if not _wait_for(
+            lambda: get_process_state(pid) != ProcessState.ALIVE,
+            GRACEFUL_STOP_TIMEOUT_SECONDS,
+        ):
+            # 第二级:强制终止。SIGKILL 不可被捕获,进程必死;
+            # 死后进入僵尸态直到父进程收割——对服务管理而言等价于已停止。
+            print(
+                f"{spec.name} did not exit within {GRACEFUL_STOP_TIMEOUT_SECONDS}s "
+                f"(in-flight requests?), sending SIGKILL"
+            )
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            _wait_for(
+                lambda: get_process_state(pid) != ProcessState.ALIVE,
+                SIGKILL_TIMEOUT_SECONDS,
+            )
 
-    for _ in range(30):
-        if not is_running(pid) and not port_is_open(spec.port):
-            break
-        time.sleep(0.2)
-
-    if os.name != "nt" and is_running(pid):
-        os.kill(pid, signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM)
-
-    remaining_pid = resolve_service_pid(spec)
-    if remaining_pid or port_is_open(spec.port):
-        print(f"{spec.name} failed to stop, pid={remaining_pid or pid} still running")
+    final_state = get_process_state(pid)
+    if final_state == ProcessState.ALIVE:
+        # SIGKILL 后仍存活:理论上不可能,除非进程处于不可中断睡眠(D 状态)
+        print(
+            f"{spec.name} failed to stop, pid={pid} is unkillable "
+            "(likely in uninterruptible sleep — check for stuck I/O)"
+        )
         return False
 
+    # 第三级:等待端口释放(内核清理监听 socket)
+    if not _wait_for(lambda: not port_is_open(spec.port), PORT_RELEASE_TIMEOUT_SECONDS):
+        holder = pid_by_port(spec.port)
+        print(
+            f"{spec.name} process exited but port {spec.port} is still held "
+            f"(pid={holder or 'unknown'})"
+        )
+        return False
+
+    # 收敛完成:清理 pid 文件
     remove_pid(spec.pid_file)
-    print(f"{spec.name} stopped")
+    if final_state == ProcessState.ZOMBIE:
+        print(f"{spec.name} stopped (pid={pid} zombie pending parent reaping)")
+    else:
+        print(f"{spec.name} stopped")
     return True
 
 
