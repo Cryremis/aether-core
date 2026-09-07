@@ -21,7 +21,14 @@ export default defineConfig({
             return "vendor-markdown";
           }
 
-          if (id.includes("react")) {
+          // react 与 recharts 及其完整依赖树必须同 chunk:
+          // 拆开会产生循环 chunk 依赖,生产环境模块初始化顺序不定,
+          // 导致 recharts 顶层 React.forwardRef 读到 undefined 而崩溃
+          if (
+            /[\\/]node_modules[\\/](react|react-dom|scheduler|react-.+|@reduxjs[\\/]toolkit|redux|use-sync-external-store|reselect|recharts|victory-vendor|d3-.+|decimal\.js-light|fast-equals|lodash-es|eventemitter3|clsx|es-toolkit|immer|tiny-invariant|react-router|@remix-run[\\/]router)/.test(
+              id,
+            )
+          ) {
             return "vendor-react";
           }
 
