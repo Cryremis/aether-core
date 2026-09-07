@@ -7,7 +7,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from app.core.config import settings
@@ -1443,6 +1443,112 @@ class StoreService:
             "runtime_count": sum(int(item["runtime_count"]) for item in platforms),
             "platforms": platforms,
         }
+
+    def get_audit_trends(self, days: int = 30, platform_id: int | None = None) -> dict[str, Any]:
+        """按天聚合审计趋势:日增用户/会话/消息 + 累计曲线。
+
+        platform_id 为空时统计全部来源(独立工作台 + 宿主平台):
+        - 用户基于 users 表(内部账号)精确计数
+        platform_id 指定时按该平台过滤:
+        - 会话/消息取该平台 conversations 过滤聚合
+        - 用户按"首次会话日归因"的活跃去重用户计数
+        消息无逐条时间戳,日增消息按会话创建日归因估算。
+        """
+        days = max(1, min(days, 365))
+        today = datetime.now(timezone.utc).date()
+        start_date = today - timedelta(days=days - 1)
+        start_iso = start_date.isoformat()
+
+        daily_users: dict[str, int] = {}
+        daily_conversations: dict[str, int] = {}
+        daily_messages: dict[str, int] = {}
+        base_users = 0
+        base_conversations = 0
+        base_messages = 0
+
+        with self._connect() as conn:
+            if platform_id is None:
+                base_users = conn.execute(
+                    "SELECT COUNT(*) FROM users WHERE created_at < ?", (start_iso,)
+                ).fetchone()[0]
+                base_conversations = conn.execute(
+                    "SELECT COUNT(*) FROM conversations WHERE created_at < ?", (start_iso,)
+                ).fetchone()[0]
+                base_messages = conn.execute(
+                    "SELECT COALESCE(SUM(message_count), 0) FROM conversations WHERE created_at < ?",
+                    (start_iso,),
+                ).fetchone()[0]
+                for row in conn.execute(
+                    "SELECT substr(created_at, 1, 10) AS day, COUNT(*) FROM users "
+                    "WHERE created_at >= ? GROUP BY day ORDER BY day",
+                    (start_iso,),
+                ):
+                    daily_users[str(row[0])] = int(row[1])
+                conv_rows = conn.execute(
+                    "SELECT substr(created_at, 1, 10) AS day, COUNT(*), COALESCE(SUM(message_count), 0) "
+                    "FROM conversations WHERE created_at >= ? GROUP BY day ORDER BY day",
+                    (start_iso,),
+                ).fetchall()
+            else:
+                # 平台维度:用户按首次会话日归因(COALESCE 外部/内部身份)
+                base_users = conn.execute(
+                    "SELECT COUNT(*) FROM ("
+                    "  SELECT COALESCE(external_user_id, 'internal:' || owner_user_id) AS uid, MIN(created_at) AS first_at "
+                    "  FROM conversations WHERE platform_id = ? GROUP BY uid"
+                    ") WHERE substr(first_at, 1, 10) < ?",
+                    (platform_id, start_iso),
+                ).fetchone()[0]
+                base_conversations = conn.execute(
+                    "SELECT COUNT(*) FROM conversations WHERE platform_id = ? AND created_at < ?",
+                    (platform_id, start_iso),
+                ).fetchone()[0]
+                base_messages = conn.execute(
+                    "SELECT COALESCE(SUM(message_count), 0) FROM conversations "
+                    "WHERE platform_id = ? AND created_at < ?",
+                    (platform_id, start_iso),
+                ).fetchone()[0]
+                for row in conn.execute(
+                    "SELECT substr(first_at, 1, 10) AS day, COUNT(*) FROM ("
+                    "  SELECT COALESCE(external_user_id, 'internal:' || owner_user_id) AS uid, MIN(created_at) AS first_at "
+                    "  FROM conversations WHERE platform_id = ? GROUP BY uid"
+                    ") WHERE substr(first_at, 1, 10) >= ? GROUP BY day ORDER BY day",
+                    (platform_id, start_iso),
+                ):
+                    daily_users[str(row[0])] = int(row[1])
+                conv_rows = conn.execute(
+                    "SELECT substr(created_at, 1, 10) AS day, COUNT(*), COALESCE(SUM(message_count), 0) "
+                    "FROM conversations WHERE platform_id = ? AND created_at >= ? GROUP BY day ORDER BY day",
+                    (platform_id, start_iso),
+                ).fetchall()
+
+            for row in conv_rows:
+                daily_conversations[str(row[0])] = int(row[1])
+                daily_messages[str(row[0])] = int(row[2])
+
+        points: list[dict[str, Any]] = []
+        total_users = int(base_users)
+        total_conversations = int(base_conversations)
+        total_messages = int(base_messages)
+        for offset in range(days):
+            day = (start_date + timedelta(days=offset)).isoformat()
+            new_users = daily_users.get(day, 0)
+            new_conversations = daily_conversations.get(day, 0)
+            new_messages = daily_messages.get(day, 0)
+            total_users += new_users
+            total_conversations += new_conversations
+            total_messages += new_messages
+            points.append(
+                {
+                    "date": day,
+                    "new_users": new_users,
+                    "new_conversations": new_conversations,
+                    "new_messages": new_messages,
+                    "total_users": total_users,
+                    "total_conversations": total_conversations,
+                    "total_messages": total_messages,
+                }
+            )
+        return {"points": points}
 
     def upsert_session_runtime(
         self,

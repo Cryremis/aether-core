@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import type {
   AuditConversationDetail,
   AuditConversationSummary,
+  AuditTrendPoint,
   CurrentUserProfile,
   PlatformAuditOverviewItem,
   PlatformRegistrationRequestSummary,
@@ -17,6 +18,7 @@ import {
   assignPlatformAdmin,
   collectAdminRuntime,
   getAdminConversationDetail,
+  getAuditTrends,
   getSystemAuditOverview,
   listAdminConversations,
   listAdminRuntimes,
@@ -32,6 +34,7 @@ import {
 } from "../api/client";
 import { AdminPanel } from "./AdminPanel";
 import { ChatTimeline } from "./workbench/ChatTimeline";
+import { TrendChart, type TrendPoint, type TrendSeries } from "./admin/TrendChart";
 import type { ChatMessage, AssistantBlock } from "../pages/workbench/types";
 
 type ManagementConsoleProps = {
@@ -264,6 +267,10 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [runtimes, setRuntimes] = useState<SessionRuntimeSummary[]>([]);
   const [systemAuditOverview, setSystemAuditOverview] = useState<SystemAuditOverview | null>(null);
+  const [auditTrendPoints, setAuditTrendPoints] = useState<AuditTrendPoint[]>([]);
+  const [auditTrendRange, setAuditTrendRange] = useState<7 | 30 | 90>(30);
+  const [auditTrendMetric, setAuditTrendMetric] = useState<"new" | "total">("new");
+  const [auditTrendPlatformId, setAuditTrendPlatformId] = useState<number | null>(null);
   const [auditConversations, setAuditConversations] = useState<AuditConversationSummary[]>([]);
   const [selectedAuditSessionId, setSelectedAuditSessionId] = useState<string>("");
   const [selectedAuditDetail, setSelectedAuditDetail] = useState<AuditConversationDetail | null>(null);
@@ -340,6 +347,16 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
       setSystemAuditOverview((result.data ?? null) as SystemAuditOverview | null);
     } finally {
       setSystemAuditBusy(false);
+    }
+  };
+
+  const loadAuditTrends = async (days: number, platformId: number | null) => {
+    try {
+      const result = await getAuditTrends(days, platformId);
+      const data = (result.data ?? {}) as { points?: AuditTrendPoint[] };
+      setAuditTrendPoints(data.points ?? []);
+    } catch {
+      setAuditTrendPoints([]);
     }
   };
 
@@ -435,7 +452,8 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
     void loadSystemAuditOverview().catch((err) => {
       setError(err instanceof Error ? err.message : "加载系统审计概览失败");
     });
-  }, [activeTab, canManageSystem]);
+    void loadAuditTrends(auditTrendRange, auditTrendPlatformId);
+  }, [activeTab, canManageSystem, auditTrendRange, auditTrendPlatformId]);
 
   const handleApprove = async (requestId: number) => {
     const reviewComment = window.prompt("审批备注（可选）", "") ?? "";
@@ -770,7 +788,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
             <div className="management-console__section-head">
               <div>
                 <h4>系统审计概览</h4>
-                <p>按宿主平台聚合查看承载用户、会话消息和 runtime 规模，便于判断整体接入与负载情况。</p>
+                <p>按宿主平台聚合查看承载用户、会话消息和 runtime 规模，并以趋势曲线追踪增长变化。</p>
               </div>
               <button type="button" className="action-button action-button--ghost" disabled={systemAuditBusy} onClick={() => void loadSystemAuditOverview()}>
                 {systemAuditBusy ? "刷新中..." : "刷新"}
@@ -818,6 +836,60 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                 <strong>{systemAuditOverview?.pending_registration_request_count ?? 0}</strong>
                 <p>当前待处理的平台接入申请</p>
               </article>
+            </div>
+
+            <div className="management-console__trend-block">
+              <div className="management-console__trend-head">
+                <div>
+                  <h4>增长趋势</h4>
+                  <p>
+                    {auditTrendPlatformId == null
+                      ? "全部来源(独立工作台 + 宿主平台)"
+                      : `仅 ${platforms.find((p) => p.platform_id === auditTrendPlatformId)?.display_name ?? "所选平台"},用户按首次会话日归因`}
+                    {" · "}
+                    {auditTrendMetric === "new" ? "每日新增,消息按会话创建日归因" : "累计总量"}
+                  </p>
+                </div>
+                <div className="management-console__trend-controls">
+                  <select
+                    className="trend-platform-select"
+                    value={auditTrendPlatformId ?? ""}
+                    onChange={(e) => setAuditTrendPlatformId(e.target.value === "" ? null : Number(e.target.value))}
+                    aria-label="选择统计范围"
+                  >
+                    <option value="">全部来源</option>
+                    {platforms.map((p) => (
+                      <option key={p.platform_id} value={p.platform_id}>{p.display_name}</option>
+                    ))}
+                  </select>
+                  <div className="segmented-control">
+                    <button type="button" className={`segment ${auditTrendMetric === "new" ? "active" : ""}`} onClick={() => setAuditTrendMetric("new")}>日增</button>
+                    <button type="button" className={`segment ${auditTrendMetric === "total" ? "active" : ""}`} onClick={() => setAuditTrendMetric("total")}>累计</button>
+                  </div>
+                  <div className="segmented-control">
+                    {([7, 30, 90] as const).map((d) => (
+                      <button key={d} type="button" className={`segment ${auditTrendRange === d ? "active" : ""}`} onClick={() => setAuditTrendRange(d)}>{d} 天</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <TrendChart
+                points={auditTrendPoints as unknown as TrendPoint[]}
+                series={
+                  auditTrendMetric === "new"
+                    ? ([
+                        { key: "new_users", label: "日增用户", color: "#2563eb" },
+                        { key: "new_conversations", label: "日增会话", color: "#059669" },
+                        { key: "new_messages", label: "日增消息", color: "#d97706" },
+                      ] as TrendSeries[])
+                    : ([
+                        { key: "total_users", label: "总用户", color: "#2563eb" },
+                        { key: "total_conversations", label: "总会话", color: "#059669" },
+                        { key: "total_messages", label: "总消息", color: "#d97706" },
+                      ] as TrendSeries[])
+                }
+                formatValue={(v) => (v >= 10000 ? `${(v / 10000).toFixed(1)}w` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v)))}
+              />
             </div>
 
             <div className="management-console__section-head management-console__section-head--subtle">

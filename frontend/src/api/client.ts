@@ -520,6 +520,20 @@ export type SystemAuditOverview = {
   platforms: PlatformAuditOverviewItem[];
 };
 
+export type AuditTrendPoint = {
+  date: string;
+  new_users: number;
+  new_conversations: number;
+  new_messages: number;
+  total_users: number;
+  total_conversations: number;
+  total_messages: number;
+};
+
+export type AuditTrends = {
+  points: AuditTrendPoint[];
+};
+
 export type WorkItemStatus = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
 export type WorkboardStatus = "idle" | "active" | "completed" | "blocked";
 
@@ -1364,6 +1378,18 @@ export async function getSystemAuditOverview() {
   const response = await apiFetch("/admin/audit/overview");
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, `获取系统审计概览失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function getAuditTrends(days: number, platformId?: number | null) {
+  const params = new URLSearchParams({ days: String(days) });
+  if (platformId != null) {
+    params.set("platform_id", String(platformId));
+  }
+  const response = await apiFetch(`/admin/audit/trends?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `获取审计趋势失败: ${response.status}`));
   }
   return response.json();
 }

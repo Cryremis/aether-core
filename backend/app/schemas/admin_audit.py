@@ -30,3 +30,19 @@ class SystemAuditOverview(BaseModel):
     active_runtime_count: int = 0
     runtime_count: int = 0
     platforms: list[PlatformAuditOverviewItem] = Field(default_factory=list)
+
+
+class AuditTrendPoint(BaseModel):
+    """单日审计趋势点。日增消息按会话创建日归因估算,累计为精确值。"""
+
+    date: str
+    new_users: int = 0
+    new_conversations: int = 0
+    new_messages: int = 0
+    total_users: int = 0
+    total_conversations: int = 0
+    total_messages: int = 0
+
+
+class AuditTrends(BaseModel):
+    points: list[AuditTrendPoint] = Field(default_factory=list)
