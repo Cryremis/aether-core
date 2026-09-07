@@ -5,26 +5,25 @@
   place-items: center;
   padding: 24px;
   background:
-    radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(15, 23, 42, 0.08), transparent 32%),
-    #f8fafc;
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 12%, transparent), transparent 28%),
+    radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent) 6%, transparent), transparent 32%),
+    var(--bg-body);
 }
 
 .login-card {
-  width: min(440px, 100%);
-  padding: 32px;
-  border: 1px solid rgba(226, 232, 240, 0.9);
+  width: min(420px, 100%);
+  padding: 36px 32px;
+  border: 1px solid var(--border-subtle);
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface-0);
   box-shadow: 0 24px 64px -28px rgba(15, 23, 42, 0.24);
-  backdrop-filter: blur(14px);
 }
 
 .login-card__header {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: 26px;
 }
 
 .login-card__eyebrow {
@@ -32,7 +31,7 @@
   width: fit-content;
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(37, 99, 235, 0.1);
+  background: var(--accent-soft);
   color: var(--accent);
   font-size: 12px;
   font-weight: 600;
@@ -40,14 +39,15 @@
 }
 
 .login-card__header h1 {
-  font-size: 28px;
+  font-size: 26px;
   line-height: 1.2;
   letter-spacing: -0.03em;
+  color: var(--text-primary);
 }
 
 .login-card__header p {
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.6;
 }
 
@@ -71,22 +71,86 @@
 
 .login-form input {
   width: 100%;
-  padding: 12px 14px;
+  padding: 11px 14px;
   border: 1px solid var(--border-color);
-  border-radius: 14px;
-  background: #fff;
+  border-radius: 12px;
+  background: var(--surface-1);
+  color: var(--text-primary);
   transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.login-form input::placeholder {
+  color: var(--text-tertiary);
 }
 
 .login-form input:focus,
 .skill-form input:focus,
 .skill-form textarea:focus,
 .chat-composer__input:focus {
-  border-color: rgba(37, 99, 235, 0.45);
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-.login-form button,
+/* 密码框 + 眼睛按钮 */
+.login-password-field {
+  position: relative;
+  display: block;
+}
+
+.login-password-field input {
+  padding-right: 42px;
+}
+
+.login-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.login-password-toggle:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  transform: translateY(-50%);
+}
+
+/* 记住密码 */
+.login-remember {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px !important;
+  cursor: pointer;
+  user-select: none;
+}
+
+.login-remember input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+}
+
+.login-remember span {
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  color: var(--text-secondary) !important;
+  cursor: pointer;
+}
+
+.login-form > button,
 .login-oauth-button,
 .history-sidebar__header button,
 .history-logout,
@@ -98,33 +162,44 @@
   transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
-.login-form button,
+.login-form > button,
 .login-oauth-button {
   width: 100%;
   min-height: 44px;
-  border-radius: 14px;
+  border-radius: 12px;
   font-weight: 600;
+  font-size: 14px;
 }
 
-.login-form button {
-  background: #0f172a;
+.login-form > button {
+  background: var(--accent);
   color: #fff;
-  margin-top: 4px;
+  margin-top: 2px;
+}
+
+.login-form > button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
 }
 
 .login-oauth-grid {
   display: grid;
-  gap: 12px;
-  margin-top: 12px;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 .login-oauth-button {
   margin-top: 0;
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
 }
 
-.login-form button:hover:not(:disabled),
+.login-oauth-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border-color));
+  color: var(--accent);
+}
+
+.login-form > button:hover:not(:disabled),
 .login-oauth-button:hover:not(:disabled),
 .history-sidebar__header button:hover,
 .history-logout:hover,
@@ -134,7 +209,7 @@
   transform: translateY(-1px);
 }
 
-.login-form button:disabled,
+.login-form > button:disabled,
 .login-oauth-button:disabled,
 .skill-form button:disabled,
 .chat-composer__send:disabled {
@@ -145,11 +220,29 @@
 .login-error {
   margin-top: 16px;
   padding: 12px 14px;
-  border-radius: 14px;
-  background: #fef2f2;
-  color: #b91c1c;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--error) 10%, var(--surface-0));
+  border: 1px solid color-mix(in srgb, var(--error) 25%, var(--border-color));
+  color: var(--error);
   font-size: 13px;
   line-height: 1.5;
+}
+
+/* 暗色主题 */
+:root[data-theme="dark"] .login-screen {
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 14%, transparent), transparent 30%),
+    radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent) 8%, transparent), transparent 34%),
+    var(--bg-body);
+}
+
+:root[data-theme="dark"] .login-card {
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 6%, transparent), transparent 40%),
+    var(--surface-0);
+  box-shadow:
+    0 32px 80px -32px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 color-mix(in srgb, var(--surface-1) 50%, transparent);
 }
 
 .dialog-backdrop {

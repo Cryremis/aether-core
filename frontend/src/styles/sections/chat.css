@@ -3,7 +3,7 @@
 
 .top-nav { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 20px; flex-shrink: 0; background: rgba(255,255,255,0.8); backdrop-filter: blur(12px); border-bottom: 1px solid rgba(226, 232, 240, 0.5); z-index: 10;}
 .nav-left { display: flex; align-items: center; gap: 14px; }
-.nav-right { display: flex; align-items: center; justify-content: flex-end; min-width: 0; flex: 1; }
+.nav-right { display: flex; align-items: center; justify-content: flex-end; min-width: 0; flex: 1; gap: 10px; }
 .nav-trigger { margin-left: -8px; }
 .session-badge { font-size: 12px; color: var(--text-tertiary); font-family: monospace; background: var(--bg-sidebar); padding: 4px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border-color); }
 
