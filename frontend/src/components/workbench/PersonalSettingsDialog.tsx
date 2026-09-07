@@ -10,7 +10,7 @@ const themeOptions: AppTheme[] = ["system", "light", "dark"];
 const languageOptions: AppLanguage[] = ["zh-CN", "en-US"];
 
 export function PersonalSettingsDialog({ open, onClose, onLogout }: PersonalSettingsDialogProps) {
-  const { language, setLanguage, setTheme, t, theme, themeLocked, hideReasoning, setHideReasoning } = useAppPreferences();
+  const { language, setLanguage, setTheme, t, theme, themeLocked, hideReasoning, setHideReasoning, notifyOnComplete, setNotifyOnComplete, notificationsSupported, notificationPermission } = useAppPreferences();
 
   if (!open) return null;
 
@@ -55,6 +55,24 @@ export function PersonalSettingsDialog({ open, onClose, onLogout }: PersonalSett
               <span className="toggle-switch__thumb" />
             </button>
           </div>
+          {notificationsSupported ? (
+            <div className="settings-row">
+              <span className="settings-row__label">
+                任务完成通知
+                {notificationPermission === "denied" ? (
+                  <span className="settings-row__hint">浏览器已拒绝,请在浏览器设置中允许通知后重试</span>
+                ) : null}
+              </span>
+              <button
+                type="button"
+                className={`toggle-switch ${notifyOnComplete ? "on" : ""}`}
+                onClick={() => setNotifyOnComplete(!notifyOnComplete)}
+                aria-pressed={notifyOnComplete}
+              >
+                <span className="toggle-switch__thumb" />
+              </button>
+            </div>
+          ) : null}
         </div>
         {onLogout ? (
           <div className="settings-dialog__footer">

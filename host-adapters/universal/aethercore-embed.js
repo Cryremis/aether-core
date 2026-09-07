@@ -343,7 +343,7 @@
               <div class="ac-embed-loading">
                 <button type="button" class="ac-embed-card">${this.config.labels.connect}</button>
               </div>
-              <iframe class="ac-embed-frame" title="AetherCore Workbench" allow="clipboard-write"></iframe>
+              <iframe class="ac-embed-frame" title="AetherCore Workbench" allow="clipboard-write; notifications"></iframe>
             </main>
           </div>
         </section>
@@ -366,6 +366,24 @@
       root.querySelector(".ac-embed-resize").addEventListener("pointerdown", (event) => this.startResize(event), { signal });
       window.addEventListener("resize", this.handleWindowResize, { signal });
       window.addEventListener("message", this.handleWorkbenchMessage, { signal });
+      // tab 切回前台时,若抽屉关闭且有未读的最新回复(气泡已自动隐藏),重新弹出气泡提示
+      document.addEventListener(
+        "visibilitychange",
+        () => {
+          if (document.visibilityState !== "visible") return;
+          if (this.state.open) return;
+          if (
+            this.latestAssistantPreview &&
+            this.assistantPreviewRevision > this.presentedAssistantPreviewRevision
+          ) {
+            this.showAssistantPreview(
+              this.latestAssistantPreview.content,
+              this.latestAssistantPreview.options
+            );
+          }
+        },
+        { signal }
+      );
     }
 
     handleWindowResize() {
@@ -397,6 +415,12 @@
         if (payload.conversation_id) {
           this.setLastConversationId(String(payload.conversation_id));
         }
+        return;
+      }
+
+      // 完成通知被点击: iframe 请求宿主打开抽屉
+      if (data.type === "aethercore:open-drawer") {
+        if (!this.state.open) this.open();
         return;
       }
 
@@ -569,6 +593,23 @@
       this.previewHideTimer = null;
     }
 
+    _postToFrame(message) {
+      var frame = this.root && this.root.querySelector(".ac-embed-frame");
+      if (!frame || !frame.contentWindow) return;
+      var origin = "*";
+      try { origin = new URL(this.state.embedUrl || this.config.workbenchUrl).origin; } catch (e) {}
+      frame.contentWindow.postMessage(message, origin);
+    }
+
+    _notifyDrawerState(open) {
+      // 推送抽屉开合状态给 iframe,供其判定"用户不在场"从而决定是否弹完成通知
+      this._postToFrame({
+        source: "aethercore-host",
+        type: "aethercore:drawer",
+        payload: { open: open },
+      });
+    }
+
     open() {
       const root = document.getElementById(this.config.rootId);
       if (!root) return;
@@ -580,6 +621,7 @@
       if (this.config.hideBubbleWhenOpen) {
         root.querySelector(".ac-embed-bubble").classList.add("is-hidden");
       }
+      this._notifyDrawerState(true);
       this.emitHook("onOpen");
       if (this.config.autoBind && !this.state.embedUrl) this.bindToAetherCore();
     }
@@ -592,6 +634,7 @@
       root.querySelector(".ac-embed-modal").classList.remove("is-open");
       root.querySelector(".ac-embed-bubble").classList.remove("is-hidden");
       root.querySelector(".ac-embed-bubble").classList.remove("is-open");
+      this._notifyDrawerState(false);
       if (
         this.config.assistantPreview.showLatestOnClose &&
         this.latestAssistantPreview &&
@@ -756,15 +799,11 @@
     }
 
     setTheme(theme) {
-      var frame = this.root && this.root.querySelector(".ac-embed-frame");
-      if (!frame || !frame.contentWindow) return;
-      var origin = "*";
-      try { origin = new URL(this.state.embedUrl || this.config.workbenchUrl).origin; } catch (e) {}
-      frame.contentWindow.postMessage({
+      this._postToFrame({
         source: "aethercore-host",
         type: "aethercore:theme",
         payload: { theme: theme },
-      }, origin);
+      });
     }
   }
 

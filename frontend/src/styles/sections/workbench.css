@@ -1360,6 +1360,15 @@ details[open]::details-content {
   white-space: nowrap;
 }
 
+.settings-row__hint {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  white-space: normal;
+}
+
 /* --- Segmented Control --- */
 .segmented-control {
   display: inline-flex;

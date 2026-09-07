@@ -252,7 +252,7 @@ export function WorkbenchPage({
   onSessionSelect,
   onAssistantPreview,
 }: WorkbenchPageProps) {
-  const { t, theme, setTheme, themeLocked } = useAppPreferences();
+  const { t, theme, setTheme, themeLocked, notifyOnComplete } = useAppPreferences();
   const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>([]);
   const [pendingUserEcho, setPendingUserEcho] = useState<PendingUserEcho | null>(null);
   const [skills, setSkills] = useState<SkillItem[]>([]);
@@ -263,8 +263,31 @@ export function WorkbenchPage({
   const [overlayVisible, setOverlayVisible] = useState(false);
   const overlayExitTimer = useRef<number | null>(null);
 
+  // --- 任务完成通知所需的状态追踪 ---
+  const hostNameRef = useRef<string>("");
+  const tabVisibleRef = useRef(!document.hidden);
+  const embedDrawerOpenRef = useRef(true);
+
   useEffect(() => {
     return () => { if (overlayExitTimer.current) window.clearTimeout(overlayExitTimer.current); };
+  }, []);
+
+  useEffect(() => {
+    const handler = () => { tabVisibleRef.current = !document.hidden; };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, []);
+
+  useEffect(() => {
+    // 嵌入式: 宿主 loader 在抽屉开/合时推送状态(非嵌入式恒为 true,不影响判定)
+    const handler = (event: MessageEvent) => {
+      if (event.source !== window.parent) return;
+      const data = event.data as { source?: string; type?: string; payload?: { open?: boolean } } | null;
+      if (!data || data.source !== "aethercore-host" || data.type !== "aethercore:drawer") return;
+      embedDrawerOpenRef.current = Boolean(data.payload?.open);
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
   }, []);
   const [filePreviewContent, setFilePreviewContent] = useState("");
   const [filePreviewLoading, setFilePreviewLoading] = useState(false);
@@ -723,11 +746,38 @@ window.addEventListener("resize", handleResize);
     setElicitation(summary.elicitation ?? null);
   };
 
+  // 任务完成系统通知: 仅在用户不在场(tab 后台或嵌入式抽屉关闭)且已授权时弹出。
+  // 标题用宿主平台名(嵌入式)或 AetherCore,正文为 agent 最后回复(由系统自行截断)。
+  // 注意: 必须在 completed 事件到达的同一宏任务内同步发出,
+  // 不可用 setTimeout 延迟——后台 tab 的定时器会被浏览器节流,通知会推迟到切回前台才弹。
+  const maybeNotifyCompletion = (failureSummary: string | null, completionBody: string) => {
+    if (!notifyOnComplete) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const userPresent = tabVisibleRef.current && (!isEmbedMode || embedDrawerOpenRef.current);
+    if (userPresent) return;
+    const body = (failureSummary || completionBody).trim();
+    if (!body) return;
+    const title = hostNameRef.current || "AetherCore";
+    try {
+      const notification = new Notification(title, { body, tag: `aethercore-${sessionId || ""}` });
+      notification.onclick = () => {
+        window.focus();
+        if (isEmbedMode) {
+          window.parent.postMessage({ source: "aethercore-workbench", type: "aethercore:open-drawer" }, "*");
+        }
+        notification.close();
+      };
+    } catch {
+      // 个别环境构造 Notification 可能抛错(如扩展上下文),静默降级
+    }
+  };
+
   const loadSession = async (nextSessionId: string) => {
     const summaryResult = await getSessionSummary(nextSessionId);
     const summary = (summaryResult.data ?? {}) as {
       transcript?: TranscriptChatMessage[];
       allow_network?: boolean;
+      host_name?: string | null;
       skills?: SkillItem[];
       files?: FileItem[];
       workboard?: WorkboardState;
@@ -749,6 +799,7 @@ window.addEventListener("resize", handleResize);
     setTranscriptMessages(transcriptMessages);
     setPendingUserEcho(null);
     setAllowNetwork(summary.allow_network ?? true);
+    hostNameRef.current = summary.host_name || "";
     setSkills(summary.skills ?? []);
     setFiles(summary.files ?? []);
     setWorkboard(summary.workboard ?? null);
@@ -1399,6 +1450,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
 
       if (eventType === "completed") {
         const elapsedMs = Number(payload.elapsed_ms ?? 0);
+        const completionSubtype = String(payload.subtype ?? "");
         const now = new Date().toISOString();
         setTranscriptMessages((current) =>
           current.map((item) =>
@@ -1418,6 +1470,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           ),
         );
         liveRunRef.current = null;
+        // 正文从流式累计 ref 同步读取(React functional updater 非同步执行,不可依赖其副作用)
+        maybeNotifyCompletion(
+          completionSubtype && completionSubtype !== "success"
+            ? (RESULT_MESSAGES[completionSubtype] ?? "任务已中断")
+            : null,
+          refs.activeContentText.value,
+        );
         return;
       }
 

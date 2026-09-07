@@ -6,6 +6,7 @@ export type AppTheme = "light" | "dark" | "system";
 const LANGUAGE_KEY = "aethercore_language";
 const THEME_KEY = "aethercore_theme";
 const HIDE_REASONING_KEY = "aethercore_hide_reasoning";
+const NOTIFY_COMPLETE_KEY = "aethercore_notify_complete";
 
 const messages = {
   "zh-CN": {
@@ -679,6 +680,10 @@ type PreferencesContextValue = {
   setThemeLocked: (locked: boolean) => void;
   hideReasoning: boolean;
   setHideReasoning: (hide: boolean) => void;
+  notifyOnComplete: boolean;
+  setNotifyOnComplete: (notify: boolean) => void;
+  notificationsSupported: boolean;
+  notificationPermission: NotificationPermission | "unsupported";
   t: (key: MessageKey) => string;
 };
 
@@ -707,6 +712,13 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
   const [hideReasoning, setHideReasoningState] = useState(() => {
     return window.localStorage.getItem(HIDE_REASONING_KEY) === "true";
   });
+  const notificationsSupported = typeof window !== "undefined" && "Notification" in window;
+  const [notifyOnComplete, setNotifyOnCompleteState] = useState(() => {
+    return window.localStorage.getItem(NOTIFY_COMPLETE_KEY) === "true";
+  });
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | "unsupported">(() =>
+    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported",
+  );
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => getSystemTheme());
   const resolvedTheme = theme === "system" ? systemTheme : theme;
 
@@ -744,6 +756,22 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
         window.localStorage.setItem(HIDE_REASONING_KEY, String(hide));
         setHideReasoningState(hide);
       },
+      notifyOnComplete,
+      setNotifyOnComplete: (notify) => {
+        window.localStorage.setItem(NOTIFY_COMPLETE_KEY, String(notify));
+        setNotifyOnCompleteState(notify);
+        if (notify && "Notification" in window && Notification.permission === "default") {
+          void Notification.requestPermission().then((permission) => {
+            setNotificationPermission(permission);
+            if (permission !== "granted") {
+              window.localStorage.setItem(NOTIFY_COMPLETE_KEY, "false");
+              setNotifyOnCompleteState(false);
+            }
+          });
+        }
+      },
+      notificationsSupported,
+      notificationPermission,
       resolvedTheme,
       themeLocked,
       setThemeLocked,
@@ -753,7 +781,7 @@ export function AppPreferencesProvider({ children }: { children: ReactNode }) {
         return localized[key] ?? fallback[key] ?? key;
       },
     }),
-    [language, resolvedTheme, theme, themeLocked, hideReasoning],
+    [language, resolvedTheme, theme, themeLocked, hideReasoning, notifyOnComplete, notificationPermission],
   );
 
   return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
