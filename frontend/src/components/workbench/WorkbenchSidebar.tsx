@@ -83,6 +83,17 @@ export function WorkbenchSidebar({
 }: WorkbenchSidebarProps) {
   const { language, t } = useAppPreferences();
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const preferenceKey = `aethercore-capabilities:${isEmbedMode ? "embed" : "user"}`;
+  const [disabledSkills, setDisabledSkills] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(preferenceKey) || "[]"); } catch { return []; }
+  });
+  const toggleSkill = (name: string) => {
+    setDisabledSkills((current) => {
+      const next = current.includes(name) ? current.filter((item) => item !== name) : [...current, name];
+      localStorage.setItem(preferenceKey, JSON.stringify(next));
+      return next;
+    });
+  };
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -132,7 +143,7 @@ export function WorkbenchSidebar({
           <div className="segment-control">
             <button className={`segment-btn ${sidebarView === "sessions" ? "active" : ""}`} onClick={() => onSidebarViewChange("sessions")}>{t("workbench.sidebar.sessions")}</button>
             <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => onSidebarViewChange("files")}>{t("workbench.sidebar.files")}</button>
-            <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => onSidebarViewChange("skills")}>{t("workbench.sidebar.skills")}</button>
+            <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => onSidebarViewChange("skills")}>能力</button>
           </div>
 
           <div className="sidebar-content">
@@ -192,13 +203,13 @@ export function WorkbenchSidebar({
             ) : (
               <div className="tab-pane">
                 <div className="pane-header">
-                  <h3>{t("workbench.sidebar.skillPackages")}</h3>
+                  <h3>能力</h3>
                   <label className="action-button small">
                     <span>{t("workbench.sidebar.upload")}</span>
                     <input type="file" accept=".zip,.md" onChange={(e) => { onUploadSkill(e.target.files?.[0]); e.currentTarget.value = ""; }} />
                   </label>
                 </div>
-                <div className="empty-state">{t("workbench.sidebar.skillHint")}</div>
+                <div className="empty-state">默认开启平台、用户和当前会话可用能力，可在此关闭。</div>
 
                 <h3 className="sub-title">{t("workbench.sidebar.loadedSkills")} ({skills.length})</h3>
                 <div className="item-list">
@@ -208,6 +219,7 @@ export function WorkbenchSidebar({
                       <div className="flex-row">
                         <strong>{item.name}</strong>
                         <span className="badge">{item.source}</span>
+                        <input type="checkbox" checked={!disabledSkills.includes(item.name)} onChange={() => toggleSkill(item.name)} aria-label={`启用 ${item.name}`} />
                       </div>
                       <p className="desc">{item.description}</p>
                     </article>

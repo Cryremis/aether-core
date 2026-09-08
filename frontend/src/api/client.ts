@@ -910,6 +910,46 @@ export async function deleteUserLlmConfig() {
   return response.json();
 }
 
+export type McpCapability = {
+  id: string;
+  name: string;
+  description: string;
+  transport: "stdio" | "streamable_http";
+  command?: string[];
+  args?: string[];
+  url?: string | null;
+  enabled: boolean;
+  status: string;
+  scope: "user" | "platform" | "session";
+};
+
+export async function listCapabilities(sessionId?: string) {
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+  const response = await apiFetch(`/capabilities${query}`);
+  if (!response.ok) throw new Error(await readErrorMessage(response, `获取能力列表失败: ${response.status}`));
+  return response.json() as Promise<{ data: { skills: unknown[]; mcp: McpCapability[]; session_skills: unknown[]; preference_namespace: string } }>;
+}
+
+export async function uploadUserSkill(file: File) {
+  const formData = new FormData();
+  formData.append("skill_file", file);
+  const response = await apiFetch("/capabilities/skills", { method: "POST", body: formData });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `保存用户技能失败: ${response.status}`));
+  return response.json();
+}
+
+export async function deleteUserSkill(name: string) {
+  const response = await apiFetch(`/capabilities/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `删除用户技能失败: ${response.status}`));
+  return response.json();
+}
+
+export async function saveUserMcp(payload: Omit<McpCapability, "id" | "status" | "scope" | "enabled"> & { enabled?: boolean }) {
+  const response = await apiFetch("/capabilities/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `保存 MCP 配置失败: ${response.status}`));
+  return response.json();
+}
+
 export async function getPlatformLlmConfig(platformId: number) {
   const response = await apiFetch(`/llm/platform/${platformId}`);
   if (!response.ok) {

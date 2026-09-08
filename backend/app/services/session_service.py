@@ -83,6 +83,9 @@ class SessionService:
     def clone_host_state(self, source: AgentSession, target: AgentSession) -> None:
         """Clone a coherent host binding, including dynamic tool provenance and policy."""
         target.host_name = source.host_name
+        target.owner_user_id = source.owner_user_id
+        target.platform_id = source.platform_id
+        target.external_user_id = source.external_user_id
         target.host_context = copy.deepcopy(source.host_context)
         target.host_tools = copy.deepcopy(source.host_tools)
         target.host_tools_revision = source.host_tools_revision
@@ -133,6 +136,9 @@ class SessionService:
         return AgentSession(
             session_id=session_id,
             conversation_id=payload.get("conversation_id"),
+            owner_user_id=payload.get("owner_user_id"),
+            platform_id=payload.get("platform_id"),
+            external_user_id=payload.get("external_user_id"),
             host_name=payload.get("host_name", ""),
             baseline_root=payload.get("baseline_root", ""),
             messages=payload.get("messages", []),
@@ -178,6 +184,9 @@ class SessionService:
         payload = {
             "session_id": session.session_id,
             "conversation_id": session.conversation_id,
+            "owner_user_id": session.owner_user_id,
+            "platform_id": session.platform_id,
+            "external_user_id": session.external_user_id,
             "host_name": session.host_name,
             "baseline_root": session.baseline_root,
             "messages": session.messages,

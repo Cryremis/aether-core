@@ -160,6 +160,15 @@ class SkillService:
         self._refresh_built_in_skills()
         self._refresh_platform_skills(session)
         skills = [*self._built_in_skills, *session.host_skills, *session.platform_skills]
+        try:
+            from app.services.capability_service import capability_service
+            skills.extend(capability_service.list_user_skills(
+                user_id=getattr(session, "owner_user_id", None),
+                platform_id=getattr(session, "platform_id", None),
+                external_user_id=getattr(session, "external_user_id", None),
+            ))
+        except Exception:
+            pass
         platform_skill_names = {self._slugify(s.get("name", "")) for s in session.platform_skills}
         if session.workspace is not None:
             workspace_skills = self._load_skills_from_disk(session.workspace.skills_dir, source="upload")

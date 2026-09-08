@@ -20,6 +20,8 @@ class ConversationService:
                 raise PermissionError("目标会话不存在或不属于当前用户")
             session = session_service.get_or_create(session_id)
             session.conversation_id = conversation["conversation_id"]
+            session.owner_user_id = user.user_id
+            session.platform_id = conversation.get("platform_id")
             return session
 
         session = session_service.get_or_create()
@@ -35,6 +37,8 @@ class ConversationService:
             metadata={"owner_name": user.full_name},
         )
         session.conversation_id = conversation["conversation_id"]
+        session.platform_id = platform["platform_id"]
+        session.owner_user_id = user.user_id
         session.host_name = "AetherCore"
         platform_baseline_service.materialize_to_session("standalone", session)
         session_service.persist(session)
@@ -84,6 +88,8 @@ class ConversationService:
             )
 
         session.conversation_id = conversation["conversation_id"]
+        session.platform_id = platform["platform_id"]
+        session.external_user_id = external_user_id
         session_service.persist(session)
         token, _ = token_service.create_embed_token(
             platform_id=platform["platform_id"],

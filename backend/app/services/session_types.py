@@ -44,6 +44,9 @@ class AgentSession:
 
     session_id: str
     conversation_id: str | None = None
+    owner_user_id: int | None = None
+    platform_id: int | None = None
+    external_user_id: str | None = None
     host_name: str = ""
     baseline_root: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
