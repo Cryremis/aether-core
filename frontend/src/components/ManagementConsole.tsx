@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import type {
   AuditConversationDetail,
   AuditConversationSummary,
+  AuditPlatformSeries,
   AuditTrendPoint,
   CurrentUserProfile,
   PlatformAuditOverviewItem,
@@ -34,7 +35,7 @@ import {
 } from "../api/client";
 import { AdminPanel } from "./AdminPanel";
 import { ChatTimeline } from "./workbench/ChatTimeline";
-import { TrendChart, type TrendPoint, type TrendSeries } from "./admin/TrendChart";
+import { TrendChart, PlatformStackedChart, type TrendPoint, type TrendSeries } from "./admin/TrendChart";
 import type { ChatMessage, AssistantBlock } from "../pages/workbench/types";
 
 type ManagementConsoleProps = {
@@ -268,9 +269,13 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
   const [runtimes, setRuntimes] = useState<SessionRuntimeSummary[]>([]);
   const [systemAuditOverview, setSystemAuditOverview] = useState<SystemAuditOverview | null>(null);
   const [auditTrendPoints, setAuditTrendPoints] = useState<AuditTrendPoint[]>([]);
-  const [auditTrendRange, setAuditTrendRange] = useState<7 | 30 | 90>(30);
+  const [auditTrendRange, setAuditTrendRange] = useState<number>(30);
+  const [auditTrendRangeInput, setAuditTrendRangeInput] = useState<string>("30");
   const [auditTrendMetric, setAuditTrendMetric] = useState<"new" | "total">("new");
   const [auditTrendPlatformId, setAuditTrendPlatformId] = useState<number | null>(null);
+  const [auditTrendView, setAuditTrendView] = useState<"overview" | "platforms">("overview");
+  const [auditPlatformMetric, setAuditPlatformMetric] = useState<"users" | "conversations" | "messages">("messages");
+  const [auditPlatformSeries, setAuditPlatformSeries] = useState<AuditPlatformSeries[]>([]);
   const [auditConversations, setAuditConversations] = useState<AuditConversationSummary[]>([]);
   const [selectedAuditSessionId, setSelectedAuditSessionId] = useState<string>("");
   const [selectedAuditDetail, setSelectedAuditDetail] = useState<AuditConversationDetail | null>(null);
@@ -350,13 +355,25 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
     }
   };
 
-  const loadAuditTrends = async (days: number, platformId: number | null) => {
+  const loadAuditTrends = async (days: number, platformId: number | null, needBreakdown: boolean) => {
     try {
-      const result = await getAuditTrends(days, platformId);
-      const data = (result.data ?? {}) as { points?: AuditTrendPoint[] };
+      const result = await getAuditTrends(days, platformId, needBreakdown);
+      const data = (result.data ?? {}) as { points?: AuditTrendPoint[]; platform_series?: AuditPlatformSeries[] };
       setAuditTrendPoints(data.points ?? []);
+      setAuditPlatformSeries(data.platform_series ?? []);
     } catch {
       setAuditTrendPoints([]);
+      setAuditPlatformSeries([]);
+    }
+  };
+
+  // 自由天数输入:失焦/回车时应用,非法值回退当前生效值
+  const applyTrendRangeInput = () => {
+    const parsed = Number(auditTrendRangeInput);
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 365) {
+      setAuditTrendRange(Math.round(parsed));
+    } else {
+      setAuditTrendRangeInput(String(auditTrendRange));
     }
   };
 
@@ -452,8 +469,14 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
     void loadSystemAuditOverview().catch((err) => {
       setError(err instanceof Error ? err.message : "加载系统审计概览失败");
     });
-    void loadAuditTrends(auditTrendRange, auditTrendPlatformId);
-  }, [activeTab, canManageSystem, auditTrendRange, auditTrendPlatformId]);
+  }, [activeTab, canManageSystem]);
+
+  useEffect(() => {
+    if (!canManageSystem || activeTab !== "systemAudit") {
+      return;
+    }
+    void loadAuditTrends(auditTrendRange, auditTrendPlatformId, auditTrendView === "platforms");
+  }, [activeTab, canManageSystem, auditTrendRange, auditTrendPlatformId, auditTrendView]);
 
   const handleApprove = async (requestId: number) => {
     const reviewComment = window.prompt("审批备注（可选）", "") ?? "";
@@ -843,53 +866,91 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                 <div>
                   <h4>增长趋势</h4>
                   <p>
-                    {auditTrendPlatformId == null
-                      ? "全部来源(独立工作台 + 宿主平台)"
-                      : `仅 ${platforms.find((p) => p.platform_id === auditTrendPlatformId)?.display_name ?? "所选平台"},用户按首次会话日归因`}
-                    {" · "}
-                    {auditTrendMetric === "new" ? "每日新增,消息按会话创建日归因" : "累计总量"}
+                    {auditTrendView === "platforms"
+                      ? "平台对比堆叠视图:分层色块为各平台占比,堆叠高度为总量趋势"
+                      : auditTrendPlatformId == null
+                        ? "全部来源(独立工作台 + 宿主平台)"
+                        : `仅 ${platforms.find((p) => p.platform_id === auditTrendPlatformId)?.display_name ?? "所选平台"},用户按首次会话日归因`}
+                    {auditTrendView === "overview" ? ` · ${auditTrendMetric === "new" ? "每日新增,消息按会话创建日归因" : "累计总量"}` : ""}
                   </p>
                 </div>
                 <div className="management-console__trend-controls">
-                  <select
-                    className="trend-platform-select"
-                    value={auditTrendPlatformId ?? ""}
-                    onChange={(e) => setAuditTrendPlatformId(e.target.value === "" ? null : Number(e.target.value))}
-                    aria-label="选择统计范围"
-                  >
-                    <option value="">全部来源</option>
-                    {platforms.map((p) => (
-                      <option key={p.platform_id} value={p.platform_id}>{p.display_name}</option>
-                    ))}
-                  </select>
+                  <div className="segmented-control">
+                    <button type="button" className={`segment ${auditTrendView === "overview" ? "active" : ""}`} onClick={() => setAuditTrendView("overview")}>总览</button>
+                    <button type="button" className={`segment ${auditTrendView === "platforms" ? "active" : ""}`} onClick={() => setAuditTrendView("platforms")}>平台对比</button>
+                  </div>
+                  {auditTrendView === "overview" ? (
+                    <select
+                      className="trend-platform-select"
+                      value={auditTrendPlatformId ?? ""}
+                      onChange={(e) => setAuditTrendPlatformId(e.target.value === "" ? null : Number(e.target.value))}
+                      aria-label="选择统计范围"
+                    >
+                      <option value="">全部来源</option>
+                      {platforms.map((p) => (
+                        <option key={p.platform_id} value={p.platform_id}>{p.display_name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select
+                      className="trend-platform-select"
+                      value={auditPlatformMetric}
+                      onChange={(e) => setAuditPlatformMetric(e.target.value as "users" | "conversations" | "messages")}
+                      aria-label="选择对比指标"
+                    >
+                      <option value="messages">按消息</option>
+                      <option value="conversations">按会话</option>
+                      <option value="users">按用户</option>
+                    </select>
+                  )}
                   <div className="segmented-control">
                     <button type="button" className={`segment ${auditTrendMetric === "new" ? "active" : ""}`} onClick={() => setAuditTrendMetric("new")}>日增</button>
                     <button type="button" className={`segment ${auditTrendMetric === "total" ? "active" : ""}`} onClick={() => setAuditTrendMetric("total")}>累计</button>
                   </div>
+                  <span className="trend-days-input">
+                    <input
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={auditTrendRangeInput}
+                      onChange={(e) => setAuditTrendRangeInput(e.target.value)}
+                      onBlur={() => applyTrendRangeInput()}
+                      onKeyDown={(e) => { if (e.key === "Enter") applyTrendRangeInput(); }}
+                      aria-label="统计天数"
+                    />
+                    <span>天</span>
+                  </span>
                   <div className="segmented-control">
-                    {([7, 30, 90] as const).map((d) => (
-                      <button key={d} type="button" className={`segment ${auditTrendRange === d ? "active" : ""}`} onClick={() => setAuditTrendRange(d)}>{d} 天</button>
+                    {[7, 30, 90].map((d) => (
+                      <button key={d} type="button" className={`segment ${auditTrendRange === d ? "active" : ""}`} onClick={() => { setAuditTrendRange(d); setAuditTrendRangeInput(String(d)); }}>{d}天</button>
                     ))}
                   </div>
                 </div>
               </div>
-              <TrendChart
-                points={auditTrendPoints as unknown as TrendPoint[]}
-                series={
-                  auditTrendMetric === "new"
-                    ? ([
-                        { key: "new_users", label: "日增用户", color: "#2563eb" },
-                        { key: "new_conversations", label: "日增会话", color: "#059669" },
-                        { key: "new_messages", label: "日增消息", color: "#d97706" },
-                      ] as TrendSeries[])
-                    : ([
-                        { key: "total_users", label: "总用户", color: "#2563eb" },
-                        { key: "total_conversations", label: "总会话", color: "#059669" },
-                        { key: "total_messages", label: "总消息", color: "#d97706" },
-                      ] as TrendSeries[])
-                }
-                formatValue={(v) => (v >= 10000 ? `${(v / 10000).toFixed(1)}w` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v)))}
-              />
+              {auditTrendView === "overview" ? (
+                <TrendChart
+                  points={auditTrendPoints as unknown as TrendPoint[]}
+                  series={
+                    auditTrendMetric === "new"
+                      ? ([
+                          { key: "new_users", label: "日增用户", color: "#2563eb" },
+                          { key: "new_conversations", label: "日增会话", color: "#059669" },
+                          { key: "new_messages", label: "日增消息", color: "#d97706", axis: "right" },
+                        ] as TrendSeries[])
+                      : ([
+                          { key: "total_users", label: "总用户", color: "#2563eb" },
+                          { key: "total_conversations", label: "总会话", color: "#059669" },
+                          { key: "total_messages", label: "总消息", color: "#d97706", axis: "right" },
+                        ] as TrendSeries[])
+                  }
+                />
+              ) : (
+                <PlatformStackedChart
+                  series={auditPlatformSeries}
+                  metric={auditPlatformMetric}
+                  cumulative={auditTrendMetric === "total"}
+                />
+              )}
             </div>
 
             <div className="management-console__section-head management-console__section-head--subtle">

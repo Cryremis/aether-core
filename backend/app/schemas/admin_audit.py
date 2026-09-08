@@ -44,5 +44,14 @@ class AuditTrendPoint(BaseModel):
     total_messages: int = 0
 
 
+class AuditPlatformSeries(BaseModel):
+    """按平台分解的时序(平台对比堆叠视图)。用户为当日活跃去重计数。"""
+
+    platform_id: int
+    display_name: str
+    points: list[AuditTrendPoint] = Field(default_factory=list)
+
+
 class AuditTrends(BaseModel):
     points: list[AuditTrendPoint] = Field(default_factory=list)
+    platform_series: list[AuditPlatformSeries] = Field(default_factory=list)

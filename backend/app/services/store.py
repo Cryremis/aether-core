@@ -53,6 +53,16 @@ class StoreService:
                 conn.close()
 
     def initialize(self) -> None:
+        # WAL 模式:读写不互斥。默认 journal 模式下 agent 持续写库会阻塞所有读请求
+        # (含 admin 审计查询),是生产环境接口偶发卡死的根因。WAL 为 DB 级持久属性。
+        with self._lock:
+            wal_conn = sqlite3.connect(self._db_path)
+            try:
+                wal_conn.execute("PRAGMA journal_mode=WAL")
+                wal_conn.execute("PRAGMA synchronous=NORMAL")
+            finally:
+                wal_conn.close()
+
         with self._connect() as conn:
             conn.executescript(
                 """
@@ -192,6 +202,16 @@ class StoreService:
 
                 CREATE INDEX IF NOT EXISTS idx_conversations_platform_user
                 ON conversations(platform_id, external_user_id, updated_at DESC);
+
+                -- 审计趋势按天聚合与平台过滤的支撑索引
+                CREATE INDEX IF NOT EXISTS idx_conversations_created_at
+                ON conversations(created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_conversations_platform_created
+                ON conversations(platform_id, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_users_created_at
+                ON users(created_at);
 
                 CREATE TABLE IF NOT EXISTS session_runtimes (
                     session_id TEXT PRIMARY KEY,
@@ -1444,7 +1464,7 @@ class StoreService:
             "platforms": platforms,
         }
 
-    def get_audit_trends(self, days: int = 30, platform_id: int | None = None) -> dict[str, Any]:
+    def get_audit_trends(self, days: int = 30, platform_id: int | None = None, breakdown: bool = False) -> dict[str, Any]:
         """按天聚合审计趋势:日增用户/会话/消息 + 累计曲线。
 
         platform_id 为空时统计全部来源(独立工作台 + 宿主平台):
@@ -1548,7 +1568,66 @@ class StoreService:
                     "total_messages": total_messages,
                 }
             )
-        return {"points": points}
+
+        result: dict[str, Any] = {"points": points}
+
+        # 平台对比堆叠视图: 按平台分解的日增/累计时序(仅全部来源时有意义)
+        if breakdown and platform_id is None:
+            result["platform_series"] = self._audit_platform_series(conn_days=days, start_iso=start_iso, start_date=start_date)
+        return result
+
+    def _audit_platform_series(self, *, conn_days: int, start_iso: str, start_date) -> list[dict[str, Any]]:
+        """按平台 × 天聚合会话/消息/用户(当日活跃去重),并逐日累计算累计值。"""
+        with self._connect() as conn:
+            platforms = {
+                int(row["platform_id"]): str(row["display_name"])
+                for row in conn.execute("SELECT platform_id, display_name FROM platforms")
+            }
+            daily: dict[int, dict[str, dict[str, int]]] = {pid: {} for pid in platforms}
+            for row in conn.execute(
+                "SELECT platform_id, substr(created_at, 1, 10) AS day, COUNT(*), "
+                "COALESCE(SUM(message_count), 0), "
+                "COUNT(DISTINCT COALESCE(external_user_id, 'internal:' || owner_user_id)) "
+                "FROM conversations WHERE created_at >= ? AND platform_id IS NOT NULL "
+                "GROUP BY platform_id, day ORDER BY day",
+                (start_iso,),
+            ):
+                pid = int(row[0])
+                day = str(row[1])
+                daily.setdefault(pid, {})[day] = {
+                    "conversations": int(row[2]),
+                    "messages": int(row[3]),
+                    "users": int(row[4]),
+                }
+
+        series: list[dict[str, Any]] = []
+        for pid, name in platforms.items():
+            per_day = daily.get(pid, {})
+            platform_points: list[dict[str, Any]] = []
+            cum_conversations = cum_messages = cum_users = 0
+            for offset in range(conn_days):
+                day = (start_date + timedelta(days=offset)).isoformat()
+                entry = per_day.get(day, {"conversations": 0, "messages": 0, "users": 0})
+                cum_conversations += entry["conversations"]
+                cum_messages += entry["messages"]
+                cum_users += entry["users"]
+                platform_points.append(
+                    {
+                        "date": day,
+                        "new_conversations": entry["conversations"],
+                        "new_messages": entry["messages"],
+                        "new_users": entry["users"],
+                        "total_conversations": cum_conversations,
+                        "total_messages": cum_messages,
+                        "total_users": cum_users,
+                    }
+                )
+            if cum_conversations > 0 or cum_messages > 0 or cum_users > 0:
+                series.append(
+                    {"platform_id": pid, "display_name": name, "points": platform_points}
+                )
+        series.sort(key=lambda item: -item["points"][-1]["total_messages"])
+        return series
 
     def upsert_session_runtime(
         self,

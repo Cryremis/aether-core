@@ -530,8 +530,15 @@ export type AuditTrendPoint = {
   total_messages: number;
 };
 
+export type AuditPlatformSeries = {
+  platform_id: number;
+  display_name: string;
+  points: AuditTrendPoint[];
+};
+
 export type AuditTrends = {
   points: AuditTrendPoint[];
+  platform_series?: AuditPlatformSeries[];
 };
 
 export type WorkItemStatus = "pending" | "in_progress" | "completed" | "blocked" | "cancelled";
@@ -1382,10 +1389,13 @@ export async function getSystemAuditOverview() {
   return response.json();
 }
 
-export async function getAuditTrends(days: number, platformId?: number | null) {
+export async function getAuditTrends(days: number, platformId?: number | null, breakdown?: boolean) {
   const params = new URLSearchParams({ days: String(days) });
   if (platformId != null) {
     params.set("platform_id", String(platformId));
+  }
+  if (breakdown) {
+    params.set("breakdown", "true");
   }
   const response = await apiFetch(`/admin/audit/trends?${params.toString()}`);
   if (!response.ok) {

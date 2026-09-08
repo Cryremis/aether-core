@@ -2338,6 +2338,83 @@
   border-color: var(--accent);
 }
 
+.trend-days-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-1);
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.trend-days-input input {
+  width: 52px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-days-input input:focus {
+  outline: none;
+}
+
+.trend-days-input input::-webkit-outer-spin-button,
+.trend-days-input input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.trend-days-input input {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.distribution-chart__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.distribution-chart__total {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-chart__legend-item.is-off {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+.trend-chart__legend-item {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trend-chart__legend-item:hover {
+  color: var(--text-primary);
+}
+
 .runtime-card--closed {
   opacity: 0.9;
 }

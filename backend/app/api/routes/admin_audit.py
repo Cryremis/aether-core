@@ -24,8 +24,9 @@ def get_system_audit_overview(_auth: AuthContext = Depends(require_system_admin)
 def get_audit_trends(
     days: int = Query(default=30, ge=1, le=365),
     platform_id: int | None = Query(default=None),
+    breakdown: bool = Query(default=False),
     _auth: AuthContext = Depends(require_system_admin),
 ) -> ApiResponse:
-    trends = store_service.get_audit_trends(days, platform_id=platform_id)
+    trends = store_service.get_audit_trends(days, platform_id=platform_id, breakdown=breakdown)
     payload = AuditTrends(**trends)
     return ApiResponse(message="审计趋势", data=payload.model_dump(mode="json"))
