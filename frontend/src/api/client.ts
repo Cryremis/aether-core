@@ -921,6 +921,10 @@ export type McpCapability = {
   enabled: boolean;
   status: string;
   scope: "user" | "platform" | "session";
+  auth?: "none" | "oauth";
+  oauth_scopes?: string;
+  oauth_connected?: boolean;
+  has_secrets?: boolean;
 };
 
 export async function listCapabilities(sessionId?: string) {
@@ -928,6 +932,12 @@ export async function listCapabilities(sessionId?: string) {
   const response = await apiFetch(`/capabilities${query}`);
   if (!response.ok) throw new Error(await readErrorMessage(response, `获取能力列表失败: ${response.status}`));
   return response.json() as Promise<{ data: { skills: unknown[]; mcp: McpCapability[]; session_skills: unknown[]; preference_namespace: string } }>;
+}
+
+export async function listPlatformCapabilities(platformId: number) {
+  const response = await apiFetch(`/capabilities/platform/${platformId}`);
+  if (!response.ok) throw new Error(await readErrorMessage(response, `获取平台能力失败: ${response.status}`));
+  return response.json() as Promise<{ data: { skills: unknown[]; mcp: McpCapability[] } }>;
 }
 
 export async function uploadUserSkill(file: File) {
@@ -944,9 +954,74 @@ export async function deleteUserSkill(name: string) {
   return response.json();
 }
 
+export async function deleteSessionSkill(sessionId: string, name: string) {
+  const response = await apiFetch(`/agent/skills/${encodeURIComponent(name)}?session_id=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `删除会话技能失败: ${response.status}`));
+  return response.json();
+}
+
+export async function deleteMcp(name: string, scope: "user" | "session" | "platform", options: { sessionId?: string; platformId?: number } = {}) {
+  const query = new URLSearchParams({ scope }); if (options.sessionId) query.set("session_id", options.sessionId); if (options.platformId) query.set("platform_id", String(options.platformId));
+  const response = await apiFetch(`/capabilities/mcp/${encodeURIComponent(name)}?${query}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `删除 MCP 失败: ${response.status}`));
+  return response.json();
+}
+
 export async function saveUserMcp(payload: Omit<McpCapability, "id" | "status" | "scope" | "enabled"> & { enabled?: boolean }) {
   const response = await apiFetch("/capabilities/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (!response.ok) throw new Error(await readErrorMessage(response, `保存 MCP 配置失败: ${response.status}`));
+  return response.json();
+}
+
+export async function saveMcp(payload: Record<string, unknown>, scope: "user" | "session" | "platform", options: { sessionId?: string; platformId?: number } = {}) {
+  const query = new URLSearchParams({ scope });
+  if (options.sessionId) query.set("session_id", options.sessionId);
+  if (options.platformId) query.set("platform_id", String(options.platformId));
+  const response = await apiFetch(`/capabilities/mcp?${query}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `保存 MCP 配置失败: ${response.status}`));
+  return response.json();
+}
+
+export async function connectMcp(name: string, sessionId: string) {
+  const response = await apiFetch(`/capabilities/mcp/${encodeURIComponent(name)}/connect?session_id=${encodeURIComponent(sessionId)}`, { method: "POST" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `连接 MCP 失败: ${response.status}`));
+  return response.json();
+}
+
+export async function startMcpOAuth(name: string, sessionId: string) {
+  const response = await apiFetch(`/capabilities/mcp/${encodeURIComponent(name)}/oauth/start?session_id=${encodeURIComponent(sessionId)}`, { method: "POST" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `发起 OAuth 失败: ${response.status}`));
+  return response.json() as Promise<{ data: { authorization_url: string; state: string } }>;
+}
+
+export async function revokeMcpOAuth(name: string, sessionId: string) {
+  const response = await apiFetch(`/capabilities/mcp/${encodeURIComponent(name)}/oauth?session_id=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `删除 OAuth 凭据失败: ${response.status}`));
+  return response.json();
+}
+
+export type ExtensionEntry = { entry_id: string; kind: "skill" | "mcp"; name: string; description: string; submitter_user_id: number; submitter_name: string; current_version: string; usage_count: number; updated_at: string };
+
+export async function listExtensions() {
+  const response = await apiFetch("/extensions");
+  if (!response.ok) throw new Error(await readErrorMessage(response, `获取拓展商店失败: ${response.status}`));
+  return response.json() as Promise<{ data: ExtensionEntry[] }>;
+}
+
+export async function installExtension(entryId: string, scope: "user" | "session" | "platform", options: { sessionId?: string; platformId?: number } = {}) {
+  const query = new URLSearchParams({ scope });
+  if (options.sessionId) query.set("session_id", options.sessionId);
+  if (options.platformId) query.set("platform_id", String(options.platformId));
+  const response = await apiFetch(`/extensions/${encodeURIComponent(entryId)}/install?${query}`, { method: "POST" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `安装拓展失败: ${response.status}`));
+  return response.json();
+}
+
+export async function publishExtension(payload: { kind: "skill" | "mcp"; name: string; description: string; version: string; artifact: File }) {
+  const form = new FormData();
+  form.append("kind", payload.kind); form.append("name", payload.name); form.append("description", payload.description); form.append("version", payload.version); form.append("artifact", payload.artifact);
+  const response = await apiFetch("/extensions", { method: "POST", body: form });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `发布拓展失败: ${response.status}`));
   return response.json();
 }
 
@@ -1610,7 +1685,7 @@ export async function streamChat(
   allowNetwork: boolean,
   onEvent: (event: Record<string, unknown>) => void,
   abortSignal?: AbortSignal,
-  options?: { replaceLastUserMessage?: boolean; clientMessageId?: string; reasoningEffort?: string | null },
+  options?: { replaceLastUserMessage?: boolean; clientMessageId?: string; reasoningEffort?: string | null; disabledCapabilityIds?: string[] },
 ) {
   return streamSse(
     "/agent/chat",
@@ -1621,6 +1696,7 @@ export async function streamChat(
       replace_last_user_message: Boolean(options?.replaceLastUserMessage),
       client_message_id: options?.clientMessageId ?? null,
       reasoning_effort: options?.reasoningEffort ?? null,
+      disabled_capability_ids: options?.disabledCapabilityIds ?? [],
     },
     onEvent,
     abortSignal,

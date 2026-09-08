@@ -2,6 +2,7 @@ import type { RefObject } from "react";
 
 import { AdminIcons as Icons } from "./AdminIcons";
 import type { PlatformBaselineEntryItem, PlatformItem } from "./types";
+import { PlatformMcpManager } from "./PlatformMcpManager";
 
 type BaselineManagerProps = {
   activePlatform: PlatformItem;
@@ -40,6 +41,7 @@ export function BaselineManager(props: BaselineManagerProps) {
         </div>
         {props.baselineError ? <div className="baseline-error-toast">{props.baselineError}</div> : null}
       </div>
+      <PlatformMcpManager platformId={props.activePlatform.platform_id} />
 
       <div className="file-manager-container" ref={props.fileManagerRef}>
         <div className="fm-toolbar">

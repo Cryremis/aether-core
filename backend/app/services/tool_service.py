@@ -656,12 +656,29 @@ class ToolService:
         else:
             # Keeps test and extension monkeypatches that implement the legacy signature compatible.
             schemas = self.list_tool_schemas(session)
+        effective_mcp_ids: set[str] = set()
+        try:
+            from app.services.capability_service import capability_service
+            effective_mcp_ids = {str(item["id"]) for item in capability_service.list_effective_mcp(session)}
+        except Exception:
+            pass
+        descriptors_by_name = {
+            name: copy.deepcopy(item)
+            for name, item in host_snapshot.descriptors_by_name.items()
+            if item.get("kind") != "mcp" or str(item.get("mcp_config_id")) in effective_mcp_ids
+        }
+        allowed_names = set(descriptors_by_name)
+        schemas = tuple(
+            schema for schema in schemas
+            if schema.get("function", {}).get("name") not in host_snapshot.descriptors_by_name
+            or schema.get("function", {}).get("name") in allowed_names
+        )
         return ToolCatalogSnapshot(
             revision=host_snapshot.revision,
             fingerprint=host_snapshot.fingerprint,
             schemas=tuple(copy.deepcopy(schemas)),
             host_descriptors_by_name=MappingProxyType(
-                {name: copy.deepcopy(item) for name, item in host_snapshot.descriptors_by_name.items()}
+                descriptors_by_name
             ),
         )
 
@@ -720,6 +737,10 @@ class ToolService:
             else tool_catalog_service.snapshot(session).descriptors_by_name.get(tool_name)
         )
         if descriptor:
+            if descriptor.get("kind") == "mcp":
+                from app.services.mcp_runtime_service import mcp_runtime_service
+                config = mcp_runtime_service.resolve_config(session, str(descriptor["mcp_config_id"]))
+                return await mcp_runtime_service.invoke(session, config, str(descriptor["mcp_tool"]), arguments)
             return await self._invoke_host_tool(session, descriptor, arguments)
 
         raise RuntimeError(f"未知工具: {tool_name}")

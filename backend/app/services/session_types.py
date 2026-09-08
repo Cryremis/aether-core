@@ -63,12 +63,14 @@ class AgentSession:
     host_skills: list[dict[str, Any]] = field(default_factory=list)
     host_system_prompts: list[dict[str, Any]] = field(default_factory=list)
     uploaded_skills: list[dict[str, Any]] = field(default_factory=list)
+    session_mcp: list[dict[str, Any]] = field(default_factory=list)
     host_apis: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     uploads: list[dict[str, Any]] = field(default_factory=list)
     context_state: dict[str, Any] = field(default_factory=dict)
     message_schema_version: int = CONTEXT_MESSAGE_SCHEMA_VERSION
     allow_network: bool = True
+    disabled_capability_ids: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     last_access: float = field(default_factory=time.time)
     workspace: SandboxWorkspace | None = None

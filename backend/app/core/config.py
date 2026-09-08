@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     auth_system_admin_password: str = "admin123456"
     auth_oauth_providers: str = ""
     auth_oauth_config_json: str = ""
+    capability_secret_encryption_key: str = ""
 
     agent_max_turns: int = 0
     agent_max_runtime_seconds: int = 0

@@ -5,6 +5,7 @@ import type { CurrentUserProfile } from "../../api/client";
 import { useAppPreferences } from "../../i18n";
 import type { FileItem, SidebarView, SkillItem, WorkbenchConversation } from "../../pages/workbench/types";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
+import { CapabilityPanel } from "./CapabilityPanel";
 
 type WorkbenchSidebarProps = {
   conversations: WorkbenchConversation[];
@@ -26,6 +27,7 @@ type WorkbenchSidebarProps = {
   onDeleteSession?: (sessionId: string) => void;
   onUploadFile: (file: File | undefined) => void;
   onUploadSkill: (file: File | undefined) => void;
+  onRefreshCapabilities: () => void;
   onOpenPersonalSettings: () => void;
   onOpenLlmDialog: () => void;
   adminEntryHref?: string;
@@ -73,6 +75,7 @@ export function WorkbenchSidebar({
   onDeleteSession,
   onUploadFile,
   onUploadSkill,
+  onRefreshCapabilities,
   onOpenPersonalSettings,
   onOpenLlmDialog,
   adminEntryHref,
@@ -83,17 +86,6 @@ export function WorkbenchSidebar({
 }: WorkbenchSidebarProps) {
   const { language, t } = useAppPreferences();
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const preferenceKey = `aethercore-capabilities:${isEmbedMode ? "embed" : "user"}`;
-  const [disabledSkills, setDisabledSkills] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem(preferenceKey) || "[]"); } catch { return []; }
-  });
-  const toggleSkill = (name: string) => {
-    setDisabledSkills((current) => {
-      const next = current.includes(name) ? current.filter((item) => item !== name) : [...current, name];
-      localStorage.setItem(preferenceKey, JSON.stringify(next));
-      return next;
-    });
-  };
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -201,31 +193,7 @@ export function WorkbenchSidebar({
                 </div>
               </div>
             ) : (
-              <div className="tab-pane">
-                <div className="pane-header">
-                  <h3>能力</h3>
-                  <label className="action-button small">
-                    <span>{t("workbench.sidebar.upload")}</span>
-                    <input type="file" accept=".zip,.md" onChange={(e) => { onUploadSkill(e.target.files?.[0]); e.currentTarget.value = ""; }} />
-                  </label>
-                </div>
-                <div className="empty-state">默认开启平台、用户和当前会话可用能力，可在此关闭。</div>
-
-                <h3 className="sub-title">{t("workbench.sidebar.loadedSkills")} ({skills.length})</h3>
-                <div className="item-list">
-                  {skills.length === 0 ? <div className="empty-state">{t("workbench.sidebar.noSkills")}</div> : null}
-                  {skills.map((item, index) => (
-                    <article key={`${item.name}-${index}`} className="resource-card block anim-enter" style={{ animationDelay: `${index * 0.05 + 0.1}s` }}>
-                      <div className="flex-row">
-                        <strong>{item.name}</strong>
-                        <span className="badge">{item.source}</span>
-                        <input type="checkbox" checked={!disabledSkills.includes(item.name)} onChange={() => toggleSkill(item.name)} aria-label={`启用 ${item.name}`} />
-                      </div>
-                      <p className="desc">{item.description}</p>
-                    </article>
-                  ))}
-                </div>
-              </div>
+              <div className="tab-pane"><CapabilityPanel sessionId={sessionId} skills={skills} isEmbedMode={isEmbedMode} onUploadSessionSkill={onUploadSkill} onRefresh={onRefreshCapabilities} /></div>
             )}
           </div>
 

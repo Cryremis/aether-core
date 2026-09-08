@@ -68,3 +68,11 @@ async def upload_skill(
         message="技能上传成功",
         data={"items": [item.model_dump(mode="json") for item in cards]},
     )
+
+
+@router.delete("/{skill_name}")
+def delete_skill(session_id: str, skill_name: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    session = _ensure_session_access(session_id, auth)
+    if not skill_service.delete_uploaded_skill(session, skill_name):
+        raise HTTPException(status_code=404, detail="会话技能不存在")
+    return ApiResponse(message="会话技能已删除", data={"name": skill_name})

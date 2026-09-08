@@ -15,6 +15,7 @@ class AgentChatRequest(BaseModel):
     replace_last_user_message: bool = False
     client_message_id: str | None = None
     reasoning_effort: str | None = None
+    disabled_capability_ids: list[str] = Field(default_factory=list)
 
 
 class ElicitationResponseItem(BaseModel):

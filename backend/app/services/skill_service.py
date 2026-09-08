@@ -119,6 +119,23 @@ class SkillService:
         session_service.replace_uploaded_skills(session, uploaded_skills)
         return [self._to_card(item) for item in uploaded_skills]
 
+    def delete_uploaded_skill(self, session: AgentSession, skill_name: str) -> bool:
+        if session.workspace is None:
+            return False
+        normalized = self._slugify(skill_name)
+        loaded_by_dir = {
+            Path(item["path"]).parent.resolve(): self._slugify(str(item.get("name") or ""))
+            for item in self._load_skills_from_disk(session.workspace.skills_dir, source="upload")
+        }
+        for directory in session.workspace.skills_dir.iterdir() if session.workspace.skills_dir.exists() else []:
+            if directory.is_dir() and (self._slugify(directory.name) == normalized or loaded_by_dir.get(directory.resolve()) == normalized):
+                import shutil
+                shutil.rmtree(directory)
+                uploaded = self._load_skills_from_disk(session.workspace.skills_dir, source="upload")
+                session_service.replace_uploaded_skills(session, uploaded)
+                return True
+        return False
+
     def invoke_skill(self, session: AgentSession, skill_name: str) -> dict[str, Any]:
         skill = self.resolve_skill(session, skill_name)
         if skill is None:
@@ -179,9 +196,12 @@ class SkillService:
         else:
             skills.extend(session.uploaded_skills)
         deduped: dict[str, dict[str, Any]] = {}
+        disabled = set(session.disabled_capability_ids)
         for item in skills:
             materialized = self._ensure_materialized(session, item)
             key = self._slugify(str(materialized.get("name", "")))
+            if key in disabled or f"skill:{key}" in disabled:
+                continue
             existing = deduped.get(key)
             if existing and existing.get("source") == "platform":
                 continue
@@ -322,6 +342,8 @@ class SkillService:
             members = [member for member in archive.infolist() if not member.is_dir()]
             if not members:
                 raise RuntimeError("技能压缩包中没有可提取文件。")
+            if len(members) > 1000 or sum(member.file_size for member in members) > 50 * 1024 * 1024:
+                raise RuntimeError("技能压缩包解压后不能超过 1000 个文件或 50 MiB。")
 
             for member in members:
                 member_path = Path(member.filename)

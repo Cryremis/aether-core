@@ -1,5 +1,7 @@
 # AetherCore
 
+Capability scopes, MCP configuration, and the extension store are documented in [docs/capabilities.md](docs/capabilities.md).
+
 [🌐 Live Demo](https://cryremis.github.io/aether-core) | [中文说明](./README.zh-CN.md)
 
 > Agent infrastructure for multi-product integration scenarios, so teams do not have to rebuild an Agent Runtime from scratch for every product.

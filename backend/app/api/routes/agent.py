@@ -58,6 +58,7 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
     if not request.session_id:
         raise HTTPException(status_code=400, detail="缺少 session_id")
     session = _ensure_session_access(request.session_id, auth)
+    session.disabled_capability_ids = list(dict.fromkeys(request.disabled_capability_ids))[:512]
     if request.allow_network is not None:
         session_service.set_allow_network(session, request.allow_network)
 

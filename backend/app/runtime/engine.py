@@ -334,6 +334,12 @@ class AgentEngine:
             )
 
         llm_runtime = llm_config_service.resolve_for_conversation(conversation)
+        try:
+            from app.services.mcp_runtime_service import mcp_runtime_service
+            await mcp_runtime_service.ensure_catalog(session)
+        except Exception:
+            # 单个可选 MCP 不应阻止 Agent 使用其余能力启动。
+            pass
         catalog_snapshot = tool_service.create_catalog_snapshot(session)
         turn_count = 0
         last_stop_reason: str | None = None

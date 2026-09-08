@@ -1641,6 +1641,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           ? pendingUserBubble.id
           : primaryClientMessageId,
         reasoningEffort: reasoningEffort || null,
+        disabledCapabilityIds: (() => { try { return JSON.parse(localStorage.getItem(localStorage.getItem("aethercore-capabilities:active") || "") || "[]"); } catch { return []; } })(),
       });
     } catch (chatError) {
       if (chatError instanceof Error && chatError.name === "AbortError") {
@@ -1778,7 +1779,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           allowNetwork,
           handleEvent,
           abortController.signal,
-          { replaceLastUserMessage: true, reasoningEffort: reasoningEffort || null },
+          { replaceLastUserMessage: true, reasoningEffort: reasoningEffort || null, disabledCapabilityIds: (() => { try { return JSON.parse(localStorage.getItem(localStorage.getItem("aethercore-capabilities:active") || "") || "[]"); } catch { return []; } })() },
         );
       } catch (chatError) {
         if (chatError instanceof Error && chatError.name === "AbortError") {
@@ -2047,6 +2048,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         onDeleteSession={onDeleteSession}
         onUploadFile={handleUpload}
         onUploadSkill={handleUploadSkill}
+        onRefreshCapabilities={() => void refreshResources(sessionId)}
         onOpenPersonalSettings={() => setShowPersonalSettingsDialog(true)}
         onOpenLlmDialog={() => void openLlmDialog()}
         adminEntryHref={adminEntryHref}

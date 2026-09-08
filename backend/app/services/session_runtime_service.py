@@ -268,6 +268,7 @@ class SessionRuntimeService:
                 "runtime": current,
                 "notice": None,
             }
+
         if current.get("status") == "terminating" and recreate_reason is None:
             return {
                 "runtime": current,
@@ -298,6 +299,12 @@ class SessionRuntimeService:
             "runtime": runtime,
             "notice": notice,
         }
+
+    async def ensure_runtime(self, workspace: SandboxWorkspace) -> dict[str, Any]:
+        """为需要持久双向进程的能力显式准备会话 runtime。"""
+        lock = self._locks[workspace.session_id]
+        async with lock:
+            return await self._ensure_runtime_locked(workspace)
 
     async def _create_runtime_locked(self, workspace: SandboxWorkspace, *, generation: int) -> dict[str, Any]:
         docker_binary = self._require_docker_binary()

@@ -241,6 +241,36 @@ class StoreService:
 
                 CREATE INDEX IF NOT EXISTS idx_session_runtimes_status
                 ON session_runtimes(status, last_used_at DESC);
+
+                CREATE TABLE IF NOT EXISTS extension_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    submitter_user_id INTEGER NOT NULL,
+                    visibility TEXT NOT NULL DEFAULT 'public',
+                    current_version TEXT NOT NULL,
+                    usage_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(kind, name)
+                );
+
+                CREATE TABLE IF NOT EXISTS extension_versions (
+                    entry_id TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    artifact_path TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (entry_id, version)
+                );
+
+                CREATE TABLE IF NOT EXISTS capability_secrets (
+                    secret_id TEXT PRIMARY KEY,
+                    ciphertext TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column(conn, "users", "last_login_at", "TEXT")
