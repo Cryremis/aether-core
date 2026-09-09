@@ -2663,31 +2663,55 @@ details[open]::details-content {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
-.secret-rows {
+/* 键值行编辑：环境变量 / 请求头 */
+.kv-rows {
   display: grid;
   gap: 8px;
 }
 
-.secret-rows__header {
+.kv-rows__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   color: var(--text-secondary);
 }
 
-.secret-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
+.kv-row {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
 
-.secret-row__toggle {
-  display: inline-flex !important;
-  grid-auto-flow: column;
+.kv-row > input {
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.kv-row > input:last-of-type {
+  flex: 2 1 200px;
+}
+
+/* 删除行按钮 */
+.kv-row__remove {
+  display: inline-flex;
   align-items: center;
-  white-space: nowrap;
-  color: var(--text-tertiary) !important;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.kv-row__remove:hover {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error);
 }
 
 .text-button {
@@ -3121,6 +3145,32 @@ details[open]::details-content {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 文件夹选择：次级文字按钮，与拖放区互补 */
+.publish-folder-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: center;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.publish-folder-btn:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.publish-folder-btn input {
+  display: none;
 }
 
 /* 基础信息表单 */
@@ -3568,12 +3618,12 @@ details[open]::details-content {
     grid-column: auto;
   }
 
-  .secret-row {
+  .publish-fields {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .publish-fields {
-    grid-template-columns: minmax(0, 1fr);
+  .kv-row > input {
+    flex-basis: 100%;
   }
 
   .scope-picker {

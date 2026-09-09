@@ -23,9 +23,17 @@ type Props = {
 
 const emptyMcpForm = {
   name: "", description: "", transport: "streamable_http", url: "", command: "",
-  args: "", env: [{ name: "", value: "", secret: true }], headers: [{ name: "", value: "", secret: true }], auth: "none", oauthScopes: "", json: "",
+  args: "", env: [{ name: "", value: "" }], headers: [{ name: "", value: "" }], auth: "none", oauthScopes: "", json: "",
 };
 const emptyPublishForm: PublishForm = { kind: "skill", name: "", description: "", version: "1.0.0" };
+
+// 把用户选择的文件夹打包为 zip 技能包（添加与发布共用）
+async function zipFiles(files: FileList): Promise<File> {
+  const archive = new JSZip();
+  for (const file of Array.from(files)) archive.file(file.webkitRelativePath || file.name, file);
+  const blob = await archive.generateAsync({ type: "blob" });
+  return new File([blob], "skill-folder.zip", { type: "application/zip" });
+}
 
 function parseMcpJson(value: string): Record<string, unknown> {
   const parsed = JSON.parse(value);
@@ -130,10 +138,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
 
   const submitSkillFolder = async (files: FileList | null) => {
     if (!files?.length) return;
-    const archive = new JSZip();
-    for (const file of Array.from(files)) archive.file(file.webkitRelativePath || file.name, file);
-    const blob = await archive.generateAsync({ type: "blob" });
-    await submitSkill(new File([blob], "skill-folder.zip", { type: "application/zip" }));
+    await submitSkill(await zipFiles(files));
   };
 
   const submitMcp = async () => {
@@ -246,12 +251,13 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
   </div>;
 }
 
-function McpForm({ form, setForm, allowSecrets = true }: { form: typeof emptyMcpForm; setForm: (form: typeof emptyMcpForm) => void; allowSecrets?: boolean }) {
-  const updateRow = (key: "env" | "headers", index: number, field: "name" | "value" | "secret", value: string | boolean) => {
+function McpForm({ form, setForm, allowCredentials = true }: { form: typeof emptyMcpForm; setForm: (form: typeof emptyMcpForm) => void; allowCredentials?: boolean }) {
+  const updateRow = (key: "env" | "headers", index: number, field: "name" | "value", value: string) => {
     const rows = form[key].map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row);
     setForm({ ...form, [key]: rows });
   };
-  const addRow = (key: "env" | "headers") => setForm({ ...form, [key]: [...form[key], { name: "", value: "", secret: true }] });
+  const addRow = (key: "env" | "headers") => setForm({ ...form, [key]: [...form[key], { name: "", value: "" }] });
+  const removeRow = (key: "env" | "headers", index: number) => setForm({ ...form, [key]: form[key].filter((_, rowIndex) => rowIndex !== index) });
   return <div className="form-grid capability-form">
     <label className="full-width">标准 MCP JSON（可选）<textarea rows={5} placeholder={'{"mcpServers":{"docs":{"url":"https://example.com/mcp"}}}'} value={form.json} onChange={(event) => setForm({ ...form, json: event.target.value })} /></label>
     {!form.json.trim() ? <>
@@ -260,16 +266,24 @@ function McpForm({ form, setForm, allowSecrets = true }: { form: typeof emptyMcp
       {form.transport === "stdio" ? <label>命令<input placeholder="npx -y server" value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} /></label> : <label>HTTPS URL<input placeholder="https://example.com/mcp" value={form.url} onChange={(event) => setForm({ ...form, url: event.target.value })} /></label>}
       <label>参数<input placeholder="空格分隔，可留空" value={form.args} onChange={(event) => setForm({ ...form, args: event.target.value })} /></label><label>认证<select value={form.auth} onChange={(event) => setForm({ ...form, auth: event.target.value })}><option value="none">无 / 请求头</option><option value="oauth">OAuth 2.1</option></select></label>
       {form.auth === "oauth" ? <label>OAuth scopes<input placeholder="逗号分隔，可留空" value={form.oauthScopes} onChange={(event) => setForm({ ...form, oauthScopes: event.target.value })} /></label> : null}
-      {allowSecrets ? <>
-        <SecretRows label="环境变量" rows={form.env} onChange={(index, field, value) => updateRow("env", index, field, value)} onAdd={() => addRow("env")} />
-        <SecretRows label="请求头" rows={form.headers} onChange={(index, field, value) => updateRow("headers", index, field, value)} onAdd={() => addRow("headers")} />
+      {allowCredentials ? <>
+        <KeyValueRows label="环境变量" rows={form.env} onChange={(index, field, value) => updateRow("env", index, field, value)} onAdd={() => addRow("env")} onRemove={(index) => removeRow("env", index)} />
+        <KeyValueRows label="请求头" rows={form.headers} onChange={(index, field, value) => updateRow("headers", index, field, value)} onAdd={() => addRow("headers")} onRemove={(index) => removeRow("headers", index)} />
       </> : null}
     </> : null}
   </div>;
 }
 
-function SecretRows({ label, rows, onChange, onAdd }: { label: string; rows: { name: string; value: string; secret: boolean }[]; onChange: (index: number, field: "name" | "value" | "secret", value: string | boolean) => void; onAdd: () => void }) {
-  return <div className="secret-rows full-width"><div className="secret-rows__header"><strong>{label}</strong><button type="button" className="text-button" onClick={onAdd}>添加一行</button></div>{rows.map((row, index) => <div className="secret-row" key={`${label}-${index}`}><input aria-label={`${label}名称`} placeholder="名称" value={row.name} onChange={(event) => onChange(index, "name", event.target.value)} /><input aria-label={`${label}值`} type={row.secret ? "password" : "text"} placeholder={row.secret ? "由用户配置的密钥" : "固定值"} value={row.value} onChange={(event) => onChange(index, "value", event.target.value)} /><label className="secret-row__toggle"><input type="checkbox" checked={row.secret} onChange={(event) => onChange(index, "secret", event.target.checked)} />密钥</label></div>)}</div>;
+/* 键值行编辑：环境变量 / 请求头，行可增删 */
+function KeyValueRows({ label, rows, onChange, onAdd, onRemove }: { label: string; rows: { name: string; value: string }[]; onChange: (index: number, field: "name" | "value", value: string) => void; onAdd: () => void; onRemove: (index: number) => void }) {
+  return <div className="kv-rows full-width">
+    <div className="kv-rows__header"><strong>{label}</strong><button type="button" className="text-button" onClick={onAdd}>添加一行</button></div>
+    {rows.map((row, index) => <div className="kv-row" key={`${label}-${index}`}>
+      <input aria-label={`${label}名称`} placeholder="名称" value={row.name} onChange={(event) => onChange(index, "name", event.target.value)} />
+      <input aria-label={`${label}值`} placeholder="值" value={row.value} onChange={(event) => onChange(index, "value", event.target.value)} />
+      <button type="button" className="kv-row__remove" aria-label={`删除${label}行`} title="删除此行" onClick={() => onRemove(index)}><Icons.Trash /></button>
+    </div>)}
+  </div>;
 }
 
 /* 添加 Skill / MCP 弹窗：与市场窗统一的设计语言 */
@@ -514,7 +528,7 @@ function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublishe
         </div>
 
         {isSkill ? <>
-          {/* 文件选择区：内容随类型切换 */}
+          {/* 文件选择区：单文件或文件夹，与添加 Skill 保持一致 */}
           <label className={`publish-dropzone ${publishForm.artifact ? "publish-dropzone--filled" : ""}`}>
             {publishForm.artifact ? <>
               <span className="publish-dropzone__file"><Icons.Check /><span className="publish-dropzone__filename">{publishForm.artifact.name}</span></span>
@@ -526,6 +540,11 @@ function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublishe
             </>}
             <input type="file" accept=".zip,.md" onChange={(event) => setPublishForm({ ...publishForm, artifact: event.target.files?.[0] })} />
           </label>
+          <label className="publish-folder-btn">
+            <Icons.Folder />
+            <span>或选择技能文件夹（自动打包为 zip）</span>
+            <input type="file" multiple onChange={(event) => { if (event.target.files?.length) void zipFiles(event.target.files).then((artifact) => setPublishForm({ ...publishForm, artifact })); }} {...({ webkitdirectory: "true", directory: "" } as Record<string, string>)} />
+          </label>
 
           <div className="publish-fields">
             <label>名称<input placeholder="拓展名称" value={publishForm.name} onChange={(event) => setPublishForm({ ...publishForm, name: event.target.value })} /></label>
@@ -534,7 +553,7 @@ function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublishe
           </div>
         </> : <>
           {/* MCP 发布：与“添加 MCP”完全一致的表单（凭据由安装者配置，不随制品发布） */}
-          <McpForm form={mcpForm} setForm={setMcpForm} allowSecrets={false} />
+          <McpForm form={mcpForm} setForm={setMcpForm} allowCredentials={false} />
           <p className="publish-hint">商店拓展不能包含环境变量、请求头等凭据，安装者安装后可自行配置。</p>
         </>}
 
