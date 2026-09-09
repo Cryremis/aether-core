@@ -193,7 +193,7 @@ export function WorkbenchSidebar({
                 </div>
               </div>
             ) : (
-              <div className="tab-pane"><CapabilityPanel sessionId={sessionId} skills={skills} isEmbedMode={isEmbedMode} onUploadSessionSkill={onUploadSkill} onRefresh={onRefreshCapabilities} /></div>
+              <div className="tab-pane tab-pane--capability"><CapabilityPanel sessionId={sessionId} skills={skills} isEmbedMode={isEmbedMode} onUploadSessionSkill={onUploadSkill} onRefresh={onRefreshCapabilities} /></div>
             )}
           </div>
 
