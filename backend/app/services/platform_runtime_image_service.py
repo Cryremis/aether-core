@@ -269,9 +269,77 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
                 error_text = self._decode_output(stderr_bytes).strip() or self._decode_output(stdout_bytes).strip()
                 raise RuntimeError(error_text or "构建平台运行镜像失败")
             await self._verify_image_available(docker_binary, image_name)
+            # 构建成功后滚动清理旧版本镜像,防止每次 baseline 变更都留下一个镜像撑爆磁盘
+            await self._prune_old_auto_images(
+                docker_binary,
+                platform_id=int(platform["platform_id"]),
+                keep=image_name,
+            )
             return image_name
         finally:
             shutil.rmtree(build_root, ignore_errors=True)
+
+    async def _prune_old_auto_images(self, docker_binary: str, *, platform_id: int, keep: str) -> None:
+        """构建成功后清理同平台旧 auto 镜像,只保留最新 2 个(刚构建的 + 次新的一个,留作回滚)。
+
+        安全性:
+        - 只匹配 `aethercore-platform-runtime:{platform_id}-` 前缀,不触碰其他平台
+        - docker rmi 不加 -f:被任何容器(含旧会话仍在用的)占用的镜像会被 Docker 拒绝,
+          自然跳过,等会话迁移或 GC 后的下一次构建再清
+        - 任何失败静默吞掉,清理是尽力而为,绝不影响镜像解析主流程
+        """
+        prefix = f"{platform_id}-"
+        keep_tag = keep.split(":", 1)[-1]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                docker_binary,
+                "images",
+                self._AUTO_IMAGE_PREFIX,
+                "--format",
+                "{{.Tag}}\t{{.CreatedAt}}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                **self._subprocess_kwargs(),
+            )
+            stdout_bytes, _ = await process.communicate()
+            if process.returncode != 0:
+                return
+            entries: list[tuple[str, str]] = []
+            for line in self._decode_output(stdout_bytes).splitlines():
+                tag, _, created = line.partition("\t")
+                tag = tag.strip()
+                # 前缀带分隔符,避免 platform 1 误匹配 platform 11 的 tag
+                if tag.startswith(prefix):
+                    entries.append((tag, created.strip()))
+            if len(entries) <= 2:
+                return
+            # CreatedAt 为同机同时区的固定格式,字典序即时间序,最新在前
+            entries.sort(key=lambda item: item[1], reverse=True)
+            others = [tag for tag, _ in entries if tag != keep_tag]
+            # 保留: 刚构建的(keep)+ 除它外最新的 1 个
+            keep_tags = {keep_tag, others[0]} if others else {keep_tag}
+            for tag, _ in entries:
+                if tag in keep_tags:
+                    continue
+                await self._try_remove_image(docker_binary, f"{self._AUTO_IMAGE_PREFIX}:{tag}")
+        except Exception:
+            return
+
+    async def _try_remove_image(self, docker_binary: str, image: str) -> None:
+        """尽力删除一个镜像(non-force,被容器占用时 Docker 会拒绝)。"""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                docker_binary,
+                "image",
+                "rm",
+                image,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                **self._subprocess_kwargs(),
+            )
+            await process.communicate()
+        except Exception:
+            return
 
     async def _image_exists(self, docker_binary: str, image: str) -> bool:
         process = await asyncio.create_subprocess_exec(

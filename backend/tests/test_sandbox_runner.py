@@ -618,3 +618,94 @@ def test_session_runtime_run_shell_hydrates_latest_workspace_before_exec(tmp_pat
 
     assert result.exit_code == 0
     assert calls == ["hydrate:test-container", "exec:test-container", "capture:test-container"]
+
+
+def test_ensure_runtime_does_not_interrupt_executing_on_spec_drift(tmp_path, monkeypatch):
+    """回归: executing 状态 + 镜像/配置漂移时,ensure 不强制重建(命令结束后下一次 ensure 才迁移)。"""
+    initialize_store(tmp_path)
+    monkeypatch.setattr(settings, "sandbox_allow_network", True)
+    monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
+    monkeypatch.setattr(settings, "sandbox_docker_dns_servers", [])
+    monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
+    monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
+
+    workspace = build_workspace(tmp_path / "sandbox")
+    # 构造漂移: 记录的 spec 与当前期望不一致(镜像名变化)
+    drifted_spec = session_runtime_service._build_runtime_spec("aethercore-platform-runtime:9-oldhash")
+    runtime = {
+        "session_id": workspace.session_id,
+        "status": "executing",
+        "container_name": "aethercore-sess-demo-g1",
+        "generation": 1,
+        "metadata": {"runtime_spec": drifted_spec},
+        "idle_expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "max_expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+    }
+
+    async def fake_refresh(_session_id):
+        return dict(runtime)
+
+    collected: list[str] = []
+
+    async def fake_collect(_session_id, *, reason):
+        collected.append(reason)
+
+    async def fake_create(_workspace, *, generation):
+        raise AssertionError("executing + spec drift must not recreate runtime")
+
+    monkeypatch.setattr(session_runtime_service, "refresh_runtime", fake_refresh)
+    monkeypatch.setattr(session_runtime_service, "_collect_locked", fake_collect)
+    monkeypatch.setattr(session_runtime_service, "_create_runtime_locked", fake_create)
+
+    result = asyncio.run(session_runtime_service._ensure_runtime_locked(workspace))
+
+    assert result["notice"] is None
+    assert result["runtime"]["status"] == "executing"
+    assert collected == []
+
+
+def test_ensure_runtime_recreates_executing_on_fatal_reason(tmp_path, monkeypatch):
+    """致命原因(idle 过期)在 executing 时仍允许重建(保持既有语义)。"""
+    initialize_store(tmp_path)
+    monkeypatch.setattr(settings, "sandbox_allow_network", True)
+    monkeypatch.setattr(settings, "sandbox_docker_network_mode", "bridge")
+    monkeypatch.setattr(settings, "sandbox_docker_dns_servers", [])
+    monkeypatch.setattr(settings, "sandbox_docker_read_only_rootfs", False)
+    monkeypatch.setattr(settings, "sandbox_docker_user", "sandbox")
+
+    workspace = build_workspace(tmp_path / "sandbox")
+    runtime = {
+        "session_id": workspace.session_id,
+        "status": "executing",
+        "container_name": "aethercore-sess-demo-g1",
+        "generation": 1,
+        "metadata": {"runtime_spec": session_runtime_service._build_runtime_spec(settings.sandbox_docker_image)},
+        "idle_expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        "max_expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+    }
+
+    async def fake_refresh(_session_id):
+        return dict(runtime)
+
+    collected: list[str] = []
+
+    async def fake_collect(_session_id, *, reason):
+        collected.append(reason)
+
+    async def fake_create(_workspace, *, generation):
+        return {
+            "status": "provisioning",
+            "generation": generation,
+            "container_name": "aethercore-sess-demo-g2",
+            "idle_expires_at": None,
+        }
+
+    monkeypatch.setattr(session_runtime_service, "refresh_runtime", fake_refresh)
+    monkeypatch.setattr(session_runtime_service, "_collect_locked", fake_collect)
+    monkeypatch.setattr(session_runtime_service, "_create_runtime_locked", fake_create)
+
+    result = asyncio.run(session_runtime_service._ensure_runtime_locked(workspace))
+
+    assert result["notice"]["reason"] == "idle_ttl_expired"
+    assert collected == ["idle_ttl_expired"]
+    assert result["runtime"]["generation"] == 2

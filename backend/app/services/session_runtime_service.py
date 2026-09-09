@@ -268,6 +268,17 @@ class SessionRuntimeService:
                 "runtime": current,
                 "notice": None,
             }
+        # 执行中的容器不因配置漂移(含镜像更新)被打断:
+        # 状态刚被 refresh_runtime 校验过(容器确实活着),命令结束后下一次 ensure 会走重建迁移到新镜像。
+        # 仅致命原因(过期/不可用)才允许打断执行中的命令。
+        if current.get("status") == "executing" and recreate_reason in {
+            "runtime_config_changed",
+            "runtime_spec_missing",
+        }:
+            return {
+                "runtime": current,
+                "notice": None,
+            }
 
         if current.get("status") == "terminating" and recreate_reason is None:
             return {
