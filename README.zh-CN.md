@@ -1,6 +1,6 @@
 # AetherCore
 
-能力作用域、MCP 配置与拓展商店请参阅 [docs/capabilities.md](docs/capabilities.md)。
+能力作用域、MCP 配置与拓展市场请参阅 [docs/capabilities.md](docs/capabilities.md)。
 
 [🌐 在线演示](https://cryremis.github.io/aether-core) | [English](./README.md)
 

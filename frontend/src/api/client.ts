@@ -1004,7 +1004,7 @@ export type ExtensionEntry = { entry_id: string; kind: "skill" | "mcp"; name: st
 
 export async function listExtensions() {
   const response = await apiFetch("/extensions");
-  if (!response.ok) throw new Error(await readErrorMessage(response, `获取拓展商店失败: ${response.status}`));
+  if (!response.ok) throw new Error(await readErrorMessage(response, `获取拓展市场失败: ${response.status}`));
   return response.json() as Promise<{ data: ExtensionEntry[] }>;
 }
 

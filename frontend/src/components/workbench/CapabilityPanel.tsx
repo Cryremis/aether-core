@@ -21,14 +21,8 @@ type Props = {
 
 const emptyMcpForm = {
   name: "", description: "", transport: "streamable_http", url: "", command: "",
-  args: "", env: "{}", headers: "{}", auth: "none", oauthScopes: "", json: "",
+  args: "", env: [{ name: "", value: "", secret: true }], headers: [{ name: "", value: "", secret: true }], auth: "none", oauthScopes: "", json: "",
 };
-
-function parseObject(value: string, label: string): Record<string, string> {
-  const parsed = JSON.parse(value || "{}");
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error(`${label} 必须是 JSON 对象`);
-  return parsed as Record<string, string>;
-}
 
 function parseMcpJson(value: string): Record<string, unknown> {
   const parsed = JSON.parse(value);
@@ -49,7 +43,6 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
   const [preferenceKey, setPreferenceKey] = useState(`aethercore-capabilities:${isEmbedMode ? "embed" : "user"}`);
   const [disabled, setDisabled] = useState<string[]>([]);
   const [mcp, setMcp] = useState<McpCapability[]>([]);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [scope, setScope] = useState<Scope>("user");
   const [error, setError] = useState("");
@@ -109,7 +102,8 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
         url: mcpForm.transport === "streamable_http" ? mcpForm.url : null,
         command: mcpForm.transport === "stdio" ? mcpForm.command.trim().split(/\s+/).filter(Boolean) : [],
         args: mcpForm.args.trim().split(/\s+/).filter(Boolean),
-        env: parseObject(mcpForm.env, "环境变量"), headers: parseObject(mcpForm.headers, "请求头"),
+            env: Object.fromEntries(mcpForm.env.filter((item) => item.name.trim()).map((item) => [item.name.trim(), item.value])),
+            headers: Object.fromEntries(mcpForm.headers.filter((item) => item.name.trim()).map((item) => [item.name.trim(), item.value])),
         auth: mcpForm.auth, oauth_scopes: mcpForm.oauthScopes,
       };
       await saveMcp(payload, scope, { sessionId });
@@ -119,7 +113,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
   };
 
   const openStore = async () => {
-    setMenuOpen(false); setDialog("store"); setError("");
+    setDialog("store"); setError("");
     try { setExtensions((await listExtensions()).data || []); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "加载失败"); }
   };
@@ -138,20 +132,9 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
   };
 
   return <div className="capability-panel">
-    <div className="pane-header">
-      <h3>能力</h3>
-      <div className="capability-add">
-        <button type="button" className="action-button small" onClick={() => setMenuOpen(!menuOpen)}>添加</button>
-        {menuOpen ? <div className="capability-add__menu">
-          <button onClick={() => { setDialog("skill"); setMenuOpen(false); }}>Skill</button>
-          <button onClick={() => { setDialog("mcp"); setMenuOpen(false); }}>MCP</button>
-          <button onClick={() => void openStore()}>拓展商店</button>
-        </div> : null}
-      </div>
-    </div>
-    <p className="empty-state">默认启用全部可用能力，关闭状态保存在当前浏览器。</p>
+    <div className="pane-header"><h3>能力</h3></div>
 
-    <h3 className="sub-title">Skill ({skills.length})</h3>
+    <div className="capability-section-title"><h3 className="sub-title">Skill ({skills.length})</h3><button className="capability-add-icon" aria-label="添加 Skill" title="添加 Skill" onClick={() => { setScope("user"); setDialog("skill"); }}>+</button></div>
     <div className="item-list">{skills.map((item) => {
       const key = `skill:${item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
       return <article key={`${item.source}:${item.name}`} className="resource-card block">
@@ -161,7 +144,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
       </article>;
     })}</div>
 
-    <h3 className="sub-title">MCP ({mcp.length})</h3>
+    <div className="capability-section-title"><h3 className="sub-title">MCP ({mcp.length})</h3><button className="capability-add-icon" aria-label="添加 MCP" title="添加 MCP" onClick={() => { setScope("user"); setDialog("mcp"); }}>+</button></div>
     <div className="item-list">{mcp.map((item) => {
       const key = `mcp:${item.name}`;
       return <article key={item.id} className="resource-card block">
@@ -177,24 +160,30 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
     })}</div>
 
     {dialog ? createPortal(<div className="skill-upload-modal-backdrop" onClick={() => setDialog(null)}>
-      <section className="skill-upload-modal capability-dialog" onClick={(event) => event.stopPropagation()}>
-        <header className="skill-upload-modal__header"><h4>{dialog === "skill" ? "添加 Skill" : dialog === "mcp" ? "添加 MCP" : "拓展商店"}</h4><button className="icon-button" aria-label="关闭" onClick={() => setDialog(null)}>×</button></header>
+      <section className={`skill-upload-modal capability-dialog ${dialog === "store" ? "capability-dialog--market" : ""}`} onClick={(event) => event.stopPropagation()}>
+        <header className="skill-upload-modal__header"><h4>{dialog === "skill" ? "添加 Skill" : dialog === "mcp" ? "添加 MCP" : "拓展市场"}</h4><button className="icon-button" aria-label="关闭" onClick={() => setDialog(null)}>×</button></header>
         <div className="skill-upload-modal__body">
-          <div className="segment-control"><button className={`segment-btn ${scope === "user" ? "active" : ""}`} onClick={() => setScope("user")}>个人永久</button><button className={`segment-btn ${scope === "session" ? "active" : ""}`} onClick={() => setScope("session")}>当前会话</button></div>
+          {dialog !== "store" ? <div className="segment-control"><button className={`segment-btn ${scope === "user" ? "active" : ""}`} onClick={() => setScope("user")}>个人永久</button><button className={`segment-btn ${scope === "session" ? "active" : ""}`} onClick={() => setScope("session")}>当前会话</button></div> : null}
           {dialog === "skill" ? <div className="skill-upload-modal__actions-grid">
             <label className="fm-btn primary"><span>{busy ? "上传中..." : "上传 zip / SKILL.md"}</span><input type="file" accept=".zip,.md" disabled={busy} onChange={(event) => void submitSkill(event.target.files?.[0])} /></label>
             <label className="fm-btn outline"><span>选择技能文件夹</span><input type="file" multiple disabled={busy} onChange={(event) => void submitSkillFolder(event.target.files)} {...({ webkitdirectory: "true", directory: "" } as Record<string, string>)} /></label>
           </div> : null}
           {dialog === "mcp" ? <McpForm form={mcpForm} setForm={setMcpForm} busy={busy} onSubmit={submitMcp} /> : null}
-          {dialog === "store" ? <StorePanel scope={scope} sessionId={sessionId} extensions={extensions} publishForm={publishForm} setPublishForm={setPublishForm} openStore={openStore} refresh={refresh} setError={setError} /> : null}
+          {dialog === "store" ? <StorePanel sessionId={sessionId} extensions={extensions} publishForm={publishForm} setPublishForm={setPublishForm} openStore={openStore} refresh={refresh} setError={setError} /> : null}
           {error ? <p className="skill-upload-modal__error">{error}</p> : null}
         </div>
       </section>
     </div>, document.body) : null}
+    <button className="capability-market-entry" onClick={() => void openStore()}><span>拓展市场</span><span aria-hidden="true">›</span></button>
   </div>;
 }
 
 function McpForm({ form, setForm, busy, onSubmit }: { form: typeof emptyMcpForm; setForm: (form: typeof emptyMcpForm) => void; busy: boolean; onSubmit: () => Promise<void> }) {
+  const updateRow = (key: "env" | "headers", index: number, field: "name" | "value" | "secret", value: string | boolean) => {
+    const rows = form[key].map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row);
+    setForm({ ...form, [key]: rows });
+  };
+  const addRow = (key: "env" | "headers") => setForm({ ...form, [key]: [...form[key], { name: "", value: "", secret: true }] });
   return <div className="form-grid capability-form">
     <label className="full-width">标准 MCP JSON（可选）<textarea rows={5} placeholder={'{"mcpServers":{"docs":{"url":"https://example.com/mcp"}}}'} value={form.json} onChange={(event) => setForm({ ...form, json: event.target.value })} /></label>
     {!form.json.trim() ? <>
@@ -203,15 +192,22 @@ function McpForm({ form, setForm, busy, onSubmit }: { form: typeof emptyMcpForm;
       {form.transport === "stdio" ? <label>命令<input value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} /></label> : <label>HTTPS URL<input value={form.url} onChange={(event) => setForm({ ...form, url: event.target.value })} /></label>}
       <label>参数<input value={form.args} onChange={(event) => setForm({ ...form, args: event.target.value })} /></label><label>认证<select value={form.auth} onChange={(event) => setForm({ ...form, auth: event.target.value })}><option value="none">无 / 请求头</option><option value="oauth">OAuth 2.1</option></select></label>
       {form.auth === "oauth" ? <label>OAuth scopes<input value={form.oauthScopes} onChange={(event) => setForm({ ...form, oauthScopes: event.target.value })} /></label> : null}
-      <label className="full-width">环境变量 JSON<textarea rows={3} value={form.env} onChange={(event) => setForm({ ...form, env: event.target.value })} /></label><label className="full-width">请求头 JSON<textarea rows={3} value={form.headers} onChange={(event) => setForm({ ...form, headers: event.target.value })} /></label>
+      <SecretRows label="环境变量" rows={form.env} onChange={(index, field, value) => updateRow("env", index, field, value)} onAdd={() => addRow("env")} />
+      <SecretRows label="请求头" rows={form.headers} onChange={(index, field, value) => updateRow("headers", index, field, value)} onAdd={() => addRow("headers")} />
     </> : null}
     <button className="fm-btn primary" disabled={busy} onClick={() => void onSubmit()}>保存</button>
   </div>;
 }
 
-function StorePanel({ scope, sessionId, extensions, publishForm, setPublishForm, openStore, refresh, setError }: { scope: Scope; sessionId: string; extensions: ExtensionEntry[]; publishForm: { kind: "skill" | "mcp"; name: string; description: string; version: string; artifact?: File }; setPublishForm: (value: typeof publishForm) => void; openStore: () => Promise<void>; refresh: () => Promise<void>; setError: (value: string) => void }) {
+function SecretRows({ label, rows, onChange, onAdd }: { label: string; rows: { name: string; value: string; secret: boolean }[]; onChange: (index: number, field: "name" | "value" | "secret", value: string | boolean) => void; onAdd: () => void }) {
+  return <div className="secret-rows full-width"><div className="secret-rows__header"><strong>{label}</strong><button type="button" className="text-button" onClick={onAdd}>添加一行</button></div>{rows.map((row, index) => <div className="secret-row" key={`${label}-${index}`}><input aria-label={`${label}名称`} placeholder="名称" value={row.name} onChange={(event) => onChange(index, "name", event.target.value)} /><input aria-label={`${label}值`} type={row.secret ? "password" : "text"} placeholder={row.secret ? "由用户配置的密钥" : "固定值"} value={row.value} onChange={(event) => onChange(index, "value", event.target.value)} /><label className="secret-row__toggle"><input type="checkbox" checked={row.secret} onChange={(event) => onChange(index, "secret", event.target.checked)} />密钥</label></div>)}</div>;
+}
+
+function StorePanel({ sessionId, extensions, publishForm, setPublishForm, openStore, refresh, setError }: { sessionId: string; extensions: ExtensionEntry[]; publishForm: { kind: "skill" | "mcp"; name: string; description: string; version: string; artifact?: File }; setPublishForm: (value: typeof publishForm) => void; openStore: () => Promise<void>; refresh: () => Promise<void>; setError: (value: string) => void }) {
+  const [selectedScopes, setSelectedScopes] = useState<Record<string, Scope>>({});
+  const getScope = (entryId: string) => selectedScopes[entryId] || "session";
   return <><details><summary>发布拓展</summary><div className="form-grid capability-form">
     <label>类型<select value={publishForm.kind} onChange={(event) => setPublishForm({ ...publishForm, kind: event.target.value as "skill" | "mcp" })}><option value="skill">Skill</option><option value="mcp">MCP</option></select></label><label>名称<input value={publishForm.name} onChange={(event) => setPublishForm({ ...publishForm, name: event.target.value })} /></label><label>介绍<input value={publishForm.description} onChange={(event) => setPublishForm({ ...publishForm, description: event.target.value })} /></label><label>版本<input value={publishForm.version} onChange={(event) => setPublishForm({ ...publishForm, version: event.target.value })} /></label>
     <input type="file" accept={publishForm.kind === "skill" ? ".zip,.md" : ".json"} onChange={(event) => setPublishForm({ ...publishForm, artifact: event.target.files?.[0] })} /><button className="fm-btn primary" disabled={!publishForm.artifact} onClick={() => publishForm.artifact && void publishExtension({ ...publishForm, artifact: publishForm.artifact }).then(openStore).catch((reason) => setError(reason.message))}>发布</button>
-  </div></details><div className="item-list store-list">{extensions.map((item) => <article className="resource-card block" key={item.entry_id}><div className="flex-row"><strong>{item.name}</strong><span className="badge">{item.kind}</span></div><p className="desc">{item.description}</p><small>v{item.current_version} · {item.submitter_name} · 使用 {item.usage_count} · {new Date(item.updated_at).toLocaleDateString()}</small><button className="fm-btn primary small" onClick={() => void installExtension(item.entry_id, scope, { sessionId }).then(refresh).catch((reason) => setError(reason.message))}>加载</button></article>)}</div></>;
+  </div></details><div className="item-list store-list">{extensions.map((item) => { const selectedScope = getScope(item.entry_id); return <article className="resource-card block" key={item.entry_id}><div className="flex-row"><strong>{item.name}</strong><span className="badge">{item.kind}</span></div><p className="desc">{item.description || "暂无介绍"}</p><small>v{item.current_version} · {item.submitter_name} · 使用 {item.usage_count} · {new Date(item.updated_at).toLocaleDateString()}</small><div className="market-apply"><label><input type="radio" name={`market-scope-${item.entry_id}`} checked={selectedScope === "session"} onChange={() => setSelectedScopes({ ...selectedScopes, [item.entry_id]: "session" })} />临时</label><label><input type="radio" name={`market-scope-${item.entry_id}`} checked={selectedScope === "user"} onChange={() => setSelectedScopes({ ...selectedScopes, [item.entry_id]: "user" })} />个人</label><button className="fm-btn primary small" onClick={() => void installExtension(item.entry_id, selectedScope, { sessionId }).then(refresh).catch((reason) => setError(reason.message))}>应用</button></div></article>; })}</div></>;
 }

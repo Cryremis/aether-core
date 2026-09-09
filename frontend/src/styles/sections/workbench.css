@@ -2240,7 +2240,8 @@ details[open]::details-content {
   padding: 4px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  background: var(--surface, #fff);
+  background: var(--surface-1, #111827);
+  color: var(--text-primary, #f8fafc);
   box-shadow: 0 10px 30px rgb(0 0 0 / 12%);
 }
 
@@ -2269,11 +2270,63 @@ details[open]::details-content {
   padding: 8px 10px;
 }
 
+.capability-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.capability-section-title .sub-title {
+  margin-bottom: 6px;
+}
+
+.capability-add-icon {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.capability-add-icon:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.capability-market-entry {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.capability-market-entry:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .skill-upload-modal.capability-dialog {
   width: min(680px, calc(100vw - 32px));
   max-height: min(820px, calc(100vh - 32px));
   background: var(--surface-0);
   color: var(--text-primary);
+}
+
+.skill-upload-modal.capability-dialog--market {
+  width: min(920px, calc(100vw - 32px));
+  min-height: min(680px, calc(100vh - 32px));
 }
 
 .capability-dialog .skill-upload-modal__header {
@@ -2322,6 +2375,70 @@ details[open]::details-content {
   border: 1px solid var(--border-color);
   background: var(--surface-1);
   color: var(--text-primary);
+}
+
+.secret-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.secret-rows__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-secondary);
+}
+
+.secret-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.secret-row__toggle {
+  display: inline-flex !important;
+  grid-auto-flow: column;
+  align-items: center;
+  white-space: nowrap;
+  color: var(--text-tertiary) !important;
+}
+
+.text-button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.market-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 0;
+  color: var(--text-secondary);
+}
+
+.market-apply {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.market-apply label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.market-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .capability-actions {
@@ -2373,5 +2490,9 @@ details[open]::details-content {
 
   .capability-form .full-width {
     grid-column: auto;
+  }
+
+  .secret-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

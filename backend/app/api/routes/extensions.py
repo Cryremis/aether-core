@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/v1/extensions", tags=["extensions"])
 def list_extensions(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
     if auth.kind not in {"user", "embed"}:
         raise HTTPException(status_code=401, detail="需要登录")
-    return ApiResponse(message="拓展商店", data=extension_store_service.list_entries())
+    return ApiResponse(message="拓展市场", data=extension_store_service.list_entries())
 
 
 @router.post("")
