@@ -20,10 +20,20 @@ import { PersonalSettingsDialog } from "./components/workbench/PersonalSettingsD
 import { HomePage } from "./pages/HomePage";
 import { PlatformDetailPage } from "./pages/PlatformDetailPage";
 import { PlatformsPage } from "./pages/PlatformsPage";
-import { AdminPage } from "./pages/AdminPage";
-import { IpsPage } from "./pages/IpsPage";
+import { TabPageFallback } from "./pages/platform/TabPageShell";
+const AdminPage = lazy(async () => import("./pages/AdminPage").then((module) => ({ default: module.AdminPage })));
+const IpsPage = lazy(async () => import("./pages/IpsPage").then((module) => ({ default: module.IpsPage })));
 
 const WorkbenchPage = lazy(async () => import("./pages/WorkbenchPage").then((module) => ({ default: module.WorkbenchPage })));
+const PlatformTutorialPage = lazy(() => import("./pages/platform/PlatformTutorialPage"));
+const PlatformLlmPage = lazy(() => import("./pages/platform/PlatformLlmPage"));
+const PlatformPromptPage = lazy(() => import("./pages/platform/PlatformPromptPage"));
+const PlatformBaselinePage = lazy(() => import("./pages/platform/PlatformBaselinePage"));
+const PlatformMcpPage = lazy(() => import("./pages/platform/PlatformMcpPage"));
+const PlatformImagePage = lazy(() => import("./pages/platform/PlatformImagePage"));
+const PlatformProxyPage = lazy(() => import("./pages/platform/PlatformProxyPage"));
+const PlatformRuntimePage = lazy(() => import("./pages/platform/PlatformRuntimePage"));
+const PlatformAuditPage = lazy(() => import("./pages/platform/PlatformAuditPage"));
 
 type ConversationItem = {
   conversation_id: string;
@@ -385,7 +395,18 @@ export default function App() {
             <Route
               path="/platforms/:platformId"
               element={authed && currentUser ? <PlatformDetailPage currentUser={currentUser} /> : <Navigate to="/" replace />}
-            />
+            >
+              <Route index element={<Navigate to="tutorial" replace />} />
+              <Route path="tutorial" element={<Suspense fallback={<TabPageFallback />}><PlatformTutorialPage /></Suspense>} />
+              <Route path="llm" element={<Suspense fallback={<TabPageFallback />}><PlatformLlmPage /></Suspense>} />
+              <Route path="prompt" element={<Suspense fallback={<TabPageFallback />}><PlatformPromptPage /></Suspense>} />
+              <Route path="baseline" element={<Suspense fallback={<TabPageFallback />}><PlatformBaselinePage /></Suspense>} />
+              <Route path="mcp" element={<Suspense fallback={<TabPageFallback />}><PlatformMcpPage /></Suspense>} />
+              <Route path="image" element={<Suspense fallback={<TabPageFallback />}><PlatformImagePage /></Suspense>} />
+              <Route path="proxy" element={<Suspense fallback={<TabPageFallback />}><PlatformProxyPage /></Suspense>} />
+              <Route path="runtime" element={<Suspense fallback={<TabPageFallback />}><PlatformRuntimePage /></Suspense>} />
+              <Route path="audit" element={<Suspense fallback={<TabPageFallback />}><PlatformAuditPage /></Suspense>} />
+            </Route>
             <Route
               path="/ips"
               element={authed && currentUser?.can_manage_system ? <IpsPage currentUser={currentUser} /> : authed ? <Navigate to="/system" replace /> : <Navigate to="/" replace />}

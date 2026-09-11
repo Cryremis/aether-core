@@ -2478,6 +2478,22 @@ details[open]::details-content {
   background: var(--error-bg);
 }
 
+.capability-add-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 22px 20px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.capability-add-dialog__footer p {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+
 .capability-add-dialog__submit {
   align-self: flex-end;
   display: inline-flex;

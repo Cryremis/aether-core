@@ -6,6 +6,8 @@ import { PlatformMcpManager } from "./PlatformMcpManager";
 
 type BaselineManagerProps = {
   activePlatform: PlatformItem;
+  /** 是否在基线管理器顶部内嵌平台 MCP 管理（详情页已拆分为独立 tab） */
+  showMcp?: boolean;
   baselineError: string;
   fileManagerRef: RefObject<HTMLDivElement | null>;
   breadcrumbs: Array<{ name: string; path: string }>;
@@ -41,7 +43,7 @@ export function BaselineManager(props: BaselineManagerProps) {
         </div>
         {props.baselineError ? <div className="baseline-error-toast">{props.baselineError}</div> : null}
       </div>
-      <PlatformMcpManager platformId={props.activePlatform.platform_id} />
+      {props.showMcp ? <PlatformMcpManager platformId={props.activePlatform.platform_id} /> : null}
 
       <div className="file-manager-container" ref={props.fileManagerRef}>
         <div className="fm-toolbar">

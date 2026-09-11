@@ -338,6 +338,72 @@
   width: min(1320px, calc(100vw - 40px));
 }
 
+/* ================= 平台详情扁平 tab（复用 admin-tabs 设计语言） ================= */
+.platform-detail-nav {
+  position: sticky;
+  top: 72px;
+  z-index: 40;
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 24px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.platform-detail-nav::-webkit-scrollbar {
+  display: none;
+}
+
+/* ================= tab 页骨架 ================= */
+.platform-tab-page {
+  display: flex;
+  flex-direction: column;
+  animation: slideUpFade 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.platform-tab-page__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 接入教程：玻璃卡内去掉教程面板自带的外框与内部标头（标头由 TabPageShell 统一渲染） */
+.platform-tab-page .guide-panel-embedded {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.platform-tab-page .guide-panel-embedded .guide-modal__header {
+  display: none;
+}
+
+.platform-tab-page .guide-panel-embedded .guide-modal__body {
+  padding: 0;
+}
+
+/* 懒加载骨架 */
+.platform-tab-skeleton {
+  display: grid;
+  gap: 12px;
+  padding: 22px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
+  background: var(--surface-1);
+}
+
+.platform-tab-skeleton__line {
+  height: 14px;
+  border-radius: 7px;
+  background: linear-gradient(100deg, var(--surface-2) 40%, var(--bg-hover) 50%, var(--surface-2) 60%);
+  background-size: 200% 100%;
+  animation: marketShimmer 1.4s ease infinite;
+}
+
+.platform-tab-skeleton__line--lg { width: 38%; height: 22px; }
+.platform-tab-skeleton__line--md { width: 72%; }
+.platform-tab-skeleton__line--sm { width: 52%; }
+
 .platform-detail-hero {
   padding-top: 26px;
 }

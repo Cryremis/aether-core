@@ -1,43 +1,12 @@
 
 // frontend/src/components/AdminPanel.tsx
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import {
-  createPlatformBaselineDirectory,
-  createPlatform,
-  deletePlatformLlmConfig,
-  deletePlatformPromptConfig,
-  deletePlatformSandboxProxyConfig,
-  deletePlatformRuntimeImage,
-  deletePlatformBaselineFile,
-  downloadPlatformBaselineFile,
-  getPlatformBaseline,
-  getPlatformBaselineFileContent,
-  getPlatformIntegrationGuide,
-  getPlatformLlmConfig,
-  getPlatformPromptConfig,
-  getPlatformSandboxProxyConfig,
-  getPlatformRuntimeImage,
-  getPlatformRuntimeImageGuide,
-  listPlatforms,
-  movePlatformBaselinePath,
-  importPlatformBaselineFileTree,
-  PlatformIntegrationGuide,
-  PlatformBaselineBulkImportResult,
-  savePlatformBaselineTextFile,
-  updatePlatformPromptConfig,
-  updatePlatformSandboxProxyConfig,
-  updatePlatformLlmConfig,
-  updatePlatformRuntimeImage,
-  uploadPlatformRuntimeImage,
-  uploadPlatformBaselineFile,
-  uploadPlatformBaselineSkill,
-} from "../api/client";
+import { createPlatform, getPlatformIntegrationGuide, listPlatforms, PlatformIntegrationGuide } from "../api/client";
 import { AdminForms } from "./admin/AdminForms";
 import { BaselineMoveModal } from "./admin/BaselineMoveModal";
 import { BaselineContextMenu } from "./admin/BaselineContextMenu";
 import { BaselineManager } from "./admin/BaselineManager";
-import { AdminIcons as Icons } from "./admin/AdminIcons";
 import { IntegrationGuideModal } from "./admin/IntegrationGuideModal";
 import { PlatformList } from "./admin/PlatformList";
 import { PlatformLlmPanel } from "./admin/PlatformLlmPanel";
@@ -46,30 +15,17 @@ import { PlatformSandboxProxyPanel } from "./admin/PlatformSandboxProxyPanel";
 import { PlatformRuntimeImagePanel } from "./admin/PlatformRuntimeImagePanel";
 import { SkillUploadModal } from "./admin/SkillUploadModal";
 import { useAppPreferences } from "../i18n";
-import type {
-  DirectoryCapableFile,
-  LlmConfigFormState,
-  PlatformBaselineEntryItem,
-  PlatformItem,
-  PlatformSandboxProxyFormState,
-  PlatformRuntimeImageFormState,
-  PromptConfigFormState,
-} from "./admin/types";
+import {
+  usePlatformBaseline, usePlatformLlmConfig, usePlatformPromptConfig,
+  usePlatformRuntimeImage, usePlatformSandboxProxy,
+} from "../pages/platform/hooks";
+import type { PlatformItem } from "./admin/types";
 
 type AdminPanelProps = {
   role: string;
-  mode?: "overview" | "detail";
-  initialPlatformId?: number | null;
 };
 
 type PlatformSettingsView = "image" | "proxy" | "prompt" | "llm" | "baseline";
-type PlatformConfigLoadState = {
-  image: boolean;
-  proxy: boolean;
-  prompt: boolean;
-  llm: boolean;
-  baseline: boolean;
-};
 
 function PlatformWorkbenchSkeleton() {
   return (
@@ -94,109 +50,23 @@ function PlatformWorkbenchSkeleton() {
   );
 }
 
-export function AdminPanel({ role, mode = "overview", initialPlatformId = null }: AdminPanelProps) {
+export function AdminPanel({ role }: AdminPanelProps) {
   const { t } = useAppPreferences();
   const [platforms, setPlatforms] = useState<PlatformItem[]>([]);
   const [activePlatformId, setActivePlatformId] = useState<number | null>(null);
-  const [baselineEntries, setBaselineEntries] = useState<PlatformBaselineEntryItem[]>([]);
   const [error, setError] = useState("");
-  const [baselineError, setBaselineError] = useState("");
-  
-  // File Manager State
-  const [currentBaselineDirectory, setCurrentBaselineDirectory] = useState(""); // "" 代表根目录 (显示 skills/work/logs)
-  const [selectedBaselinePath, setSelectedBaselinePath] = useState("");
-  const [selectedBaselineContent, setSelectedBaselineContent] = useState("");
-  const [selectedBaselineMediaType, setSelectedBaselineMediaType] = useState("");
-  const [selectedBaselineTruncated, setSelectedBaselineTruncated] = useState(false);
-  const [baselineDirty, setBaselineDirty] = useState(false);
-  const [showSkillUploadModal, setShowSkillUploadModal] = useState(false);
-  const [skillUploadBusy, setSkillUploadBusy] = useState(false);
-  const [skillUploadError, setSkillUploadError] = useState("");
-  const [moveModalMode, setMoveModalMode] = useState<"move" | "rename">("move");
-  const [moveModalSourcePath, setMoveModalSourcePath] = useState("");
-  const [moveModalTargetPath, setMoveModalTargetPath] = useState("");
-  const [moveModalBusy, setMoveModalBusy] = useState(false);
-  const [moveModalError, setMoveModalError] = useState("");
-
-  // Context Menu State
-  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; item: PlatformBaselineEntryItem | null }>({ visible: false, x: 0, y: 0, item: null });
-
-  // Form States
   const [platformKey, setPlatformKey] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
-  const [platformLlmForm, setPlatformLlmForm] = useState<LlmConfigFormState>({
-    enabled: true,
-    base_url: "",
-    model: "",
-    api_key: "",
-    extra_headers_text: "",
-    extra_body_text: "",
-    has_api_key: false,
-    network_enabled: true,
-    allowed_domains_text: "",
-    blocked_domains_text: "",
-    max_search_results: 8,
-    fetch_timeout_seconds: 30,
-    sampling_temperature: "",
-    sampling_frequency_penalty: "",
-    sampling_presence_penalty: "",
-    sampling_top_p: "",
-    sampling_repetition_penalty: "",
-  });
-  const [platformLlmError, setPlatformLlmError] = useState("");
-  const [platformLlmBusy, setPlatformLlmBusy] = useState(false);
-  const [showPlatformLlmAdvanced, setShowPlatformLlmAdvanced] = useState(false);
-  const [promptForm, setPromptForm] = useState<PromptConfigFormState>({
-    enabled: true,
-    system_prompt: "",
-  });
-  const [promptError, setPromptError] = useState("");
-  const [promptBusy, setPromptBusy] = useState(false);
-  const [runtimeImageForm, setRuntimeImageForm] = useState<PlatformRuntimeImageFormState>({
-    image: "",
-    resolvedImage: "",
-    recycledRuntimeCount: null,
-    guide: null,
-  });
-  const [runtimeImageError, setRuntimeImageError] = useState("");
-  const [runtimeImageBusy, setRuntimeImageBusy] = useState(false);
-  const [runtimeImageLoaded, setRuntimeImageLoaded] = useState(false);
-  const [sandboxProxyForm, setSandboxProxyForm] = useState<PlatformSandboxProxyFormState>({
-    enabled: false,
-    http_proxy: "",
-    https_proxy: "",
-    all_proxy: "",
-    no_proxy: "",
-    inherit_host_proxy: true,
-    recycledRuntimeCount: null,
-  });
-  const [sandboxProxyError, setSandboxProxyError] = useState("");
-  const [sandboxProxyBusy, setSandboxProxyBusy] = useState(false);
-  const [sandboxProxyLoaded, setSandboxProxyLoaded] = useState(false);
   const [settingsView, setSettingsView] = useState<PlatformSettingsView>("image");
-  const [settingsLoaded, setSettingsLoaded] = useState<PlatformConfigLoadState>({
-    image: false,
-    proxy: false,
-    prompt: false,
-    llm: false,
-    baseline: false,
-  });
+
+  // 接入教程弹窗
   const [integrationGuide, setIntegrationGuide] = useState<PlatformIntegrationGuide | null>(null);
   const [integrationGuideError, setIntegrationGuideError] = useState("");
   const [integrationGuideBusy, setIntegrationGuideBusy] = useState(false);
   const [integrationGuidePlatformName, setIntegrationGuidePlatformName] = useState("");
 
-  const fileManagerRef = useRef<HTMLDivElement>(null);
-
   const existingPlatformKeys = useMemo(() => new Set(platforms.map((item) => item.platform_key)), [platforms]);
-
-  // 关闭右键菜单
-  useEffect(() => {
-    const handleClick = () => setContextMenu((prev) => ({ ...prev, visible: false }));
-    document.addEventListener("click", handleClick);
-    return () => document.removeEventListener("click", handleClick);
-  },[]);
 
   const loadData = async () => {
     setError("");
@@ -208,805 +78,31 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
     }
   };
 
-  const loadPlatformBaseline = async (platformId: number) => {
-    setBaselineError("");
-    try {
-      const result = await getPlatformBaseline(platformId);
-      const data = (result.data ?? {}) as { entries?: PlatformBaselineEntryItem[]; };
-      setBaselineEntries(data.entries ??[]);
-      setActivePlatformId(platformId);
-    } catch (loadError) {
-      setBaselineError(loadError instanceof Error ? loadError.message : "加载平台基线环境失败");
-    }
-  };
-
   useEffect(() => { void loadData(); }, [role]);
 
-  useEffect(() => {
-    if (!activePlatformId) {
-      setPlatformLlmError("");
-      setPlatformLlmForm({
-        enabled: true,
-        base_url: "",
-        model: "",
-        api_key: "",
-        extra_headers_text: "",
-        extra_body_text: "",
-        has_api_key: false,
-        network_enabled: true,
-        allowed_domains_text: "",
-        blocked_domains_text: "",
-        max_search_results: 8,
-        fetch_timeout_seconds: 30,
-      });
-      setShowPlatformLlmAdvanced(false);
-      setPromptError("");
-      setPromptForm({
-        enabled: true,
-        system_prompt: "",
-      });
-      setSettingsLoaded({ image: false, proxy: false, prompt: false, llm: false, baseline: true });
-      setRuntimeImageError("");
-      setRuntimeImageForm({
-        image: "",
-        resolvedImage: "",
-        recycledRuntimeCount: null,
-        guide: null,
-      });
-      setRuntimeImageLoaded(false);
-      setSandboxProxyError("");
-      setSandboxProxyForm({
-        enabled: false,
-        http_proxy: "",
-        https_proxy: "",
-        all_proxy: "",
-        no_proxy: "",
-        inherit_host_proxy: true,
-        recycledRuntimeCount: null,
-      });
-      setSandboxProxyLoaded(false);
-      return;
-    }
-  },[activePlatformId]);
-
-  useEffect(() => {
-    if (!activePlatformId || settingsLoaded[settingsView]) return;
-
-    if (settingsView === "baseline") {
-      setSettingsLoaded((current) => ({ ...current, baseline: true }));
-      return;
-    }
-
-    if (settingsView === "llm") {
-      void (async () => {
-        try {
-          setPlatformLlmError("");
-          const result = await getPlatformLlmConfig(activePlatformId);
-          const data = (result.data ?? null) as {
-            enabled: boolean;
-            base_url: string;
-            model: string;
-            has_api_key: boolean;
-            extra_headers?: Record<string, string>;
-            extra_body?: Record<string, unknown>;
-            network?: {
-              enabled?: boolean;
-              allowed_domains?: string[];
-              blocked_domains?: string[];
-              max_search_results?: number;
-              fetch_timeout_seconds?: number;
-            };
-            sampling?: {
-              temperature?: number | null;
-              frequency_penalty?: number | null;
-              presence_penalty?: number | null;
-              top_p?: number | null;
-              repetition_penalty?: number | null;
-            } | null;
-          } | null;
-          const s = data?.sampling;
-          setPlatformLlmForm({
-            enabled: data?.enabled ?? true,
-            base_url: data?.base_url ?? "",
-            model: data?.model ?? "",
-            api_key: "",
-            extra_headers_text: data?.extra_headers && Object.keys(data.extra_headers).length > 0 ? JSON.stringify(data.extra_headers, null, 2) : "",
-            extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
-            has_api_key: Boolean(data?.has_api_key),
-            network_enabled: data?.network?.enabled ?? true,
-            allowed_domains_text: (data?.network?.allowed_domains ??[]).join("\n"),
-            blocked_domains_text: (data?.network?.blocked_domains ??[]).join("\n"),
-            max_search_results: data?.network?.max_search_results ?? 8,
-            fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
-            sampling_temperature: s?.temperature != null ? String(s.temperature) : "",
-            sampling_frequency_penalty: s?.frequency_penalty != null ? String(s.frequency_penalty) : "",
-            sampling_presence_penalty: s?.presence_penalty != null ? String(s.presence_penalty) : "",
-            sampling_top_p: s?.top_p != null ? String(s.top_p) : "",
-            sampling_repetition_penalty: s?.repetition_penalty != null ? String(s.repetition_penalty) : "",
-          });
-          setShowPlatformLlmAdvanced(
-            Boolean(
-              (data?.extra_headers && Object.keys(data.extra_headers).length > 0) ||
-              (data?.extra_body && Object.keys(data.extra_body).length > 0),
-            ),
-          );
-          setSettingsLoaded((current) => ({ ...current, llm: true }));
-        } catch (err) {
-          setPlatformLlmError(err instanceof Error ? err.message : "加载平台 LLM 配置失败");
-        }
-      })();
-      return;
-    }
-
-    if (settingsView === "prompt") {
-      void (async () => {
-        try {
-          setPromptError("");
-          const result = await getPlatformPromptConfig(activePlatformId);
-          const data = (result.data ?? null) as {
-            enabled: boolean;
-            system_prompt: string;
-          } | null;
-          setPromptForm({
-            enabled: data?.enabled ?? true,
-            system_prompt: data?.system_prompt ?? "",
-          });
-          setSettingsLoaded((current) => ({ ...current, prompt: true }));
-        } catch (err) {
-          setPromptError(err instanceof Error ? err.message : "加载平台提示词配置失败");
-        }
-      })();
-      return;
-    }
-
-    if (settingsView === "proxy") {
-      void (async () => {
-        try {
-          setSandboxProxyError("");
-          const result = await getPlatformSandboxProxyConfig(activePlatformId);
-          const data = (result.data ?? null) as {
-            enabled?: boolean;
-            http_proxy?: string;
-            https_proxy?: string;
-            all_proxy?: string;
-            no_proxy?: string;
-            inherit_host_proxy?: boolean;
-            recycled_runtime_count?: number;
-          } | null;
-          setSandboxProxyForm({
-            enabled: data?.enabled ?? false,
-            http_proxy: data?.http_proxy ?? "",
-            https_proxy: data?.https_proxy ?? "",
-            all_proxy: data?.all_proxy ?? "",
-            no_proxy: data?.no_proxy ?? "",
-            inherit_host_proxy: data?.inherit_host_proxy ?? true,
-            recycledRuntimeCount: data?.recycled_runtime_count ?? null,
-          });
-          setSandboxProxyLoaded(true);
-          setSettingsLoaded((current) => ({ ...current, proxy: true }));
-        } catch (err) {
-          setSandboxProxyError(err instanceof Error ? err.message : "加载平台 sandbox 代理配置失败");
-        }
-      })();
-      return;
-    }
-
-    if (settingsView === "image") {
-      void (async () => {
-        try {
-          setRuntimeImageError("");
-          const [runtimeResult, guideResult] = await Promise.all([
-            getPlatformRuntimeImage(activePlatformId),
-            getPlatformRuntimeImageGuide(activePlatformId),
-          ]);
-          const runtimeData = (runtimeResult.data ?? null) as {
-            custom_image?: string | null;
-            resolved_image?: string;
-            recycled_runtime_count?: number;
-          } | null;
-          setRuntimeImageForm({
-            image: runtimeData?.custom_image ?? "",
-            resolvedImage: runtimeData?.resolved_image ?? "",
-            recycledRuntimeCount: runtimeData?.recycled_runtime_count ?? null,
-            guide: (guideResult.data ?? null) as PlatformRuntimeImageFormState["guide"],
-          });
-          setRuntimeImageLoaded(true);
-          setSettingsLoaded((current) => ({ ...current, image: true }));
-        } catch (err) {
-          setRuntimeImageError(err instanceof Error ? err.message : "加载平台运行镜像失败");
-        }
-      })();
-    }
-  }, [activePlatformId, settingsLoaded, settingsView]);
+  // 平台设置数据：按当前激活的设置视图懒加载，切换平台自动重置
+  const llm = usePlatformLlmConfig(activePlatformId, settingsView === "llm");
+  const prompt = usePlatformPromptConfig(activePlatformId, settingsView === "prompt");
+  const image = usePlatformRuntimeImage(activePlatformId, settingsView === "image", loadData);
+  const proxy = usePlatformSandboxProxy(activePlatformId, settingsView === "proxy", loadData);
+  const baseline = usePlatformBaseline(activePlatformId);
 
   useEffect(() => {
     if (!platforms.length) {
       setActivePlatformId(null);
-      setBaselineEntries([]);
       return;
     }
-    const requested = initialPlatformId ? platforms.find((item) => item.platform_id === initialPlatformId) : null;
-    const preferred = requested ?? platforms.find((item) => item.platform_key === "standalone") ?? platforms[0];
+    const preferred = platforms.find((item) => item.platform_key === "standalone") ?? platforms[0];
     const targetId = activePlatformId && platforms.some((item) => item.platform_id === activePlatformId) ? activePlatformId : preferred.platform_id;
-    void loadPlatformBaseline(targetId);
-  }, [initialPlatformId, platforms]);
+    setActivePlatformId(targetId);
+  }, [platforms]);
 
-  useEffect(() => {
-    if (!selectedBaselinePath) return;
-    if (!baselineEntries.some((item) => item.relative_path === selectedBaselinePath && item.kind === "file")) {
-      setSelectedBaselinePath("");
-      setSelectedBaselineContent("");
-      setSelectedBaselineMediaType("");
-      setSelectedBaselineTruncated(false);
-      setBaselineDirty(false);
-    }
-  },[baselineEntries, selectedBaselinePath]);
-
-  const handleCreatePlatform = async (e: FormEvent) => { 
+  const handleCreatePlatform = async (e: FormEvent) => {
     e.preventDefault();
     const normalizedPlatformKey = platformKey.trim().toLowerCase();
     if (existingPlatformKeys.has(normalizedPlatformKey)) { setError(`platform_key "${normalizedPlatformKey}" 已存在，请更换`); return; }
     if (normalizedPlatformKey === "standalone") { setError('platform_key "standalone" 为系统内置保留平台'); return; }
     try { setError(""); await createPlatform({ platform_key: normalizedPlatformKey, display_name: displayName.trim(), description: description.trim() }); setPlatformKey(""); setDisplayName(""); setDescription(""); await loadData(); } catch (err) { setError(err instanceof Error ? err.message : "平台注册失败"); }
-  };
-
-  // ---------------- 文件操作 ----------------
-
-  const getTargetUploadDir = () => currentBaselineDirectory || "work";
-
-  const handleBaselineFileUpload = async (file?: File | null) => {
-    if (!file || !activePlatformId) return;
-    try {
-      setBaselineError("");
-      await uploadPlatformBaselineFile(activePlatformId, getTargetUploadDir(), file);
-      await loadPlatformBaseline(activePlatformId);
-    } catch (submitError) { setBaselineError(submitError instanceof Error ? submitError.message : "上传平台基线文件失败"); }
-  };
-
-  const handleBaselineFolderUpload = async (files: FileList | null) => {
-    if (!files?.length || !activePlatformId) return;
-    const uploadItems = Array.from(files as unknown as DirectoryCapableFile[])
-      .map((file) => {
-        const relativePath = file.webkitRelativePath || file.name;
-        return relativePath ? { file, relativePath } : null;
-      })
-      .filter((item): item is { file: File; relativePath: string } => item !== null);
-
-    if (!uploadItems.length) {
-      setBaselineError("未能从所选文件夹中解析出有效文件。");
-      return;
-    }
-
-    try {
-      setBaselineError("");
-      const result = await importPlatformBaselineFileTree(activePlatformId, getTargetUploadDir(), uploadItems);
-      const data = (result.data ?? null) as PlatformBaselineBulkImportResult | null;
-      await loadPlatformBaseline(activePlatformId);
-      if (data?.imported_count) {
-        setBaselineError(`已导入 ${data.imported_count} 个文件。`);
-      }
-    } catch (submitError) {
-      setBaselineError(submitError instanceof Error ? submitError.message : "导入平台基线文件夹失败");
-    }
-  };
-
-  const handleBaselineSkillUpload = async (file: File) => {
-    if (!activePlatformId) return;
-    try {
-      setSkillUploadBusy(true);
-      setSkillUploadError("");
-      await uploadPlatformBaselineSkill(activePlatformId, file);
-      await loadPlatformBaseline(activePlatformId);
-    } catch (submitError) {
-      setSkillUploadError(submitError instanceof Error ? submitError.message : "上传技能失败");
-    } finally {
-      setSkillUploadBusy(false);
-    }
-  };
-
-  const buildSkillArchiveFromFolder = async (files: FileList | null) => {
-    if (!files?.length) return null;
-    const entries = Array.from(files as unknown as DirectoryCapableFile[])
-      .map((file) => {
-        const relativePath = file.webkitRelativePath || file.name;
-        return relativePath ? { file, relativePath } : null;
-      })
-      .filter((item): item is { file: File; relativePath: string } => item !== null);
-
-    if (!entries.length) {
-      throw new Error("未能从所选技能文件夹中解析出文件。");
-    }
-
-    const JSZipModule = await import("jszip");
-    const zip = new JSZipModule.default();
-    entries.forEach(({ file, relativePath }) => {
-      zip.file(relativePath, file);
-    });
-    const rootName = entries[0]?.relativePath.split("/")[0] || "skill-package";
-    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-    return new File([blob], `${rootName}.zip`, { type: "application/zip" });
-  };
-
-  const handleBaselineSkillFolderUpload = async (files: FileList | null) => {
-    if (!activePlatformId) return;
-    try {
-      setSkillUploadBusy(true);
-      setSkillUploadError("");
-      const archive = await buildSkillArchiveFromFolder(files);
-      if (!archive) return;
-      await uploadPlatformBaselineSkill(activePlatformId, archive);
-      await loadPlatformBaseline(activePlatformId);
-    } catch (submitError) {
-      setSkillUploadError(submitError instanceof Error ? submitError.message : "上传技能文件夹失败");
-    } finally {
-      setSkillUploadBusy(false);
-    }
-  };
-
-  const handleDownloadBaselineFile = async (fileRelativePath: string, fileName: string) => {
-    if (!activePlatformId) return;
-    try {
-      setBaselineError("");
-      const blob = await downloadPlatformBaselineFile(activePlatformId, fileRelativePath);
-      const url = window.URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url; anchor.download = fileName;
-      document.body.appendChild(anchor); anchor.click(); anchor.remove(); window.URL.revokeObjectURL(url);
-    } catch (err) { setBaselineError(err instanceof Error ? err.message : "下载失败"); }
-  };
-
-  const handleDeleteBaselineFile = async (relativePath: string) => {
-    if (!activePlatformId) return;
-    if (["skills", "work", "logs"].includes(relativePath)) {
-      setBaselineError("根目录不允许删除。"); return;
-    }
-    if (!window.confirm(`确定要删除 ${relativePath} 吗？此操作不可恢复。`)) return;
-    try {
-      setBaselineError("");
-      await deletePlatformBaselineFile(activePlatformId, relativePath);
-      if (selectedBaselinePath === relativePath || selectedBaselinePath.startsWith(`${relativePath}/`)) {
-        setSelectedBaselinePath(""); setSelectedBaselineContent(""); setBaselineDirty(false);
-      }
-      await loadPlatformBaseline(activePlatformId);
-    } catch (err) { setBaselineError(err instanceof Error ? err.message : "删除失败"); }
-  };
-
-  const buildRenameTargetPath = (sourcePath: string) => {
-    const normalized = sourcePath.replace(/\\/g, "/");
-    const segments = normalized.split("/");
-    const currentName = segments.pop() ?? normalized;
-    const parentPath = segments.join("/");
-    return {
-      currentName,
-      parentPath,
-      targetPath: parentPath ? `${parentPath}/${currentName}` : currentName,
-    };
-  };
-
-  const openPathModal = (sourcePath: string, mode: "move" | "rename") => {
-    if (["skills", "work", "logs"].includes(sourcePath)) {
-      setBaselineError(mode === "rename" ? "根目录不允许重命名。" : "根目录不允许移动。");
-      return;
-    }
-    setMoveModalMode(mode);
-    setMoveModalSourcePath(sourcePath);
-    if (mode === "rename") {
-      const renameState = buildRenameTargetPath(sourcePath);
-      setMoveModalTargetPath(renameState.targetPath);
-    } else {
-      setMoveModalTargetPath(sourcePath);
-    }
-    setMoveModalError("");
-  };
-
-  const closeMoveModal = () => {
-    setMoveModalMode("move");
-    setMoveModalSourcePath("");
-    setMoveModalTargetPath("");
-    setMoveModalError("");
-    setMoveModalBusy(false);
-  };
-
-  const handleMoveBaselinePath = async () => {
-    if (!activePlatformId || !moveModalSourcePath) return;
-    const targetPath = moveModalTargetPath.trim();
-    if (!targetPath || targetPath === moveModalSourcePath) {
-      setMoveModalError("请输入新的目标路径。");
-      return;
-    }
-    try {
-      setMoveModalBusy(true);
-      setMoveModalError("");
-      await movePlatformBaselinePath(activePlatformId, moveModalSourcePath, targetPath);
-      if (selectedBaselinePath === moveModalSourcePath) {
-        setSelectedBaselinePath(targetPath);
-      } else if (selectedBaselinePath.startsWith(`${moveModalSourcePath}/`)) {
-        setSelectedBaselinePath(selectedBaselinePath.replace(moveModalSourcePath, targetPath));
-      }
-      await loadPlatformBaseline(activePlatformId);
-      closeMoveModal();
-    } catch (err) {
-      setMoveModalError(err instanceof Error ? err.message : moveModalMode === "rename" ? "重命名失败" : "移动失败");
-      setMoveModalBusy(false);
-    }
-  };
-
-  const handleSaveBaselineText = async () => {
-    if (!activePlatformId || !selectedBaselinePath) return;
-    try {
-      setBaselineError("");
-      await savePlatformBaselineTextFile(activePlatformId, selectedBaselinePath, selectedBaselineContent);
-      setBaselineDirty(false);
-      await loadPlatformBaseline(activePlatformId);
-    } catch (err) { setBaselineError(err instanceof Error ? err.message : "保存失败"); }
-  };
-
-  const handleCreateBaselineFile = async () => {
-    if (!activePlatformId) return;
-    const targetDir = getTargetUploadDir();
-    const filename = window.prompt(`输入新文件名 (当前目录：${targetDir})`, `new-file.txt`);
-    if (!filename?.trim()) return;
-    const fullPath = targetDir ? `${targetDir}/${filename.trim()}` : filename.trim();
-    try {
-      setBaselineError("");
-      await savePlatformBaselineTextFile(activePlatformId, fullPath, "");
-      await loadPlatformBaseline(activePlatformId);
-      handleSelectFile({ name: filename.trim(), relative_path: fullPath, section: "work", kind: "file", size: 0, media_type: "text/plain" });
-    } catch (err) { setBaselineError(err instanceof Error ? err.message : "创建文件失败"); }
-  };
-
-  const handleCreateBaselineDirectory = async () => {
-    if (!activePlatformId) return;
-    const targetDir = getTargetUploadDir();
-    const directoryName = window.prompt(`输入新目录名 (当前目录：${targetDir})`, `new-folder`);
-    if (!directoryName?.trim()) return;
-    const fullPath = targetDir ? `${targetDir}/${directoryName.trim()}` : directoryName.trim();
-    try {
-      setBaselineError("");
-      await createPlatformBaselineDirectory(activePlatformId, fullPath);
-      await loadPlatformBaseline(activePlatformId);
-    } catch (err) { setBaselineError(err instanceof Error ? err.message : "创建目录失败"); }
-  };
-
-  // ---------------- 视图驱动逻辑 ----------------
-
-  const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
-  const settingsTabs: Array<{ key: PlatformSettingsView; title: string; description: string }> = [
-    { key: "image", title: t("admin.tab.image"), description: t("admin.tab.imageDesc") },
-    { key: "proxy", title: t("admin.tab.proxy"), description: t("admin.tab.proxyDesc") },
-    { key: "prompt", title: t("admin.tab.prompt"), description: t("admin.tab.promptDesc") },
-    { key: "llm", title: t("admin.tab.llm"), description: t("admin.tab.llmDesc") },
-    { key: "baseline", title: t("admin.tab.baseline"), description: t("admin.tab.baselineDesc") },
-  ];
-
-  const parseJsonObject = (raw: string, label: string) => {
-    const trimmed = raw.trim();
-    if (!trimmed) return {};
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error(`${label}必须是 JSON 对象`);
-      }
-      return parsed as Record<string, unknown>;
-    } catch (err) {
-      throw new Error(err instanceof Error ? err.message : `${label}解析失败`);
-    }
-  };
-
-  const parseLineList = (raw: string) =>
-    raw
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-  const handleSavePlatformLlm = async () => {
-    if (!activePlatformId) return;
-    try {
-      setPlatformLlmBusy(true);
-      setPlatformLlmError("");
-      await updatePlatformLlmConfig(activePlatformId, {
-        enabled: platformLlmForm.enabled,
-        base_url: platformLlmForm.base_url.trim(),
-        model: platformLlmForm.model.trim(),
-        api_key: platformLlmForm.api_key.trim() || undefined,
-        extra_headers: parseJsonObject(platformLlmForm.extra_headers_text, "扩展请求头") as Record<string, string>,
-        extra_body: parseJsonObject(platformLlmForm.extra_body_text, "扩展请求体"),
-        network: {
-          enabled: platformLlmForm.network_enabled,
-          allowed_domains: parseLineList(platformLlmForm.allowed_domains_text),
-          blocked_domains: parseLineList(platformLlmForm.blocked_domains_text),
-          max_search_results: platformLlmForm.max_search_results,
-          fetch_timeout_seconds: platformLlmForm.fetch_timeout_seconds,
-        },
-        sampling: {
-          temperature: platformLlmForm.sampling_temperature.trim() ? Number(platformLlmForm.sampling_temperature) : null,
-          frequency_penalty: platformLlmForm.sampling_frequency_penalty.trim() ? Number(platformLlmForm.sampling_frequency_penalty) : null,
-          presence_penalty: platformLlmForm.sampling_presence_penalty.trim() ? Number(platformLlmForm.sampling_presence_penalty) : null,
-          top_p: platformLlmForm.sampling_top_p.trim() ? Number(platformLlmForm.sampling_top_p) : null,
-          repetition_penalty: platformLlmForm.sampling_repetition_penalty.trim() ? Number(platformLlmForm.sampling_repetition_penalty) : null,
-        },
-      });
-      const latest = await getPlatformLlmConfig(activePlatformId);
-      const data = (latest.data ?? null) as {
-        enabled: boolean;
-        base_url: string;
-        model: string;
-        has_api_key: boolean;
-        extra_headers?: Record<string, string>;
-        extra_body?: Record<string, unknown>;
-        network?: {
-          enabled?: boolean;
-          allowed_domains?: string[];
-          blocked_domains?: string[];
-          max_search_results?: number;
-          fetch_timeout_seconds?: number;
-        };
-        sampling?: {
-          temperature?: number | null;
-          frequency_penalty?: number | null;
-          presence_penalty?: number | null;
-          top_p?: number | null;
-          repetition_penalty?: number | null;
-        } | null;
-      } | null;
-      const s = data?.sampling;
-      setPlatformLlmForm({
-        enabled: data?.enabled ?? true,
-        base_url: data?.base_url ?? "",
-        model: data?.model ?? "",
-        api_key: "",
-        extra_headers_text: data?.extra_headers && Object.keys(data.extra_headers).length > 0 ? JSON.stringify(data.extra_headers, null, 2) : "",
-        extra_body_text: data?.extra_body && Object.keys(data.extra_body).length > 0 ? JSON.stringify(data.extra_body, null, 2) : "",
-        has_api_key: Boolean(data?.has_api_key),
-        network_enabled: data?.network?.enabled ?? true,
-        allowed_domains_text: (data?.network?.allowed_domains ??[]).join("\n"),
-        blocked_domains_text: (data?.network?.blocked_domains ??[]).join("\n"),
-        max_search_results: data?.network?.max_search_results ?? 8,
-        fetch_timeout_seconds: data?.network?.fetch_timeout_seconds ?? 30,
-        sampling_temperature: s?.temperature != null ? String(s.temperature) : "",
-        sampling_frequency_penalty: s?.frequency_penalty != null ? String(s.frequency_penalty) : "",
-        sampling_presence_penalty: s?.presence_penalty != null ? String(s.presence_penalty) : "",
-        sampling_top_p: s?.top_p != null ? String(s.top_p) : "",
-        sampling_repetition_penalty: s?.repetition_penalty != null ? String(s.repetition_penalty) : "",
-      });
-      setShowPlatformLlmAdvanced(
-        Boolean(
-          (data?.extra_headers && Object.keys(data.extra_headers).length > 0) ||
-          (data?.extra_body && Object.keys(data.extra_body).length > 0),
-        ),
-      );
-    } catch (err) {
-      setPlatformLlmError(err instanceof Error ? err.message : "保存平台 LLM 配置失败");
-    } finally {
-      setPlatformLlmBusy(false);
-    }
-  };
-
-  const handleResetPlatformLlm = async () => {
-    if (!activePlatformId) return;
-    if (!window.confirm("确定删除该平台的专属 LLM 配置并回退到全局默认吗？")) return;
-    try {
-      setPlatformLlmBusy(true);
-      setPlatformLlmError("");
-      await deletePlatformLlmConfig(activePlatformId);
-      setPlatformLlmForm({
-        enabled: true,
-        base_url: "",
-        model: "",
-        api_key: "",
-        extra_headers_text: "",
-        extra_body_text: "",
-        has_api_key: false,
-        network_enabled: true,
-        allowed_domains_text: "",
-        blocked_domains_text: "",
-        max_search_results: 8,
-        fetch_timeout_seconds: 30,
-        sampling_temperature: "",
-        sampling_frequency_penalty: "",
-        sampling_presence_penalty: "",
-        sampling_top_p: "",
-        sampling_repetition_penalty: "",
-      });
-      setShowPlatformLlmAdvanced(false);
-    } catch (err) {
-      setPlatformLlmError(err instanceof Error ? err.message : "删除平台 LLM 配置失败");
-    } finally {
-      setPlatformLlmBusy(false);
-    }
-  };
-
-  const handleSavePlatformPrompt = async () => {
-    if (!activePlatformId) return;
-    try {
-      setPromptBusy(true);
-      setPromptError("");
-      await updatePlatformPromptConfig(activePlatformId, {
-        enabled: promptForm.enabled,
-        system_prompt: promptForm.system_prompt,
-      });
-      const latest = await getPlatformPromptConfig(activePlatformId);
-      const data = (latest.data ?? null) as {
-        enabled: boolean;
-        system_prompt: string;
-      } | null;
-      setPromptForm({
-        enabled: data?.enabled ?? true,
-        system_prompt: data?.system_prompt ?? "",
-      });
-    } catch (err) {
-      setPromptError(err instanceof Error ? err.message : "保存平台提示词配置失败");
-    } finally {
-      setPromptBusy(false);
-    }
-  };
-
-  const handleSavePlatformRuntimeImage = async () => {
-    if (!activePlatformId) return;
-    try {
-      setRuntimeImageBusy(true);
-      setRuntimeImageError("");
-      const result = await updatePlatformRuntimeImage(activePlatformId, {
-        image: runtimeImageForm.image.trim(),
-      });
-      const data = (result.data ?? {}) as {
-        custom_image?: string | null;
-        resolved_image?: string;
-        recycled_runtime_count?: number;
-      };
-      setRuntimeImageForm({
-        image: data.custom_image ?? "",
-        resolvedImage: data.resolved_image ?? "",
-        recycledRuntimeCount: data.recycled_runtime_count ?? null,
-        guide: runtimeImageForm.guide,
-      });
-      await loadData();
-    } catch (err) {
-      setRuntimeImageError(err instanceof Error ? err.message : "保存平台运行镜像失败");
-    } finally {
-      setRuntimeImageBusy(false);
-    }
-  };
-
-  const handleSavePlatformSandboxProxy = async () => {
-    if (!activePlatformId) return;
-    try {
-      setSandboxProxyBusy(true);
-      setSandboxProxyError("");
-      const result = await updatePlatformSandboxProxyConfig(activePlatformId, {
-        enabled: sandboxProxyForm.enabled,
-        http_proxy: sandboxProxyForm.http_proxy.trim(),
-        https_proxy: sandboxProxyForm.https_proxy.trim(),
-        all_proxy: sandboxProxyForm.all_proxy.trim(),
-        no_proxy: sandboxProxyForm.no_proxy.trim(),
-        inherit_host_proxy: sandboxProxyForm.inherit_host_proxy,
-      });
-      const data = (result.data ?? {}) as {
-        enabled?: boolean;
-        http_proxy?: string;
-        https_proxy?: string;
-        all_proxy?: string;
-        no_proxy?: string;
-        inherit_host_proxy?: boolean;
-        recycled_runtime_count?: number;
-      };
-      setSandboxProxyForm({
-        enabled: data.enabled ?? false,
-        http_proxy: data.http_proxy ?? "",
-        https_proxy: data.https_proxy ?? "",
-        all_proxy: data.all_proxy ?? "",
-        no_proxy: data.no_proxy ?? "",
-        inherit_host_proxy: data.inherit_host_proxy ?? true,
-        recycledRuntimeCount: data.recycled_runtime_count ?? null,
-      });
-      await loadData();
-    } catch (err) {
-      setSandboxProxyError(err instanceof Error ? err.message : "保存平台 sandbox 代理配置失败");
-    } finally {
-      setSandboxProxyBusy(false);
-    }
-  };
-
-  const handleResetPlatformSandboxProxy = async () => {
-    if (!activePlatformId) return;
-    if (!window.confirm("确定删除该平台的专属 sandbox 代理配置并回退到全局默认吗？")) return;
-    try {
-      setSandboxProxyBusy(true);
-      setSandboxProxyError("");
-      const result = await deletePlatformSandboxProxyConfig(activePlatformId);
-      const data = (result.data ?? {}) as {
-        enabled?: boolean;
-        http_proxy?: string;
-        https_proxy?: string;
-        all_proxy?: string;
-        no_proxy?: string;
-        inherit_host_proxy?: boolean;
-        recycled_runtime_count?: number;
-      };
-      setSandboxProxyForm({
-        enabled: data.enabled ?? false,
-        http_proxy: data.http_proxy ?? "",
-        https_proxy: data.https_proxy ?? "",
-        all_proxy: data.all_proxy ?? "",
-        no_proxy: data.no_proxy ?? "",
-        inherit_host_proxy: data.inherit_host_proxy ?? true,
-        recycledRuntimeCount: data.recycled_runtime_count ?? null,
-      });
-      await loadData();
-    } catch (err) {
-      setSandboxProxyError(err instanceof Error ? err.message : "清除平台 sandbox 代理配置失败");
-    } finally {
-      setSandboxProxyBusy(false);
-    }
-  };
-
-  const handleResetPlatformRuntimeImage = async () => {
-    if (!activePlatformId) return;
-    if (!window.confirm("确定清除该平台的专属运行镜像并回退到全局默认吗？")) return;
-    try {
-      setRuntimeImageBusy(true);
-      setRuntimeImageError("");
-      const result = await deletePlatformRuntimeImage(activePlatformId);
-      const data = (result.data ?? {}) as {
-        custom_image?: string | null;
-        resolved_image?: string;
-        recycled_runtime_count?: number;
-      };
-      setRuntimeImageForm({
-        image: data.custom_image ?? "",
-        resolvedImage: data.resolved_image ?? "",
-        recycledRuntimeCount: data.recycled_runtime_count ?? null,
-        guide: runtimeImageForm.guide,
-      });
-      await loadData();
-    } catch (err) {
-      setRuntimeImageError(err instanceof Error ? err.message : "清除平台运行镜像失败");
-    } finally {
-      setRuntimeImageBusy(false);
-    }
-  };
-
-  const handleUploadPlatformRuntimeImage = async (file: File | null) => {
-    if (!activePlatformId || !file) return;
-    try {
-      setRuntimeImageBusy(true);
-      setRuntimeImageError("");
-      const result = await uploadPlatformRuntimeImage(activePlatformId, file);
-      const data = (result.data ?? {}) as {
-        custom_image?: string | null;
-        resolved_image?: string;
-        recycled_runtime_count?: number;
-      };
-      setRuntimeImageForm((current) => ({
-        ...current,
-        image: data.custom_image ?? "",
-        resolvedImage: data.resolved_image ?? "",
-        recycledRuntimeCount: data.recycled_runtime_count ?? null,
-      }));
-      await loadData();
-    } catch (err) {
-      setRuntimeImageError(err instanceof Error ? err.message : "上传平台运行镜像失败");
-    } finally {
-      setRuntimeImageBusy(false);
-    }
-  };
-
-  const handleResetPlatformPrompt = async () => {
-    if (!activePlatformId) return;
-    if (!window.confirm("确定删除该平台的专属系统提示词配置吗？")) return;
-    try {
-      setPromptBusy(true);
-      setPromptError("");
-      await deletePlatformPromptConfig(activePlatformId);
-      setPromptForm({
-        enabled: true,
-        system_prompt: "",
-      });
-    } catch (err) {
-      setPromptError(err instanceof Error ? err.message : "删除平台提示词配置失败");
-    } finally {
-      setPromptBusy(false);
-    }
   };
 
   const handleOpenIntegrationGuide = async (platform: PlatformItem) => {
@@ -1043,31 +139,28 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         <span key={`placeholder-${index}`} className="guide-placeholder">
           {part}
         </span>
-      ) : (
-        part
-      ),
+      ) : part,
     );
   };
 
   // 面包屑解析
   const breadcrumbs = useMemo(() => {
-    if (!currentBaselineDirectory) return[];
-    const parts = currentBaselineDirectory.split("/");
+    if (!baseline.currentDirectory) return [];
+    const parts = baseline.currentDirectory.split("/");
     return parts.map((part, index) => ({
       name: part,
-      path: parts.slice(0, index + 1).join("/")
+      path: parts.slice(0, index + 1).join("/"),
     }));
-  },[currentBaselineDirectory]);
+  }, [baseline.currentDirectory]);
 
   // 当前目录内容 (仅限一层)
   const currentDirectoryChildren = useMemo(() => {
-    const prefix = currentBaselineDirectory ? `${currentBaselineDirectory}/` : "";
-    return baselineEntries.filter((item) => {
-      // 在根目录下时，只显示基础 5 个目录
-      if (!currentBaselineDirectory) {
+    const prefix = baseline.currentDirectory ? `${baseline.currentDirectory}/` : "";
+    return baseline.entries.filter((item) => {
+      if (!baseline.currentDirectory) {
         return !item.relative_path.includes("/");
       }
-      if (item.relative_path === currentBaselineDirectory) return false;
+      if (item.relative_path === baseline.currentDirectory) return false;
       if (!item.relative_path.startsWith(prefix)) return false;
       const rest = item.relative_path.slice(prefix.length);
       return !rest.includes("/");
@@ -1075,56 +168,30 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
       if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
-  }, [baselineEntries, currentBaselineDirectory]);
+  }, [baseline.entries, baseline.currentDirectory]);
 
-  // ---------------- 交互事件 ----------------
+  const activePlatform = platforms.find((item) => item.platform_id === activePlatformId) ?? null;
 
-  const handleDoubleClickItem = (item: PlatformBaselineEntryItem) => {
-    if (item.kind === "directory") {
-      setCurrentBaselineDirectory(item.relative_path);
-      setSelectedBaselinePath("");
-      setBaselineDirty(false);
-    } else {
-      void handleSelectFile(item);
-    }
+  const settingsTabs: Array<{ key: PlatformSettingsView; title: string; description: string }> = [
+    { key: "image", title: t("admin.tab.image"), description: t("admin.tab.imageDesc") },
+    { key: "proxy", title: t("admin.tab.proxy"), description: t("admin.tab.proxyDesc") },
+    { key: "prompt", title: t("admin.tab.prompt"), description: t("admin.tab.promptDesc") },
+    { key: "llm", title: t("admin.tab.llm"), description: t("admin.tab.llmDesc") },
+    { key: "baseline", title: t("admin.tab.baseline"), description: t("admin.tab.baselineDesc") },
+  ];
+
+  const settingsLoaded: Record<PlatformSettingsView, boolean> = {
+    image: image.loaded, proxy: proxy.loaded, prompt: prompt.loaded, llm: llm.loaded, baseline: true,
   };
-
-  const handleSelectFile = async (item: PlatformBaselineEntryItem) => {
-    if (!activePlatformId || item.kind === "directory") return;
-    try {
-      setBaselineError("");
-      const result = await getPlatformBaselineFileContent(activePlatformId, item.relative_path);
-      const data = (result.data ?? {}) as { content?: string; media_type?: string; truncated?: boolean; };
-      setSelectedBaselinePath(item.relative_path);
-      setSelectedBaselineContent(data.content ?? "");
-      setSelectedBaselineMediaType(data.media_type ?? item.media_type);
-      setSelectedBaselineTruncated(Boolean(data.truncated));
-      setBaselineDirty(false);
-    } catch (err) { setBaselineError(err instanceof Error ? err.message : "读取文件失败"); }
-  };
-
-  const handleContextMenu = (e: React.MouseEvent, item: PlatformBaselineEntryItem) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    // Calculate position slightly offset to ensure cursor doesn't instantly trigger a sub-hover
-    setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      item,
-    });
-  };
-
-  const shouldShowWorkbenchSkeleton = Boolean(activePlatformId) && !activePlatform;
   const isSettingsPanelReady = settingsLoaded[settingsView];
+  const shouldShowWorkbenchSkeleton = Boolean(activePlatformId) && !activePlatform;
 
   return (
     <section className="admin-panel">
       {error ? <div className="admin-panel__error epic-error">{error}</div> : null}
 
       {/* 平台注册表单（仅系统管理员） */}
-      {role === "system_admin" && mode === "overview" ? (
+      {role === "system_admin" ? (
         <div className="epic-glass admin-panel__create-card stagger-3">
           <AdminForms
             platformKey={platformKey}
@@ -1138,16 +205,14 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         </div>
       ) : null}
 
-      {mode === "overview" ? (
-        <div className="epic-glass stagger-4">
-          <PlatformList
-            platforms={platforms}
-            activePlatformId={activePlatformId}
-            onSelect={(platformId) => void loadPlatformBaseline(platformId)}
-            onOpenGuide={(platform) => void handleOpenIntegrationGuide(platform)}
-          />
-        </div>
-      ) : null}
+      <div className="epic-glass stagger-4">
+        <PlatformList
+          platforms={platforms}
+          activePlatformId={activePlatformId}
+          onSelect={setActivePlatformId}
+          onOpenGuide={(platform) => void handleOpenIntegrationGuide(platform)}
+        />
+      </div>
 
       {/* ================= 平台工作台 ================= */}
       {shouldShowWorkbenchSkeleton ? <PlatformWorkbenchSkeleton /> : null}
@@ -1184,80 +249,78 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
               {settingsView === "image" && isSettingsPanelReady ? (
                 <PlatformRuntimeImagePanel
                   platformName={activePlatform.display_name}
-                  runtimeImageForm={runtimeImageForm}
-                  runtimeImageError={runtimeImageError}
-                  runtimeImageBusy={runtimeImageBusy}
-                  onChange={setRuntimeImageForm}
-                  onSave={() => void handleSavePlatformRuntimeImage()}
-                  onReset={() => void handleResetPlatformRuntimeImage()}
-                  onUpload={(file) => void handleUploadPlatformRuntimeImage(file)}
+                  runtimeImageForm={image.form}
+                  runtimeImageError={image.error}
+                  runtimeImageBusy={image.busy}
+                  onChange={image.setForm}
+                  onSave={() => void image.save()}
+                  onReset={() => void image.reset()}
+                  onUpload={(file) => void image.upload(file)}
                 />
               ) : null}
 
               {settingsView === "proxy" && isSettingsPanelReady ? (
                 <PlatformSandboxProxyPanel
-                  sandboxProxyForm={sandboxProxyForm}
-                  sandboxProxyError={sandboxProxyError}
-                  sandboxProxyBusy={sandboxProxyBusy}
-                  onChange={setSandboxProxyForm}
-                  onSave={() => void handleSavePlatformSandboxProxy()}
-                  onReset={() => void handleResetPlatformSandboxProxy()}
+                  sandboxProxyForm={proxy.form}
+                  sandboxProxyError={proxy.error}
+                  sandboxProxyBusy={proxy.busy}
+                  onChange={proxy.setForm}
+                  onSave={() => void proxy.save()}
+                  onReset={() => void proxy.reset()}
                 />
               ) : null}
 
               {settingsView === "prompt" && isSettingsPanelReady ? (
                 <PlatformPromptPanel
-                  promptForm={promptForm}
-                  promptError={promptError}
-                  promptBusy={promptBusy}
-                  onChange={setPromptForm}
-                  onSave={() => void handleSavePlatformPrompt()}
-                  onReset={() => void handleResetPlatformPrompt()}
+                  promptForm={prompt.form}
+                  promptError={prompt.error}
+                  promptBusy={prompt.busy}
+                  onChange={prompt.setForm}
+                  onSave={() => void prompt.save()}
+                  onReset={() => void prompt.reset()}
                 />
               ) : null}
 
               {settingsView === "llm" && isSettingsPanelReady ? (
                 <PlatformLlmPanel
-                  platformLlmForm={platformLlmForm}
-                  platformLlmError={platformLlmError}
-                  platformLlmBusy={platformLlmBusy}
-                  showPlatformLlmAdvanced={showPlatformLlmAdvanced}
-                  onToggleAdvanced={setShowPlatformLlmAdvanced}
-                  onChange={setPlatformLlmForm}
-                  onSave={() => void handleSavePlatformLlm()}
-                  onReset={() => void handleResetPlatformLlm()}
+                  platformLlmForm={llm.form}
+                  platformLlmError={llm.error}
+                  platformLlmBusy={llm.busy}
+                  showPlatformLlmAdvanced={llm.showAdvanced}
+                  onToggleAdvanced={llm.setShowAdvanced}
+                  onChange={llm.setForm}
+                  onSave={() => void llm.save()}
+                  onReset={() => void llm.reset()}
                 />
               ) : null}
 
-              {settingsView === "baseline" && isSettingsPanelReady ? (
+              {settingsView === "baseline" ? (
                 <BaselineManager
+                  showMcp
                   activePlatform={activePlatform}
-                  baselineError={baselineError}
-                  fileManagerRef={fileManagerRef}
+                  baselineError={baseline.error}
+                  fileManagerRef={baseline.fileManagerRef}
                   breadcrumbs={breadcrumbs}
                   currentDirectoryChildren={currentDirectoryChildren}
-                  currentBaselineDirectory={currentBaselineDirectory}
-                  selectedBaselinePath={selectedBaselinePath}
-                  selectedBaselineContent={selectedBaselineContent}
-                  selectedBaselineMediaType={selectedBaselineMediaType}
-                  selectedBaselineTruncated={selectedBaselineTruncated}
-                  baselineDirty={baselineDirty}
-                  onGoHome={() => { setCurrentBaselineDirectory(""); setSelectedBaselinePath(""); }}
-                  onGoBreadcrumb={(path) => { setCurrentBaselineDirectory(path); setSelectedBaselinePath(""); }}
-                  onCreateDirectory={() => void handleCreateBaselineDirectory()}
-                  onCreateFile={() => void handleCreateBaselineFile()}
-                  onUploadFile={(file) => void handleBaselineFileUpload(file)}
-                  onUploadFolder={(files) => void handleBaselineFolderUpload(files)}
-                  onOpenSkillUpload={() => {
-                    setSkillUploadError("");
-                    setShowSkillUploadModal(true);
-                  }}
-                  onSelectFile={(item) => void handleSelectFile(item)}
-                  onDoubleClickItem={handleDoubleClickItem}
-                  onContextMenu={handleContextMenu}
-                  onContentChange={(value) => { setSelectedBaselineContent(value); setBaselineDirty(true); }}
-                  onSaveText={() => void handleSaveBaselineText()}
-                  onClosePreview={() => { setSelectedBaselinePath(""); setSelectedBaselineContent(""); }}
+                  currentBaselineDirectory={baseline.currentDirectory}
+                  selectedBaselinePath={baseline.selectedPath}
+                  selectedBaselineContent={baseline.selectedContent}
+                  selectedBaselineMediaType={baseline.selectedMediaType}
+                  selectedBaselineTruncated={baseline.selectedTruncated}
+                  baselineDirty={baseline.dirty}
+                  onGoHome={() => { baseline.setCurrentDirectory(""); baseline.setSelectedPath(""); }}
+                  onGoBreadcrumb={(path) => { baseline.setCurrentDirectory(path); baseline.setSelectedPath(""); }}
+                  onCreateDirectory={() => void baseline.handleCreateDirectory()}
+                  onCreateFile={() => void baseline.handleCreateFile()}
+                  onUploadFile={(file) => void baseline.handleUploadFile(file)}
+                  onUploadFolder={(files) => void baseline.handleUploadFolder(files)}
+                  onOpenSkillUpload={() => { baseline.setSkillUploadError(""); baseline.setSkillUploadVisible(true); }}
+                  onSelectFile={(item) => void baseline.handleSelectFile(item)}
+                  onDoubleClickItem={baseline.handleDoubleClickItem}
+                  onContextMenu={baseline.handleContextMenu}
+                  onContentChange={baseline.handleContentChange}
+                  onSaveText={() => void baseline.handleSaveText()}
+                  onClosePreview={() => { baseline.setSelectedPath(""); }}
                 />
               ) : null}
             </div>
@@ -1266,13 +329,13 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
       ) : null}
 
       <BaselineContextMenu
-        contextMenu={contextMenu}
-        onOpenDirectory={() => { handleDoubleClickItem(contextMenu.item!); setContextMenu({ ...contextMenu, visible: false}); }}
-        onEditFile={() => { void handleSelectFile(contextMenu.item!); setContextMenu({ ...contextMenu, visible: false}); }}
-        onDownloadFile={() => { void handleDownloadBaselineFile(contextMenu.item!.relative_path, contextMenu.item!.name); setContextMenu({ ...contextMenu, visible: false}); }}
-        onMove={() => { openPathModal(contextMenu.item!.relative_path, "move"); setContextMenu({ ...contextMenu, visible: false}); }}
-        onRename={() => { openPathModal(contextMenu.item!.relative_path, "rename"); setContextMenu({ ...contextMenu, visible: false}); }}
-        onDelete={() => { void handleDeleteBaselineFile(contextMenu.item!.relative_path); setContextMenu({ ...contextMenu, visible: false}); }}
+        contextMenu={baseline.contextMenu}
+        onOpenDirectory={() => { baseline.handleDoubleClickItem(baseline.contextMenu.item!); }}
+        onEditFile={() => { void baseline.handleSelectFile(baseline.contextMenu.item!); }}
+        onDownloadFile={() => { void baseline.handleDownload(baseline.contextMenu.item!.relative_path, baseline.contextMenu.item!.name); }}
+        onMove={() => { baseline.openMoveModal(baseline.contextMenu.item!.relative_path, "move"); }}
+        onRename={() => { baseline.openMoveModal(baseline.contextMenu.item!.relative_path, "rename"); }}
+        onDelete={() => { void baseline.handleDelete(baseline.contextMenu.item!.relative_path); }}
       />
       <IntegrationGuideModal
         integrationGuide={integrationGuide}
@@ -1284,24 +347,24 @@ export function AdminPanel({ role, mode = "overview", initialPlatformId = null }
         onClose={closeIntegrationGuide}
       />
       <SkillUploadModal
-        visible={showSkillUploadModal}
-        busy={skillUploadBusy}
-        error={skillUploadError}
+        visible={baseline.skillUploadVisible}
+        busy={baseline.skillUploadBusy}
+        error={baseline.skillUploadError}
         platformName={activePlatform?.display_name ?? ""}
-        onClose={() => setShowSkillUploadModal(false)}
-        onUpload={(file) => handleBaselineSkillUpload(file)}
-        onUploadFolder={(files) => handleBaselineSkillFolderUpload(files)}
+        onClose={() => baseline.setSkillUploadVisible(false)}
+        onUpload={(file) => baseline.handleSkillUpload(file)}
+        onUploadFolder={(files) => baseline.handleSkillFolderUpload(files)}
       />
       <BaselineMoveModal
-        visible={Boolean(moveModalSourcePath)}
-        busy={moveModalBusy}
-        error={moveModalError}
-        mode={moveModalMode}
-        sourcePath={moveModalSourcePath}
-        targetPath={moveModalTargetPath}
-        onTargetPathChange={setMoveModalTargetPath}
-        onClose={closeMoveModal}
-        onSubmit={() => void handleMoveBaselinePath()}
+        visible={Boolean(baseline.moveState.sourcePath)}
+        busy={baseline.moveBusy}
+        error={baseline.moveError}
+        mode={baseline.moveState.mode}
+        sourcePath={baseline.moveState.sourcePath}
+        targetPath={baseline.moveState.targetPath}
+        onTargetPathChange={(value) => baseline.setMoveState({ ...baseline.moveState, targetPath: value })}
+        onClose={baseline.closeMoveModal}
+        onSubmit={() => void baseline.handleMove()}
       />
     </section>
   );
