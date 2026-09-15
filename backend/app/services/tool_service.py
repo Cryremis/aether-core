@@ -800,16 +800,22 @@ class ToolService:
                 raise RuntimeError(
                     f"宿主工具 {descriptor['name']} 调用失败（HTTP {response.status_code}）：{detail}"
                 )
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"宿主工具 {descriptor['name']} 返回了无效 JSON: {response.text[:2000]}"
+                ) from exc
 
         return data if isinstance(data, dict) else {"result": data}
 
     @staticmethod
     def _host_error_detail(response: httpx.Response) -> str:
         """Preserve a bounded host explanation so the model can recover intelligently."""
+        text = response.text
         try:
-            payload = response.json()
-        except ValueError:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
             payload = None
         candidates: list[Any] = []
         if isinstance(payload, dict):
@@ -819,7 +825,7 @@ class ToolService:
                 candidates.extend((error.get("message"), error.get("detail")))
             else:
                 candidates.append(error)
-        candidates.append(response.text)
+        candidates.append(text)
         for candidate in candidates:
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()[:2000]

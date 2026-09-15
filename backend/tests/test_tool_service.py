@@ -44,6 +44,33 @@ def test_host_tool_error_preserves_bounded_host_detail(monkeypatch):
         raise AssertionError("expected host tool failure")
 
 
+def test_host_tool_error_preserves_plain_text_detail(monkeypatch):
+    async def fake_request(_self, method, url, headers, json):
+        request = httpx.Request(method, url, headers=headers, json=json)
+        return httpx.Response(502, request=request, text="upstream connection reset by peer")
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+    session = AgentSession(
+        session_id="sess_host_plain_error",
+        host_context={"extras": {"host_callback_base_url": "http://host.example"}},
+    )
+    descriptor = {
+        "name": "host_read_page",
+        "endpoint": "/api/tools/read",
+        "method": "POST",
+        "requires_auth": False,
+        "auth_inject": False,
+    }
+
+    try:
+        asyncio.run(tool_service._invoke_host_tool(session, descriptor, {}))
+    except RuntimeError as exc:
+        assert "HTTP 502" in str(exc)
+        assert "upstream connection reset by peer" in str(exc)
+    else:
+        raise AssertionError("expected host tool failure")
+
+
 def make_runtime_config(*, base_url: str, model: str) -> RuntimeLlmConfig:
     return RuntimeLlmConfig(
         scope="global",

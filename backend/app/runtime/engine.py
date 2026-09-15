@@ -36,6 +36,20 @@ class AgentEngine:
 
     _TOOL_PROGRESS_INTERVAL_SECONDS = 15.0
 
+    @staticmethod
+    def _render_tool_result_for_model(result: Any, visible_result: Any) -> str:
+        """让宿主工具可以用纯文本输出，同时保留旧 JSON 工具的兼容性。"""
+        if isinstance(visible_result, str):
+            return visible_result
+        if isinstance(result, dict) and result.get("error") is not None:
+            lines = [f"ERROR[TOOL_EXECUTION_FAILED] {result.get('error')}"]
+            if result.get("summary") and result["summary"] != result.get("error"):
+                lines.append(f"SUMMARY: {result['summary']}")
+            lines.append("RETRYABLE: unknown")
+            lines.append("NEXT: Read the error above, correct the request, or inspect current state before retrying.")
+            return "\n".join(lines)
+        return json.dumps(visible_result, ensure_ascii=False, indent=2)
+
     def _append_assistant_block(self, blocks: list[dict[str, Any]], block: dict[str, Any]) -> None:
         blocks.append(block)
 
@@ -935,6 +949,7 @@ class AgentEngine:
                         session.clear_tool_running(run_id)
                         session.set_tool_task(run_id, None)
                     visible_result = result.get("public_output", result) if isinstance(result, dict) else result
+                    tool_result_text = self._render_tool_result_for_model(result, visible_result)
                     for runtime_event in result.get("runtime_events", []) if isinstance(result, dict) else []:
                         event_type = runtime_event.get("type")
                         event_payload = runtime_event.get("payload") or {}
@@ -947,12 +962,12 @@ class AgentEngine:
                         "tool_finished",
                         id=tool_call["id"],
                         tool_name=tool_name,
-                        output=visible_result,
+                        output=tool_result_text,
                     )
                     self._update_assistant_block(
                         persisted_assistant_blocks,
                         tool_block_id,
-                        outputText=json.dumps(visible_result, ensure_ascii=False, indent=2),
+                        outputText=tool_result_text,
                         status="done",
                     )
                     artifact_payload = visible_result.get("artifact") if isinstance(visible_result, dict) else None
@@ -967,7 +982,7 @@ class AgentEngine:
                     session.messages.append(
                         context_message_adapter.make_tool_message(
                             tool_call_id=tool_call["id"],
-                            content=json.dumps(visible_result, ensure_ascii=False),
+                            content=tool_result_text,
                             tool_name=tool_name,
                             turn_index=request_turn_index,
                         )
