@@ -141,6 +141,34 @@ class TestModelsDevClient:
         client._last_refresh_time = time.time() - 3600 - 1
         assert client.should_refresh()  # 超过间隔后应该刷新
 
+    def test_should_refresh_with_fresh_cache_file(self, tmp_path):
+        """进程重启后（_last_refresh_time 为 0），新鲜缓存不应触发网络刷新"""
+        cache_file = tmp_path / "models.json"
+        cache_file.write_text("{}")
+        client = ModelsDevClient(cache_path=cache_file)
+
+        assert client._last_refresh_time == 0
+        assert not client.should_refresh()  # 缓存文件刚落盘
+
+    def test_should_refresh_with_stale_cache_file(self, tmp_path):
+        """缓存文件过期超过刷新间隔后应触发刷新"""
+        cache_file = tmp_path / "models.json"
+        cache_file.write_text("{}")
+        stale = time.time() - 3600 - 1
+        os.utime(cache_file, (stale, stale))
+        client = ModelsDevClient(cache_path=cache_file)
+
+        assert client.should_refresh()
+
+    def test_fetch_disabled_by_settings(self, tmp_path, monkeypatch):
+        """Settings.models_fetch_enabled=false 时禁止外网拉取"""
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "models_fetch_enabled", False)
+        client = ModelsDevClient(cache_path=tmp_path / "models.json")
+        assert client.network_fetch_disabled
+        assert client.fetch_from_models_dev() is None
+
 
 class TestModelsRegistryWithMock:
     """测试 ModelsRegistry（使用mock避免网络请求）"""
@@ -217,6 +245,24 @@ class TestModelsRegistryWithMock:
             assert model is not None
             assert model.limit.context == 200_000
             assert model.cost.input == 15.0
+
+    def test_stale_cache_loads_without_network(self, tmp_path):
+        """过期缓存也应立即加载（不发起同步网络请求），刷新交给后台线程"""
+        cache_file = tmp_path / "models.json"
+        mock_data = self._get_mock_data()
+        cache_file.write_text(json.dumps(mock_data))
+        stale = time.time() - 3600 - 1
+        os.utime(cache_file, (stale, stale))
+
+        registry = ModelsRegistry(cache_path=cache_file, enable_background_refresh=False)
+        # 任何网络尝试都视为失败（fetch_from_models_dev 被调用即抛错）
+        with patch.object(
+            ModelsDevClient, "fetch_from_models_dev",
+            side_effect=AssertionError("lazy load must not touch network when cache exists"),
+        ):
+            model = registry.get_model("test-model-a")
+        assert model is not None
+        assert model.limit.context == 200_000
     
     def test_get_model_exact_match(self, tmp_path):
         cache_file = tmp_path / "models.json"
@@ -406,7 +452,13 @@ class TestConvenienceFunctions:
 
 class TestBackgroundRefresh:
     """测试后台刷新功能"""
-    
+
+    @staticmethod
+    def _mock_data() -> dict:
+        return {"test-provider": {"id": "test-provider", "name": "Test Provider", "models": {
+            "test-model-a": {"id": "test-model-a", "name": "Test Model A", "limit": {"context": 200_000, "output": 32_000}},
+        }}}
+
     def test_start_and_stop_background_refresh(self, tmp_path):
         cache_file = tmp_path / "models.json"
         client = ModelsDevClient(cache_path=cache_file, refresh_interval=1)
@@ -420,15 +472,35 @@ class TestBackgroundRefresh:
     
     def test_registry_starts_background_refresh(self, tmp_path):
         cache_file = tmp_path / "models.json"
+        cache_file.write_text(json.dumps(self._mock_data()))
         # mock 网络获取(离线可跑,避免 models.dev 超时拖慢测试)
-        with patch.object(ModelsDevClient, "fetch_from_models_dev", return_value={}) as mocked_fetch:
+        # conftest 的离线夹具全局设置了 AETHERCORE_DISABLE_MODELS_FETCH,这里显式恢复
+        with patch.dict("os.environ", {"AETHERCORE_DISABLE_MODELS_FETCH": ""}), \
+             patch.object(ModelsDevClient, "fetch_from_models_dev", return_value=self._mock_data()) as mocked_fetch:
             registry = ModelsRegistry(cache_path=cache_file, enable_background_refresh=True)
 
             registry._ensure_loaded()
-            assert registry._client._refresh_thread is not None
+            # 后台刷新线程由 registry 持有（启动后立即补一次刷新）
+            assert registry._refresh_thread is not None
+            assert registry._refresh_thread.is_alive()
+            registry.stop_background_refresh()
             mocked_fetch.assert_called()
 
         reset_registry()
+
+    def test_registry_skips_background_refresh_when_disabled(self, tmp_path, monkeypatch):
+        """禁用外网拉取时不应启动后台刷新线程"""
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "models_fetch_enabled", False)
+        cache_file = tmp_path / "models.json"
+        cache_file.write_text(json.dumps(self._mock_data()))
+
+        registry = ModelsRegistry(cache_path=cache_file, enable_background_refresh=True)
+        registry._ensure_loaded()
+
+        assert registry._refresh_thread is None
+        assert registry.get_model("test-model-a") is not None
 
 
 class TestRealModelsDevAPI:

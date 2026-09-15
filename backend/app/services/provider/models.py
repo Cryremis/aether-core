@@ -5,14 +5,15 @@
 设计参考：OpenCode 的 ModelsDev 实现
 
 数据来源优先级：
-1. 本地缓存文件 ~/.cache/aethercore/models.json
-2. models.dev API（https://models.dev/api.json）
+1. 本地缓存文件 ~/.cache/aethercore/models.json（命中即用，过期由后台线程刷新）
+2. models.dev API（https://models.dev/api.json，仅首次无缓存时同步获取）
 3. 内置最小配置（仅包含常用模型的基本信息，fallback）
 
 特性：
-- 自动每小时刷新模型配置
-- 支持手动刷新
-- 网络不可用时使用缓存或内置配置
+- 请求路径只读缓存，网络刷新一律在后台线程，避免阻塞 asyncio 事件循环
+- 支持通过 Settings.models_fetch_enabled（MODELS_FETCH_ENABLED）或
+  AETHERCORE_DISABLE_MODELS_FETCH 关闭外网拉取（内网部署）
+- 后台定时刷新并热更新内存注册表
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ import urllib.error
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -143,10 +146,10 @@ def _get_minimal_builtin_config() -> dict[str, ProviderInfo]:
 class ModelsDevClient:
     """
     models.dev API客户端
-    
+
     负责从 models.dev 获取模型配置并管理本地缓存。
     """
-    
+
     def __init__(
         self,
         cache_path: Path | None = None,
@@ -161,7 +164,16 @@ class ModelsDevClient:
         self._last_refresh_time: float = 0
         self._refresh_thread: threading.Thread | None = None
         self._stop_refresh = False
-        self._disable_network_fetch = os.environ.get("AETHERCORE_DISABLE_MODELS_FETCH", "").lower() in ("1", "true", "yes")
+        # 关闭开关：Settings（models_fetch_enabled / MODELS_FETCH_ENABLED）或旧版环境变量
+        self._disable_network_fetch = (
+            not settings.models_fetch_enabled
+            or os.environ.get("AETHERCORE_DISABLE_MODELS_FETCH", "").lower() in ("1", "true", "yes")
+        )
+
+    @property
+    def network_fetch_disabled(self) -> bool:
+        """是否已禁用外网拉取（禁用时无需启动后台刷新线程）"""
+        return self._disable_network_fetch
     
     def get_cache_path(self) -> Path:
         """确保缓存目录存在"""
@@ -175,7 +187,7 @@ class ModelsDevClient:
         返回原始JSON数据，失败时返回None。
         """
         if self._disable_network_fetch:
-            logger.debug("网络获取已禁用（AETHERCORE_DISABLE_MODELS_FETCH）")
+            logger.debug("网络获取已禁用（models_fetch_enabled=false 或 AETHERCORE_DISABLE_MODELS_FETCH）")
             return None
         
         try:
@@ -282,22 +294,36 @@ class ModelsDevClient:
             self._refresh_thread = None
     
     def should_refresh(self) -> bool:
-        """检查是否需要刷新"""
-        return time.time() - self._last_refresh_time >= self.refresh_interval
+        """
+        检查是否需要刷新。
+
+        判断依据（避免进程重启后对新鲜缓存仍发起网络请求）：
+        1. 进程内成功刷新过且未超过间隔 → 不刷新
+        2. 缓存文件存在且落盘时间未超过间隔 → 不刷新
+        """
+        now = time.time()
+        if self._last_refresh_time and now - self._last_refresh_time < self.refresh_interval:
+            return False
+        try:
+            if self.cache_path.exists():
+                return now - self.cache_path.stat().st_mtime >= self.refresh_interval
+        except OSError:
+            pass
+        return True
 
 
 class ModelsRegistry:
     """
     模型能力注册表
-    
+
     提供模型能力查询服务，数据来源：
     1. 本地缓存（优先）
-    2. models.dev API（自动刷新）
+    2. models.dev API（后台线程刷新，不阻塞请求）
     3. 最小内置配置（fallback）
     """
-    
+
     DEFAULT_MODEL_LIMIT = ModelLimit(context=200_000, output=8_192)
-    
+
     def __init__(
         self,
         cache_path: Path | None = None,
@@ -311,40 +337,80 @@ class ModelsRegistry:
         self._providers: dict[str, ProviderInfo] = {}
         self._loaded = False
         self._enable_background_refresh = enable_background_refresh
-    
+        self._refresh_thread: threading.Thread | None = None
+        self._stop_refresh = False
+
     def _ensure_loaded(self) -> None:
         """确保模型配置已加载"""
         if self._loaded:
             return
         self._load_providers()
         self._loaded = True
-        if self._enable_background_refresh:
-            self._client.start_background_refresh()
-    
+        if self._enable_background_refresh and not self._client.network_fetch_disabled:
+            self._start_background_refresh()
+
     def _load_providers(self) -> None:
         """
         加载模型配置，按优先级尝试不同数据来源。
-        
+
+        关键约束：本方法运行在 asyncio 事件循环内（聊天请求懒加载触发），
+        只要磁盘上有可用缓存就直接使用（哪怕已过期），刷新一律交给后台线程，
+        避免同步 urlopen 冻结整个服务（内网黑洞环境单次可达 40s+）。
+
         优先级：
-        1. 本地缓存
-        2. models.dev API
-        3. 最小内置配置
+        1. 本地缓存（立即生效，过期数据由后台线程更新）
+        2. models.dev API（仅首次无缓存时同步获取）
+        3. 最小内置配置（fallback）
         """
         data = self._client.load_from_cache()
-        source = "cache"
-        
-        if data is None or self._client.should_refresh():
-            refreshed = self._client.refresh()
-            if refreshed:
-                data = refreshed
-                source = "models.dev"
-        
-        if data:
+
+        if data is not None:
             self._providers = self._parse_models_dev_data(data)
-            logger.info(f"模型配置已加载，来源: {source}，提供商数: {len(self._providers)}")
+            logger.info(f"模型配置已加载，来源: cache，提供商数: {len(self._providers)}")
+            return
+
+        refreshed = self._client.refresh()
+        if refreshed:
+            self._providers = self._parse_models_dev_data(refreshed)
+            logger.info(f"模型配置已加载，来源: models.dev，提供商数: {len(self._providers)}")
         else:
             self._providers = _get_minimal_builtin_config()
             logger.warning("无法获取模型配置，使用最小内置配置")
+
+    def _start_background_refresh(self) -> None:
+        """启动后台刷新线程：启动后立即补一次刷新，之后按固定间隔轮转。"""
+        if self._refresh_thread and self._refresh_thread.is_alive():
+            return
+        self._stop_refresh = False
+
+        def refresh_loop():
+            # 进程刚启动（缓存可能过期）：先在后台补一次刷新
+            self._background_refresh_once()
+            while not self._stop_refresh:
+                time.sleep(self._client.refresh_interval)
+                if not self._stop_refresh:
+                    self._background_refresh_once()
+
+        self._refresh_thread = threading.Thread(target=refresh_loop, daemon=True, name="models-registry-refresh")
+        self._refresh_thread.start()
+        logger.info(f"模型配置后台刷新线程已启动，间隔 {self._client.refresh_interval} 秒")
+
+    def _background_refresh_once(self) -> None:
+        """单次后台刷新：拉取最新数据并热更新内存中的注册表。"""
+        try:
+            data = self._client.refresh()
+            if data:
+                self._providers = self._parse_models_dev_data(data)
+                logger.info(f"模型配置已后台刷新，提供商数: {len(self._providers)}")
+        except Exception as e:
+            logger.warning(f"后台刷新模型配置失败: {e}")
+
+    def stop_background_refresh(self) -> None:
+        """停止后台刷新线程"""
+        self._stop_refresh = True
+        if self._refresh_thread:
+            self._refresh_thread.join(timeout=5)
+            self._refresh_thread = None
     
     def _parse_models_dev_data(self, data: dict[str, Any]) -> dict[str, ProviderInfo]:
         """
@@ -562,6 +628,7 @@ def reset_registry() -> None:
     """重置全局注册表（用于测试）"""
     global _registry_instance
     if _registry_instance:
+        _registry_instance.stop_background_refresh()
         _registry_instance._client.stop_background_refresh()
     _registry_instance = None
 
