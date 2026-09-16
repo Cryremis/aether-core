@@ -240,6 +240,7 @@ export function WorkbenchPage({
   conversations,
   currentUser,
   isEmbedMode = false,
+  embedHostOrigin = "",
   sessionId,
   isNewSession = false,
   adminEntryHref,
@@ -336,8 +337,14 @@ export function WorkbenchPage({
   const pendingUserEchoRef = useRef<PendingUserEcho | null>(null);
   const pendingAssistantIdRef = useRef<string | null>(null);
   const isStreamingRef = useRef(false);
+
+  const notifyHost = (type: "aethercore:run-status" | "aethercore:tool-status", payload: Record<string, unknown>) => {
+    if (!isEmbedMode || !embedHostOrigin || window.parent === window) return;
+    window.parent.postMessage({ source: "aethercore-workbench", type, payload }, embedHostOrigin);
+  };
   const abortControllerRef = useRef<AbortController | null>(null);
   const liveRunRef = useRef<{ runId: string; assistantId: string } | null>(null);
+  const lastRunIdRef = useRef("");
   const newlyCreatedSessionRef = useRef<string | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
@@ -1077,7 +1084,14 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         const runId = String(payload.run_id ?? "");
         if (runId) {
           liveRunRef.current = { runId, assistantId };
+          lastRunIdRef.current = runId;
         }
+        notifyHost("aethercore:run-status", {
+          session_id: effectiveSessionId,
+          run_id: String(payload.run_id ?? liveRunRef.current?.runId ?? ""),
+          assistant_id: assistantId,
+          active: true,
+        });
         return;
       }
 
@@ -1327,6 +1341,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       }
 
       if (eventType === "tool_started") {
+        notifyHost("aethercore:tool-status", {
+          session_id: effectiveSessionId,
+          run_id: liveRunRef.current?.runId ?? "",
+          tool_call_id: String(payload.id ?? ""),
+          tool_name: String(payload.tool_name ?? ""),
+          status: "started",
+        });
         if (refs.activeReasoningId.value) {
           const endedAt = new Date().toISOString();
           updateAssistantBlock(assistantId, refs.activeReasoningId.value, (block) =>
@@ -1380,6 +1401,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       }
 
       if (eventType === "tool_finished") {
+        notifyHost("aethercore:tool-status", {
+          session_id: effectiveSessionId,
+          run_id: liveRunRef.current?.runId ?? "",
+          tool_call_id: String(payload.id ?? ""),
+          tool_name: String(payload.tool_name ?? ""),
+          status: "finished",
+        });
         const toolName = String(payload.tool_name ?? "");
         const output = payload.output;
         if (toolName === "update_workboard") {
@@ -1470,6 +1498,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           ),
         );
         liveRunRef.current = null;
+        notifyHost("aethercore:run-status", {
+          session_id: effectiveSessionId,
+          run_id: String(payload.run_id ?? ""),
+          assistant_id: assistantId,
+          active: false,
+          status: String(payload.subtype ?? "completed"),
+        });
         // 正文从流式累计 ref 同步读取(React functional updater 非同步执行,不可依赖其副作用)
         maybeNotifyCompletion(
           completionSubtype && completionSubtype !== "success"
@@ -1587,6 +1622,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
     let activeContentText = "";
     let wasAborted = false;
     let partialContent = "";
+    let streamEndedWithError = false;
     const eventRefs = {
       activeReasoningId: {
         get value() {
@@ -1644,6 +1680,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         disabledCapabilityIds: (() => { try { return JSON.parse(localStorage.getItem(localStorage.getItem("aethercore-capabilities:active") || "") || "[]"); } catch { return []; } })(),
       });
     } catch (chatError) {
+      streamEndedWithError = true;
       if (chatError instanceof Error && chatError.name === "AbortError") {
         wasAborted = true;
       } else {
@@ -1669,6 +1706,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       if (wasNewSession && effectiveSessionId) {
         onSessionCreated?.(effectiveSessionId);
       }
+      notifyHost("aethercore:run-status", {
+        session_id: effectiveSessionId,
+        run_id: lastRunIdRef.current,
+        assistant_id: assistantId,
+        active: false,
+        status: wasAborted ? "aborted" : streamEndedWithError ? "error" : "completed",
+      });
       void onSessionRefresh?.(effectiveSessionId || undefined);
       
       const currentQueue = queuedMessagesRef.current;

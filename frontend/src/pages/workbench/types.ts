@@ -129,6 +129,7 @@ export type WorkbenchPageProps = {
   conversations: WorkbenchConversation[];
   currentUser?: CurrentUserProfile | null;
   isEmbedMode?: boolean;
+  embedHostOrigin?: string;
   sessionId: string;
   isNewSession?: boolean;
   adminEntryHref?: string;

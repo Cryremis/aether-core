@@ -88,6 +88,8 @@
     onBindError: null,
     onResize: null,
     onAssistantPreview: null,
+    onRunStatus: null,
+    onToolStatus: null,
     onError: function (error) {
       console.error("[AetherCore]", error);
     },
@@ -424,6 +426,16 @@
         return;
       }
 
+      if (data.type === "aethercore:run-status") {
+        this.emitHook("onRunStatus", payload);
+        return;
+      }
+
+      if (data.type === "aethercore:tool-status") {
+        this.emitHook("onToolStatus", payload);
+        return;
+      }
+
       if (data.type !== "aethercore:assistant-preview" || !this.config.assistantPreview.enabled) {
         return;
       }
@@ -749,6 +761,11 @@
       this.state.iframeLoaded = true;
       root.querySelector(".ac-embed-loading").style.display = "none";
       root.querySelector(".ac-embed-frame").classList.add("is-loaded");
+      this._postToFrame({
+        source: "aethercore-host",
+        type: "aethercore:host-origin",
+        payload: { origin: window.location.origin },
+      });
     }
 
     applyWidth(width) {

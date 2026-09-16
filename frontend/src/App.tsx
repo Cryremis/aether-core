@@ -54,6 +54,7 @@ export default function App() {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [currentUser, setCurrentUser] = useState<CurrentUserProfile | null>(null);
   const [isEmbedMode, setIsEmbedMode] = useState(false);
+  const [embedHostOrigin, setEmbedHostOrigin] = useState("");
   const [isNewSession, setIsNewSession] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState("/workbench");
@@ -176,6 +177,10 @@ export default function App() {
     const handler = (event: MessageEvent) => {
       if (event.source !== window.parent) return;
       const data = event.data;
+      if (data?.source === "aethercore-host" && data.type === "aethercore:host-origin") {
+        setEmbedHostOrigin(event.origin);
+        return;
+      }
       if (!data || data.source !== "aethercore-host" || data.type !== "aethercore:theme") return;
       const theme = data.payload?.theme;
       if (theme === "light" || theme === "dark" || theme === "system") {
@@ -364,6 +369,7 @@ export default function App() {
                       conversations={conversations}
                       currentUser={currentUser}
                       isEmbedMode={isEmbedMode}
+                      embedHostOrigin={embedHostOrigin}
                       sessionId={sessionId}
                       isNewSession={isNewSession}
                       adminEntryHref={currentUser?.can_manage_platforms ? "/platforms" : undefined}

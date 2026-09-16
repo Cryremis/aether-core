@@ -34,6 +34,21 @@ Proactive prompts first appear 30-60 seconds after the page opens. After a promp
 
 Live assistant previews are independent from proactive prompt suppression. Public instance methods `showAssistantPreview(text)`, `hideAssistantPreview()`, and `destroy()` are available for host lifecycle integrations. `onAssistantPreview` observes normalized preview updates.
 
+## Host Lifecycle Events
+
+The Workbench notifies the adapter when an agent run or tool call changes state. Host products can use `onRunStatus` to activate their own page-command channel, and `onToolStatus` for a more precise wake-up signal. The events carry lifecycle metadata only; host page commands remain owned by each host product.
+
+```js
+window.mountAetherCore({
+  onRunStatus(payload) {
+    // payload.active is true while the run is active.
+  },
+  onToolStatus(payload) {
+    // payload.status is "started" or "finished".
+  },
+});
+```
+
 ## Maintainer Notes
 
 - Keep this adapter framework-neutral. Host products should configure it through `window.mountAetherCore(...)`, not by editing the adapter.

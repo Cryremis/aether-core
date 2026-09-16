@@ -130,6 +130,37 @@ test("ignores reasoning and tool events and accepts assistant正文 events", () 
   instance.destroy();
 });
 
+test("forwards run and tool lifecycle events to host hooks", () => {
+  const fixture = createFixture();
+  const runEvents = [];
+  const toolEvents = [];
+  const instance = new fixture.AetherCoreEmbed({
+    autoBind: false,
+    onRunStatus: (payload) => runEvents.push(payload),
+    onToolStatus: (payload) => toolEvents.push(payload),
+  });
+  instance.isWorkbenchMessage = () => true;
+
+  instance.handleWorkbenchMessage({
+    data: {
+      source: "aethercore-workbench",
+      type: "aethercore:run-status",
+      payload: { session_id: "session-1", run_id: "run-1", active: true },
+    },
+  });
+  instance.handleWorkbenchMessage({
+    data: {
+      source: "aethercore-workbench",
+      type: "aethercore:tool-status",
+      payload: { session_id: "session-1", run_id: "run-1", status: "started" },
+    },
+  });
+
+  assert.deepEqual(runEvents, [{ session_id: "session-1", run_id: "run-1", active: true }]);
+  assert.deepEqual(toolEvents, [{ session_id: "session-1", run_id: "run-1", status: "started" }]);
+  instance.destroy();
+});
+
 test("uses the configured first-delay range and defers while editing", () => {
   const fixture = createFixture();
   const instance = new fixture.AetherCoreEmbed({
