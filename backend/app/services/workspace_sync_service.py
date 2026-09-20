@@ -16,8 +16,8 @@ class WorkspaceState:
     tombstones: tuple[str, ...] = ()
 
 
-class SessionWorkspaceSyncService:
-    """负责容器工作区与宿主会话增量目录之间的双向同步。"""
+class WorkspaceSyncService:
+    """负责容器与宿主 Workspace 增量目录之间的双向同步。"""
 
     _STATE_FILE_NAME = "workspace_state.json"
     _SYNC_SECTIONS = ("work", "skills")
@@ -350,4 +350,4 @@ class SessionWorkspaceSyncService:
         return value.decode("utf-8", errors="replace").replace("\x00", "")
 
 
-session_workspace_sync_service = SessionWorkspaceSyncService()
+workspace_sync_service = WorkspaceSyncService()

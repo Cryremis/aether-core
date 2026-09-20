@@ -15,6 +15,7 @@ from app.schemas.platform import ConversationSummary
 from app.services.agent_run_service import agent_run_service
 from app.services.session_service import session_service
 from app.services.store import store_service
+from app.services.workspace_runtime_service import workspace_runtime_service
 
 
 class HostControlService:
@@ -81,6 +82,42 @@ class HostControlService:
     def get_conversation(self, *, platform: dict, conversation_id: str) -> dict[str, Any]:
         conversation = self._conversation(platform, conversation_id)
         return self._summary(conversation).model_dump(mode="json")
+
+    def get_workspace(self, *, platform: dict, workspace_id: str) -> dict[str, Any]:
+        workspace = self._workspace(platform, workspace_id)
+        members = store_service.list_workspace_members(workspace_id)
+        runtime = store_service.get_workspace_runtime(workspace_id)
+        if runtime is not None:
+            runtime["active_command_count"] = workspace_runtime_service.active_command_count(workspace_id)
+        return {
+            "workspace_id": str(workspace["workspace_id"]),
+            "owner_session_id": str(workspace["owner_session_id"]),
+            "owner_conversation_id": workspace.get("owner_conversation_id"),
+            "status": str(workspace.get("status") or "active"),
+            "revision": int(workspace.get("revision") or 1),
+            "baseline_root": str(workspace.get("baseline_root") or ""),
+            "created_at": str(workspace.get("created_at") or ""),
+            "updated_at": str(workspace.get("updated_at") or ""),
+            "members": [self._workspace_member(item) for item in members],
+            "runtime": runtime,
+        }
+
+    def list_workspace_members(self, *, platform: dict, workspace_id: str) -> dict[str, Any]:
+        self._workspace(platform, workspace_id)
+        return {
+            "items": [
+                self._workspace_member(item)
+                for item in store_service.list_workspace_members(workspace_id)
+            ],
+        }
+
+    def get_workspace_runtime(self, *, platform: dict, workspace_id: str) -> dict[str, Any]:
+        self._workspace(platform, workspace_id)
+        runtime = store_service.get_workspace_runtime(workspace_id)
+        if runtime is None:
+            return {"workspace_id": workspace_id, "status": "missing", "active_command_count": 0}
+        runtime["active_command_count"] = workspace_runtime_service.active_command_count(workspace_id)
+        return runtime
 
     def patch_conversation(
         self,
@@ -267,11 +304,46 @@ class HostControlService:
             raise LookupError("会话不存在")
         return conversation
 
+    def _workspace(self, platform: dict, workspace_id: str) -> dict[str, Any]:
+        workspace = store_service.get_workspace(workspace_id)
+        if workspace is None or str(workspace.get("status") or "") == "deleted":
+            raise LookupError("Workspace 不存在")
+        owner_conversation_id = str(workspace.get("owner_conversation_id") or "")
+        conversation = (
+            store_service.get_conversation(owner_conversation_id)
+            if owner_conversation_id
+            else None
+        )
+        if conversation is None:
+            owner_session_id = str(workspace.get("owner_session_id") or "")
+            conversation = store_service.get_conversation_by_session(owner_session_id)
+        if (
+            conversation is None
+            or int(conversation.get("platform_id") or 0) != int(platform["platform_id"])
+            or conversation.get("deleted_at") is not None
+        ):
+            raise LookupError("Workspace 不存在")
+        return workspace
+
+    @staticmethod
+    def _workspace_member(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "session_id": str(row.get("session_id")),
+            "conversation_id": row.get("conversation_id"),
+            "role": str(row.get("role") or "owner"),
+            "parent_session_id": row.get("parent_session_id"),
+            "title": row.get("title"),
+            "visibility": row.get("visibility"),
+            "joined_at": str(row.get("joined_at") or ""),
+            "last_active_at": str(row.get("last_active_at") or ""),
+        }
+
     @staticmethod
     def _summary(row: dict[str, Any]) -> ConversationSummary:
         return ConversationSummary(
             conversation_id=str(row["conversation_id"]),
             session_id=str(row["session_id"]),
+            workspace_id=str(row.get("workspace_id") or ""),
             title=str(row.get("title") or "新对话"),
             host_name=str(row.get("host_name") or ""),
             created_at=str(row.get("created_at") or ""),

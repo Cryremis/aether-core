@@ -14,7 +14,8 @@ def build_workspace(root: Path) -> SandboxWorkspace:
     for name in ["skills", "work", "logs"]:
         (root / ".overlay-work" / name).mkdir(parents=True, exist_ok=True)
     return SandboxWorkspace(
-        session_id="sess_search",
+        workspace_id="ws_search",
+        owner_session_id="sess_search",
         root=root,
         baseline_root=None,
         skills_dir=root / "skills",

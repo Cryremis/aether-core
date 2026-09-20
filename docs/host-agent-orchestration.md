@@ -2,33 +2,26 @@
 
 ## 1. 结论
 
-AetherCore 已经具备嵌入式会话的雏形：宿主可以通过 `/api/v1/host/bind` 创建或复用会话、注入宿主工具，前端可以使用 embed token 创建新会话、发送消息、订阅 SSE、中断运行、查看会话摘要和历史会话。
+AetherCore 已提供宿主 Control Plane：宿主可以创建/复用会话、创建时直接指定隐藏状态、管理生命周期、发送消息、轮询或订阅运行事件、取消运行、读取最近 AI 回复，并查看 Workspace 成员与 runtime 状态。
 
-当前缺口是：
-
-1. 缺少面向宿主后端的统一 Control Plane API，隐藏/恢复、分页查询、运行详情、Webhook 等能力不完整。
-2. 运行状态主要保存在进程内存中，SSE 断线重连只能在运行未结束时 replay，历史 run 没有独立持久化。
-3. 会话没有 `visibility` / `archived` / `deleted_at` 等生命周期字段，不能实现隐藏与恢复。
-4. 没有 subagent 的领域模型、通信协议、权限继承、预算与深度控制。
-
-推荐采用“宿主 Control Plane + 持久 Run/Event Store + 中央 Orchestrator”的架构。不要把 subagent 简单实现成一个 HTTP 转发工具，而应该把“子运行”作为一等资源，用 append-only 事件流和显式状态机驱动。
+主 Agent 可通过内置工具编排一层 Subagent。Subagent 是持久化的一等 run 资源，具备独立上下文、事件流与状态机，并与父 Agent 共享同一个 Workspace。剩余的生产化方向是 Webhook/outbox、分布式 worker、OpenTelemetry 成本观测与更丰富的平台配额策略。
 
 ## 2. 现状能力矩阵
 
 | 能力 | 当前状态 | 说明 |
 | --- | --- | --- |
-| 创建会话 | 部分支持 | `bind` 可创建/复用；前端 `bootstrap` 可基于 embed 会话创建新会话 |
-| 列出会话 | 支持 | embed 用户维度列表，缺少分页、过滤、包含隐藏项 |
+| 创建会话 | 支持 | `bind` 与 `POST /host/conversations` 可创建/复用，创建时可指定 `visibility=hidden` |
+| 列出会话 | 支持 | 宿主用户维度分页，支持隐藏、归档、删除过滤 |
 | 查看会话 | 支持 | 摘要包含消息、transcript、runtime、workboard、elicitation、active_run |
-| 重命名/删除 | 支持 | 现在是硬删除，没有恢复能力 |
-| 隐藏/恢复 | 不支持 | 数据模型无 `visibility`、`archived`、`deleted_at` |
+| 重命名/删除 | 支持 | 更新使用乐观并发；删除为软删除，保留审计与恢复数据 |
+| 隐藏/恢复 | 支持 | `visibility`、`archived_at`、`deleted_at` 已持久化 |
 | 发送消息 | 支持 | `/api/v1/agent/chat` 返回 SSE |
-| 获取结果 | 部分支持 | 运行中通过 `result/completed` SSE；结束后主要从 transcript 恢复 |
-| 查看运行状态 | 部分支持 | `active_run` 只反映活跃运行；历史 run 无资源详情 |
-| 断线重连 | 部分支持 | 运行存活时 `AgentRunService` 可 replay；进程重启或 run 结束后不可用 |
+| 获取结果 | 支持 | run 结果持久化；最近 N 条 AI 回复带运行状态 |
+| 查看运行状态 | 支持 | run 详情、事件游标、Workspace runtime 与 active command count |
+| 断线重连 | 支持 | SSE 使用事件 seq；HTTP events 支持 `after_seq` 游标 |
 | 中断运行 | 支持 | `/abort` 触发取消并保留部分输出 |
 | 人工输入 | 支持 | elicitation 接口 |
-| Subagent | 不支持 | 只有搜索工具提示中出现 sub-agent 建议，没有运行时实现 |
+| Subagent | 支持 | 一层深度、独立上下文、共享 Workspace、主动结果回传与只读用户面板 |
 
 ## 3. 设计原则
 
@@ -342,19 +335,21 @@ created_at
 ### 6.5 subagent_runs
 
 ```text
-subagent_run_id PK
+child_run_id PK
+workspace_id
 parent_run_id FK
-child_run_id FK
-role
+parent_session_id
+child_session_id
+latest_run_id
+name
 task
-handoff_context_json
-allowed_tools
 status
-result_json
-created_at / finished_at
+result_text
+error_text
+created_at / updated_at / finished_at
 ```
 
-Subagent 是 run 之间的有向关系，不要求一定是 conversation。这样不会污染用户可见会话列表，也便于并行 fan-out。
+Subagent 同时拥有独立 session/conversation 与 run 记录。内部会话默认隐藏，用户通过工作台只读卡片查看状态，不能直接发消息；追加沟通由主 Agent 的 `subagent_send_message` 发起。
 
 ## 7. Run 状态机
 
@@ -461,16 +456,31 @@ child result / event stream -> parent orchestrator
 
 ### 8.4 上下文与工作区
 
-子 agent 默认使用独立 workspace：
+上下文与资源所有权分离：
 
 ```text
-root_workspace/
-  parent/
-  subagents/run_.../
-  shared/artifacts/
+AgentSession / Conversation / Run   -> 独立上下文与事件流
+Workspace                           -> 共享文件、缓存与 runtime
 ```
 
-父传子通过 `handoff_context_json` 和显式 artifact 引用。子写父必须产出 artifact，父通过受控路径读取。这样既能协作，又能避免并发写坏工作区。
+主 Agent 与其 Subagent 始终引用同一个 `workspace_id`。父写文件，子立即可见；子写文件，父也立即可见，不存在 artifact 中转或双轨同步。子 Agent 只继承任务所需的宿主绑定与工具权限，不继承父会话历史。
+
+runtime 同样以 Workspace 为单位：
+
+1. 一个 Workspace 最多对应一个活跃容器，主/子上下文可并发执行命令。
+2. 命令执行期间记录 active command count，GC 与重建不会打断执行。
+3. Workspace 内存在运行中的父/子 run 时，空闲 GC 跳过回收。
+4. 镜像或配置漂移只影响下一次 runtime ensure，不强制中断正在执行的命令。
+
+旧版 session-owned 布局会在启动时执行一次性迁移：
+
+```text
+legacy sessions/<session_id>/sandbox
+  -> session-state/<session_id>/session.json
+  -> workspaces/<workspace_id>/sandbox
+```
+
+迁移使用 journal 记录，失败即阻断启动；旧 Subagent 文件合并到父 Workspace 的 `work/_migrated/subagents/<session_id>/`，避免覆盖或丢失。
 
 ### 8.5 权限与预算
 

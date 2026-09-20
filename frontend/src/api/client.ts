@@ -353,9 +353,11 @@ export type PromptConfigSummary = {
   updated_at?: string | null;
 };
 
-export type SessionRuntimeSummary = {
-  session_id: string;
-  conversation_id?: string | null;
+export type WorkspaceRuntimeSummary = {
+  workspace_id: string;
+  owner_session_id: string;
+  owner_conversation_id?: string | null;
+  active_command_count?: number;
   conversation_title?: string | null;
   conversation_host_name?: string | null;
   platform_id?: number | null;
@@ -468,6 +470,7 @@ export type ActiveRunSummary = {
 
 export type SubagentRunSummary = {
   subagent_run_id: string;
+  workspace_id?: string | null;
   run_id: string;
   name: string;
   task: string;
@@ -492,6 +495,7 @@ export type CommittedChatMessage =
 
 export type AuditConversationDetail = {
   session_id: string;
+  workspace_id?: string | null;
   conversation_id?: string | null;
   title: string;
   host_name: string;
@@ -500,7 +504,7 @@ export type AuditConversationDetail = {
   created_at: string;
   messages: AuditSessionMessage[];
   transcript?: TranscriptChatMessage[];
-  runtime?: SessionRuntimeSummary | null;
+  runtime?: WorkspaceRuntimeSummary | null;
   audit: AuditConversationSummary;
 };
 
@@ -1464,8 +1468,8 @@ export async function listAdminRuntimesHistory() {
   return response.json();
 }
 
-export async function collectAdminRuntime(sessionId: string) {
-  const response = await apiFetch(`/admin/runtimes/${encodeURIComponent(sessionId)}/collect`, {
+export async function collectAdminRuntime(workspaceId: string) {
+  const response = await apiFetch(`/admin/runtimes/${encodeURIComponent(workspaceId)}/collect`, {
     method: "POST",
   });
   if (!response.ok) {

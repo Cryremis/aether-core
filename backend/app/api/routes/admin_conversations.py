@@ -94,6 +94,7 @@ def get_admin_conversation_detail(
     session.conversation_id = conversation.get("conversation_id")
     summary = SessionSummary(
         session_id=session.session_id,
+        workspace_id=session.workspace_id,
         conversation_id=session.conversation_id,
         title=conversation.get("title") or "新对话",
         host_name=session.host_name,
@@ -105,7 +106,7 @@ def get_admin_conversation_detail(
         messages=session.messages,
         transcript=transcript_service.build_chat_transcript(session.messages),
         context_state=session.context_state,
-        runtime=store_service.get_session_runtime(session.session_id),
+        runtime=store_service.get_workspace_runtime(session.workspace_id) if session.workspace_id else None,
         workboard=runtime_state_service.get_workboard(session),
         elicitation=runtime_state_service.get_elicitation(session),
     )

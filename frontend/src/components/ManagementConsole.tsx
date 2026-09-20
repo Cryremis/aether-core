@@ -8,7 +8,7 @@ import type {
   CurrentUserProfile,
   PlatformAuditOverviewItem,
   PlatformRegistrationRequestSummary,
-  SessionRuntimeSummary,
+  WorkspaceRuntimeSummary,
   SystemAuditOverview,
   TranscriptAssistantBlock,
   TranscriptChatMessage,
@@ -93,12 +93,12 @@ function getAuditListTimestamp(item: {
 }
 
 export function isRuntimeActive(status: string) {
-  return ["provisioning", "running", "busy"].includes(status);
+  return ["provisioning", "running", "executing"].includes(status);
 }
 
 export function getRuntimeStatusLabel(status: string) {
   if (status === "running") return "运行中";
-  if (status === "busy") return "执行中";
+  if (status === "executing") return "执行中";
   if (status === "provisioning") return "创建中";
   if (status === "expired") return "已过期";
   if (status === "collected") return "已回收";
@@ -108,7 +108,7 @@ export function getRuntimeStatusLabel(status: string) {
 }
 
 export function getRuntimeStatusClass(status: string) {
-  if (status === "running" || status === "busy" || status === "provisioning") return "approved";
+  if (status === "running" || status === "executing" || status === "provisioning") return "approved";
   if (status === "expired" || status === "failed" || status === "missing") return "rejected";
   return "returned";
 }
@@ -266,7 +266,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
   const [activeTab, setActiveTab] = useState<ManagementTab>(scope === "system" ? "approvals" : "config");
   const [requests, setRequests] = useState<PlatformRegistrationRequestSummary[]>([]);
   const [users, setUsers] = useState<UserSummary[]>([]);
-  const [runtimes, setRuntimes] = useState<SessionRuntimeSummary[]>([]);
+  const [runtimes, setRuntimes] = useState<WorkspaceRuntimeSummary[]>([]);
   const [systemAuditOverview, setSystemAuditOverview] = useState<SystemAuditOverview | null>(null);
   const [auditTrendPoints, setAuditTrendPoints] = useState<AuditTrendPoint[]>([]);
   const [auditTrendRange, setAuditTrendRange] = useState<number>(30);
@@ -342,7 +342,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
 
   const loadRuntimes = async (includeHistory: boolean) => {
     const result = includeHistory ? await listAdminRuntimesHistory() : await listAdminRuntimes();
-    setRuntimes((result.data ?? []) as SessionRuntimeSummary[]);
+  setRuntimes((result.data ?? []) as WorkspaceRuntimeSummary[]);
   };
 
   const loadSystemAuditOverview = async () => {
@@ -581,14 +581,14 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
     }
   };
 
-  const handleCollectRuntime = async (sessionId: string) => {
-    if (!window.confirm("确定立即回收这个会话 runtime 吗？下次执行命令时会自动重建。")) {
+  const handleCollectRuntime = async (workspaceId: string) => {
+    if (!window.confirm("确定立即回收这个 Workspace runtime 吗？下次执行命令时会自动重建。")) {
       return;
     }
     try {
       setPlatformAdminBusy(true);
       setError("");
-      await collectAdminRuntime(sessionId);
+      await collectAdminRuntime(workspaceId);
       await loadRuntimes(showRuntimeHistory);
     } catch (err) {
       setError(err instanceof Error ? err.message : "回收 runtime 失败");
@@ -994,7 +994,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
           <section className="management-console__section epic-glass stagger-3">
             <div className="management-console__section-head">
               <div>
-                <h4>会话 Runtime</h4>
+                <h4>Workspace Runtime</h4>
                 <p>默认只展示当前活跃 runtime。打开历史后可查看已回收、已过期或已失效的容器记录。</p>
               </div>
               <span className="management-console__metric">{runtimes.length} Runtime</span>
@@ -1013,10 +1013,10 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                 <div className="admin-panel__empty">{showRuntimeHistory ? "当前没有 runtime 记录。" : "当前没有活跃 runtime。"}</div>
               ) : (
                 runtimes.map((item) => (
-                  <article key={item.session_id} className={`management-console__card runtime-card ${isRuntimeActive(item.status) ? "" : "runtime-card--closed"}`}>
+                  <article key={item.workspace_id} className={`management-console__card runtime-card ${isRuntimeActive(item.status) ? "" : "runtime-card--closed"}`}>
                     <div className="management-console__card-head">
                       <div>
-                        <strong>{item.conversation_title || item.session_id}</strong>
+                        <strong>{item.conversation_title || item.owner_session_id}</strong>
                         <p>{item.container_name || "尚未创建容器"}</p>
                       </div>
                       <span className={`request-status request-status--${getRuntimeStatusClass(item.status)}`}>
@@ -1024,7 +1024,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                       </span>
                     </div>
                     <p>所属平台：{item.platform_display_name || "未绑定"} · 用户：{item.owner_user_name || item.external_user_id || "未知"}</p>
-                    <p>Session：{item.session_id} · 代次：{item.generation ?? 0}</p>
+                    <p>Workspace：{item.workspace_id} · 并发命令：{item.active_command_count ?? 0} · 代次：{item.generation ?? 0}</p>
                     <p>最近使用：{formatTime(item.last_used_at)} · 闲置到期：{formatTime(item.idle_expires_at)}</p>
                     <p>创建时间：{formatTime(item.created_at)} · 最大寿命：{formatTime(item.max_expires_at)}</p>
                     <p>销毁原因：{item.destroy_reason || "未销毁"}</p>
@@ -1033,8 +1033,8 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                         <button
                           type="button"
                           className="action-button action-button--ghost danger-button"
-                          disabled={platformAdminBusy || item.status === "busy"}
-                          onClick={() => void handleCollectRuntime(item.session_id)}
+                          disabled={platformAdminBusy || (item.active_command_count ?? 0) > 0}
+                          onClick={() => void handleCollectRuntime(item.workspace_id)}
                         >
                           {platformAdminBusy ? "处理中..." : "回收容器"}
                         </button>

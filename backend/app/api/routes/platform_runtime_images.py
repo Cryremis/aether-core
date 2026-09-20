@@ -6,7 +6,7 @@ from app.api.deps import AuthContext, require_admin
 from app.schemas.common import ApiResponse
 from app.schemas.platform import PlatformRuntimeImageUpdateRequest
 from app.services.platform_runtime_image_service import platform_runtime_image_service
-from app.services.session_runtime_service import session_runtime_service
+from app.services.workspace_runtime_service import workspace_runtime_service
 from app.services.store import store_service
 
 router = APIRouter(prefix="/api/v1/platform-runtime-images", tags=["platform-runtime-images"])
@@ -45,7 +45,7 @@ async def update_platform_runtime_image(
 ) -> ApiResponse:
     _get_managed_platform(platform_id, auth)
     summary = platform_runtime_image_service.update_image(platform_id, request.image)
-    recycled = await session_runtime_service.collect_platform_runtimes(platform_id, reason="platform_image_updated")
+    recycled = await workspace_runtime_service.collect_platform_runtimes(platform_id, reason="platform_image_updated")
     return ApiResponse(
         message="平台运行镜像已更新",
         data={
@@ -64,7 +64,7 @@ async def upload_platform_runtime_image(
     _get_managed_platform(platform_id, auth)
     previous = platform_runtime_image_service.get_summary(platform_id)
     summary = await platform_runtime_image_service.publish_uploaded_image(platform_id, image_file)
-    recycled = await session_runtime_service.collect_platform_runtimes(platform_id, reason="platform_image_uploaded")
+    recycled = await workspace_runtime_service.collect_platform_runtimes(platform_id, reason="platform_image_uploaded")
     if previous.custom_image:
         await platform_runtime_image_service.cleanup_replaced_image(previous.custom_image, keep_image=summary.resolved_image)
     return ApiResponse(
@@ -80,7 +80,7 @@ async def upload_platform_runtime_image(
 async def clear_platform_runtime_image(platform_id: int, auth: AuthContext = Depends(require_admin)) -> ApiResponse:
     _get_managed_platform(platform_id, auth)
     summary = platform_runtime_image_service.clear_image(platform_id)
-    recycled = await session_runtime_service.collect_platform_runtimes(platform_id, reason="platform_image_cleared")
+    recycled = await workspace_runtime_service.collect_platform_runtimes(platform_id, reason="platform_image_cleared")
     return ApiResponse(
         message="平台运行镜像覆盖已清除",
         data={

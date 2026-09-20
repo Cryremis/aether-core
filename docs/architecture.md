@@ -50,7 +50,7 @@ AetherCore/
 
 ### 3.4 sandbox
 
-负责为每个会话生成隔离工作区，后续将继续接入容器化执行器。
+负责为 Workspace 准备共享文件区与 runtime。Agent 会话只拥有隔离上下文，同一 Workspace 内的主 Agent 与 Subagent 共享文件、缓存和容器执行环境。
 
 ### 3.5 host
 

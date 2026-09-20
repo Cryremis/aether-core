@@ -176,6 +176,35 @@ class HostBindingSummary(BaseModel):
 
     host_name: str
     session_id: str
+    workspace_id: str
     tool_count: int
     skill_count: int
     api_count: int
+
+
+class HostWorkspaceMember(BaseModel):
+    """Workspace 成员投影。"""
+
+    session_id: str
+    conversation_id: str | None = None
+    role: str
+    parent_session_id: str | None = None
+    title: str | None = None
+    visibility: str | None = None
+    joined_at: str
+    last_active_at: str
+
+
+class HostWorkspaceSummary(BaseModel):
+    """宿主可见的共享 Workspace 摘要。"""
+
+    workspace_id: str
+    owner_session_id: str
+    owner_conversation_id: str | None = None
+    status: str
+    revision: int
+    baseline_root: str
+    created_at: str
+    updated_at: str
+    members: list[HostWorkspaceMember] = Field(default_factory=list)
+    runtime: dict[str, Any] | None = None

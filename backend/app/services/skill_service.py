@@ -306,7 +306,7 @@ class SkillService:
         normalized_dir = base_dir.replace("\\", "/")
         body = str(skill.get("content", "")).strip()
         body = body.replace("${AETHER_SKILL_DIR}", normalized_dir)
-        body = body.replace("${AETHER_SESSION_ID}", session.session_id)
+        body = body.replace("${AETHER_WORKSPACE_ID}", session.workspace_id)
         return (
             f"<aether_skill name=\"{skill['name']}\" source=\"{skill['source']}\">\n"
             f"Base directory for this skill: {normalized_dir}\n\n"

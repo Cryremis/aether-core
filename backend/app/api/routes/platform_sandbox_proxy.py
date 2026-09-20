@@ -6,7 +6,7 @@ from app.api.deps import AuthContext, require_admin
 from app.schemas.common import ApiResponse
 from app.schemas.platform import PlatformSandboxProxyConfigUpdateRequest
 from app.services.platform_sandbox_proxy_service import platform_sandbox_proxy_service
-from app.services.session_runtime_service import session_runtime_service
+from app.services.workspace_runtime_service import workspace_runtime_service
 from app.services.store import store_service
 
 router = APIRouter(prefix="/api/v1/platform-sandbox-proxy", tags=["platform-sandbox-proxy"])
@@ -38,7 +38,7 @@ async def update_platform_sandbox_proxy_config(
 ) -> ApiResponse:
     _get_managed_platform(platform_id, auth)
     summary = platform_sandbox_proxy_service.update_config(platform_id, request)
-    recycled = await session_runtime_service.collect_platform_runtimes(platform_id, reason="platform_sandbox_proxy_updated")
+    recycled = await workspace_runtime_service.collect_platform_runtimes(platform_id, reason="platform_sandbox_proxy_updated")
     return ApiResponse(
         message="平台 sandbox 代理配置已更新",
         data={
@@ -55,7 +55,7 @@ async def delete_platform_sandbox_proxy_config(
 ) -> ApiResponse:
     _get_managed_platform(platform_id, auth)
     summary = platform_sandbox_proxy_service.clear_config(platform_id)
-    recycled = await session_runtime_service.collect_platform_runtimes(platform_id, reason="platform_sandbox_proxy_cleared")
+    recycled = await workspace_runtime_service.collect_platform_runtimes(platform_id, reason="platform_sandbox_proxy_cleared")
     return ApiResponse(
         message="平台 sandbox 代理配置已删除",
         data={

@@ -180,9 +180,46 @@ class StoreService:
                     PRIMARY KEY (platform_id, external_user_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS agent_workspaces (
+                    workspace_id TEXT PRIMARY KEY,
+                    owner_session_id TEXT NOT NULL UNIQUE,
+                    owner_conversation_id TEXT,
+                    root_relative_path TEXT NOT NULL UNIQUE,
+                    baseline_root TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS workspace_members (
+                    session_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    conversation_id TEXT,
+                    role TEXT NOT NULL,
+                    parent_session_id TEXT,
+                    joined_at TEXT NOT NULL,
+                    last_active_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace
+                ON workspace_members(workspace_id, joined_at ASC);
+
+                CREATE TABLE IF NOT EXISTS workspace_migration_journal (
+                    session_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    source_root TEXT NOT NULL,
+                    destination_root TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error_text TEXT,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL UNIQUE,
+                    workspace_id TEXT,
                     platform_id INTEGER,
                     owner_user_id INTEGER,
                     external_user_id TEXT,
@@ -219,9 +256,10 @@ class StoreService:
                 CREATE INDEX IF NOT EXISTS idx_users_created_at
                 ON users(created_at);
 
-                CREATE TABLE IF NOT EXISTS session_runtimes (
-                    session_id TEXT PRIMARY KEY,
-                    conversation_id TEXT,
+                CREATE TABLE IF NOT EXISTS workspace_runtimes (
+                    workspace_id TEXT PRIMARY KEY,
+                    owner_session_id TEXT NOT NULL,
+                    owner_conversation_id TEXT,
                     platform_id INTEGER,
                     owner_user_id INTEGER,
                     external_user_id TEXT,
@@ -245,8 +283,8 @@ class StoreService:
                     metadata_json TEXT NOT NULL DEFAULT '{}'
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_session_runtimes_status
-                ON session_runtimes(status, last_used_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_workspace_runtimes_status
+                ON workspace_runtimes(status, last_used_at DESC);
 
                 CREATE TABLE IF NOT EXISTS extension_entries (
                     entry_id TEXT PRIMARY KEY,
@@ -320,6 +358,7 @@ class StoreService:
 
                 CREATE TABLE IF NOT EXISTS subagent_runs (
                     child_run_id TEXT PRIMARY KEY,
+                    workspace_id TEXT,
                     parent_run_id TEXT NOT NULL,
                     parent_session_id TEXT NOT NULL,
                     child_session_id TEXT NOT NULL UNIQUE,
@@ -339,6 +378,7 @@ class StoreService:
                 """
             )
             self._ensure_column(conn, "conversations", "visibility", "TEXT NOT NULL DEFAULT 'normal'")
+            self._ensure_column(conn, "conversations", "workspace_id", "TEXT")
             self._ensure_column(conn, "conversations", "archived_at", "TEXT")
             self._ensure_column(conn, "conversations", "pinned_at", "TEXT")
             self._ensure_column(conn, "conversations", "deleted_at", "TEXT")
@@ -353,6 +393,7 @@ class StoreService:
                 """
             )
             self._ensure_column(conn, "subagent_runs", "latest_run_id", "TEXT")
+            self._ensure_column(conn, "subagent_runs", "workspace_id", "TEXT")
             self._ensure_column(conn, "users", "last_login_at", "TEXT")
             self._ensure_column(conn, "platform_admins", "assigned_by", "INTEGER")
             self._ensure_column(conn, "platform_admins", "is_primary", "INTEGER NOT NULL DEFAULT 0")
@@ -373,8 +414,14 @@ class StoreService:
             self._ensure_column(conn, "platforms", "sandbox_proxy_inherit_host_proxy", "INTEGER NOT NULL DEFAULT 1")
             self._ensure_column(conn, "platforms", "sandbox_proxy_updated_at", "TEXT")
             conn.execute("DROP TABLE IF EXISTS admin_whitelist")
+            self._migrate_workspaces(conn)
+            conn.execute("DROP TABLE IF EXISTS session_runtimes")
             self._migrate_roles(conn)
             self._backfill_platform_admin_metadata(conn)
+        # 文件迁移放在 DB schema 迁移之后、服务可用之前；失败必须阻断启动，避免双轨读取。
+        from app.services.workspace_service import workspace_service
+
+        workspace_service.migrate_legacy_layout()
         self._seed_default_users()
         self._seed_standalone_platform()
 
@@ -383,6 +430,189 @@ class StoreService:
         if column_name in columns:
             return
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+    def _migrate_workspaces(self, conn: sqlite3.Connection) -> None:
+        """一次性把会话归属迁移为共享 Workspace 归属。"""
+        rows = conn.execute("SELECT * FROM conversations").fetchall()
+        conversations = {str(row["session_id"]): dict(row) for row in rows}
+        workspace_by_session = {
+            session_id: str(row["workspace_id"])
+            for session_id, row in conversations.items()
+            if row.get("workspace_id")
+        }
+
+        def ensure_workspace(session_id: str, baseline_root: str = "") -> str:
+            existing = workspace_by_session.get(session_id)
+            if existing:
+                return existing
+            workspace_id = f"ws_{uuid.uuid4().hex}"
+            now = utcnow_iso()
+            conn.execute(
+                """
+                INSERT INTO agent_workspaces(
+                    workspace_id, owner_session_id, owner_conversation_id, root_relative_path,
+                    baseline_root, status, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', 1, ?, ?)
+                """,
+                (
+                    workspace_id,
+                    session_id,
+                    conversations[session_id].get("conversation_id"),
+                    f"workspaces/{workspace_id}",
+                    baseline_root,
+                    now,
+                    now,
+                ),
+            )
+            workspace_by_session[session_id] = workspace_id
+            return workspace_id
+
+        def attach_member(
+            session_id: str,
+            workspace_id: str,
+            role: str,
+            parent_session_id: str | None,
+        ) -> None:
+            now = utcnow_iso()
+            conn.execute(
+                """
+                INSERT INTO workspace_members(
+                    session_id, workspace_id, conversation_id, role, parent_session_id,
+                    joined_at, last_active_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    workspace_id = excluded.workspace_id,
+                    conversation_id = excluded.conversation_id,
+                    role = excluded.role,
+                    parent_session_id = excluded.parent_session_id,
+                    last_active_at = excluded.last_active_at
+                """,
+                (
+                    session_id,
+                    workspace_id,
+                    conversations[session_id].get("conversation_id"),
+                    role,
+                    parent_session_id,
+                    now,
+                    now,
+                ),
+            )
+
+        for row in rows:
+            session_id = str(row["session_id"])
+            metadata = json.loads(row["metadata_json"] or "{}")
+            if not bool(metadata.get("subagent")):
+                workspace_id = ensure_workspace(session_id, self._legacy_session_baseline(session_id))
+                conn.execute(
+                    "UPDATE conversations SET workspace_id = ? WHERE session_id = ?",
+                    (workspace_id, session_id),
+                )
+                conversations[session_id]["workspace_id"] = workspace_id
+                attach_member(session_id, workspace_id, "owner", None)
+
+        for row in rows:
+            session_id = str(row["session_id"])
+            metadata = json.loads(row["metadata_json"] or "{}")
+            if not bool(metadata.get("subagent")):
+                continue
+            parent_session_id = str(metadata.get("parent_session_id") or "")
+            parent_workspace_id = workspace_by_session.get(parent_session_id)
+            if parent_workspace_id is None:
+                workspace_id = ensure_workspace(session_id, self._legacy_session_baseline(session_id))
+                role = "orphan_subagent"
+            else:
+                workspace_id = parent_workspace_id
+                role = "subagent"
+            conn.execute(
+                "UPDATE conversations SET workspace_id = ? WHERE session_id = ?",
+                (workspace_id, session_id),
+            )
+            conversations[session_id]["workspace_id"] = workspace_id
+            attach_member(
+                session_id,
+                workspace_id,
+                role,
+                parent_session_id or None,
+            )
+
+        conn.execute(
+            """
+            UPDATE subagent_runs
+            SET workspace_id = (
+                SELECT c.workspace_id FROM conversations c
+                WHERE c.session_id = subagent_runs.parent_session_id
+            )
+            WHERE workspace_id IS NULL OR workspace_id = ''
+            """
+        )
+        self._migrate_workspace_runtimes(conn, workspace_by_session)
+
+    def _legacy_session_baseline(self, session_id: str) -> str:
+        metadata_path = settings.sessions_root / session_id / "sandbox" / "metadata" / "session.json"
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            return str(payload.get("baseline_root") or "")
+        except (OSError, json.JSONDecodeError):
+            return ""
+
+    def _migrate_workspace_runtimes(
+        self,
+        conn: sqlite3.Connection,
+        workspace_by_session: dict[str, str],
+    ) -> None:
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_runtimes'"
+        ).fetchone()
+        if not table_exists:
+            return
+        rows = conn.execute("SELECT * FROM session_runtimes").fetchall()
+        best_by_workspace: dict[str, sqlite3.Row] = {}
+        for row in rows:
+            workspace_id = workspace_by_session.get(str(row["session_id"]))
+            if workspace_id is None:
+                continue
+            current = best_by_workspace.get(workspace_id)
+            if current is None or str(row["updated_at"] or "") > str(current["updated_at"] or ""):
+                best_by_workspace[workspace_id] = row
+        for workspace_id, row in best_by_workspace.items():
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO workspace_runtimes(
+                    workspace_id, owner_session_id, owner_conversation_id, platform_id,
+                    owner_user_id, external_user_id, container_name, container_id, image,
+                    status, generation, network_mode, created_at, updated_at,
+                    last_started_at, last_used_at, idle_expires_at, max_expires_at,
+                    destroyed_at, destroy_reason, restart_count, workspace_root, home_root,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    workspace_id,
+                    str(row["session_id"]),
+                    row["conversation_id"],
+                    row["platform_id"],
+                    row["owner_user_id"],
+                    row["external_user_id"],
+                    row["container_name"],
+                    row["container_id"],
+                    row["image"],
+                    row["status"],
+                    row["generation"],
+                    row["network_mode"],
+                    row["created_at"],
+                    row["updated_at"],
+                    row["last_started_at"],
+                    row["last_used_at"],
+                    row["idle_expires_at"],
+                    row["max_expires_at"],
+                    row["destroyed_at"],
+                    row["destroy_reason"],
+                    row["restart_count"],
+                    row["workspace_root"],
+                    row["home_root"],
+                    row["metadata_json"],
+                ),
+            )
 
     def _migrate_roles(self, conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE users SET role = 'user' WHERE role = 'platform_admin'")
@@ -1206,6 +1436,7 @@ class StoreService:
         self,
         *,
         session_id: str,
+        workspace_id: str | None = None,
         title: str,
         host_name: str,
         platform_id: int | None = None,
@@ -1219,18 +1450,25 @@ class StoreService:
         conversation_id = f"conv_{uuid.uuid4().hex}"
         now = utcnow_iso()
         with self._connect() as conn:
+            if workspace_id is None:
+                member = conn.execute(
+                    "SELECT workspace_id FROM workspace_members WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                workspace_id = str(member["workspace_id"]) if member else None
             conn.execute(
                 """
                 INSERT INTO conversations(
-                    conversation_id, session_id, platform_id, owner_user_id, external_user_id,
+                    conversation_id, session_id, workspace_id, platform_id, owner_user_id, external_user_id,
                     external_org_id, conversation_key, title, host_name, created_at,
                     updated_at, last_message_at, message_count, metadata_json, visibility
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(session_id) DO NOTHING
                 """,
                 (
                     conversation_id,
                     session_id,
+                    workspace_id,
                     platform_id,
                     owner_user_id,
                     external_user_id,
@@ -1249,7 +1487,259 @@ class StoreService:
             row = conn.execute(
                 "SELECT * FROM conversations WHERE session_id = ?", (session_id,)
             ).fetchone()
+            if row is not None:
+                conn.execute(
+                    """
+                    UPDATE workspace_members
+                    SET conversation_id = ?, last_active_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (row["conversation_id"], now, session_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE agent_workspaces
+                    SET owner_conversation_id = ?, updated_at = ?
+                    WHERE owner_session_id = ?
+                    """,
+                    (row["conversation_id"], now, session_id),
+                )
         return dict(row) if row else {}
+
+    def create_workspace(
+        self,
+        *,
+        owner_session_id: str,
+        owner_conversation_id: str | None = None,
+        baseline_root: str = "",
+    ) -> dict[str, Any]:
+        workspace_id = f"ws_{uuid.uuid4().hex}"
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_workspaces(
+                    workspace_id, owner_session_id, owner_conversation_id, root_relative_path,
+                    baseline_root, status, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', 1, ?, ?)
+                """,
+                (
+                    workspace_id,
+                    owner_session_id,
+                    owner_conversation_id,
+                    f"workspaces/{workspace_id}",
+                    baseline_root,
+                    now,
+                    now,
+                ),
+            )
+        return self.get_workspace(workspace_id) or {}
+
+    def get_workspace(self, workspace_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_workspaces WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_workspace_by_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT w.* FROM agent_workspaces w
+                JOIN workspace_members m ON m.workspace_id = w.workspace_id
+                WHERE m.session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_workspace_member(self, session_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM workspace_members WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def attach_workspace_session(
+        self,
+        *,
+        workspace_id: str,
+        session_id: str,
+        conversation_id: str | None = None,
+        role: str,
+        parent_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO workspace_members(
+                    session_id, workspace_id, conversation_id, role, parent_session_id,
+                    joined_at, last_active_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    workspace_id = excluded.workspace_id,
+                    conversation_id = excluded.conversation_id,
+                    role = excluded.role,
+                    parent_session_id = excluded.parent_session_id,
+                    last_active_at = excluded.last_active_at
+                """,
+                (
+                    session_id,
+                    workspace_id,
+                    conversation_id,
+                    role,
+                    parent_session_id,
+                    now,
+                    now,
+                ),
+            )
+        return self.get_workspace_member(session_id) or {}
+
+    def update_workspace(
+        self,
+        workspace_id: str,
+        *,
+        owner_conversation_id: str | None = None,
+        baseline_root: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            if owner_conversation_id is not None:
+                conn.execute(
+                    "UPDATE agent_workspaces SET owner_conversation_id = ?, updated_at = ? WHERE workspace_id = ?",
+                    (owner_conversation_id, now, workspace_id),
+                )
+            if baseline_root is not None:
+                conn.execute(
+                    "UPDATE agent_workspaces SET baseline_root = ?, updated_at = ? WHERE workspace_id = ?",
+                    (baseline_root, now, workspace_id),
+                )
+        return self.get_workspace(workspace_id)
+
+    def touch_workspace_session(self, session_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE workspace_members SET last_active_at = ? WHERE session_id = ?",
+                (utcnow_iso(), session_id),
+            )
+
+    def list_workspace_members(self, workspace_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.*, c.title, c.visibility, c.deleted_at
+                FROM workspace_members m
+                LEFT JOIN conversations c ON c.session_id = m.session_id
+                WHERE m.workspace_id = ?
+                ORDER BY m.joined_at ASC
+                """,
+                (workspace_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_workspace_members(self, workspace_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM workspace_members WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchone()
+        return int(row["count"])
+
+    def delete_workspace_session(self, session_id: str) -> bool:
+        with self._connect() as conn:
+            result = conn.execute(
+                "DELETE FROM workspace_members WHERE session_id = ?",
+                (session_id,),
+            )
+            return result.rowcount > 0
+
+    def workspace_has_active_work(self, workspace_id: str) -> bool:
+        with self._connect() as conn:
+            run = conn.execute(
+                """
+                SELECT 1
+                FROM agent_runs ar
+                JOIN conversations c ON c.conversation_id = ar.conversation_id
+                WHERE c.workspace_id = ?
+                  AND ar.status IN ('queued', 'running', 'waiting_input')
+                LIMIT 1
+                """,
+                (workspace_id,),
+            ).fetchone()
+            if run is not None:
+                return True
+            subagent = conn.execute(
+                """
+                SELECT 1 FROM subagent_runs
+                WHERE workspace_id = ? AND status = 'running'
+                LIMIT 1
+                """,
+                (workspace_id,),
+            ).fetchone()
+            return subagent is not None
+
+    def upsert_workspace_migration_journal(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        source_root: str,
+        destination_root: str,
+        mode: str,
+        status: str,
+        error_text: str | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO workspace_migration_journal(
+                    session_id, workspace_id, source_root, destination_root,
+                    mode, status, error_text, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    workspace_id = excluded.workspace_id,
+                    source_root = excluded.source_root,
+                    destination_root = excluded.destination_root,
+                    mode = excluded.mode,
+                    status = excluded.status,
+                    error_text = excluded.error_text,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    session_id,
+                    workspace_id,
+                    source_root,
+                    destination_root,
+                    mode,
+                    status,
+                    error_text,
+                    utcnow_iso(),
+                ),
+            )
+
+    def list_workspace_migration_journal(self, *, only_pending: bool = False) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            if only_pending:
+                rows = conn.execute(
+                    "SELECT * FROM workspace_migration_journal WHERE status = 'pending' ORDER BY updated_at ASC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM workspace_migration_journal ORDER BY updated_at ASC"
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_workspace_deleted(self, workspace_id: str) -> bool:
+        with self._connect() as conn:
+            result = conn.execute(
+                "UPDATE agent_workspaces SET status = 'deleted', updated_at = ? WHERE workspace_id = ?",
+                (utcnow_iso(), workspace_id),
+            )
+            return result.rowcount > 0
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -1651,6 +2141,7 @@ class StoreService:
         self,
         *,
         child_run_id: str,
+        workspace_id: str,
         parent_run_id: str,
         parent_session_id: str,
         child_session_id: str,
@@ -1662,12 +2153,13 @@ class StoreService:
             conn.execute(
                 """
                 INSERT INTO subagent_runs(
-                    child_run_id, parent_run_id, parent_session_id, child_session_id,
+                    child_run_id, workspace_id, parent_run_id, parent_session_id, child_session_id,
                     latest_run_id, name, task, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 (
                     child_run_id,
+                    workspace_id,
                     parent_run_id,
                     parent_session_id,
                     child_session_id,
@@ -1765,44 +2257,44 @@ class StoreService:
             )
         return True
 
-    def get_session_runtime(self, session_id: str) -> dict[str, Any] | None:
+    def get_workspace_runtime(self, workspace_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT
-                    sr.*,
+                    wr.*,
                     c.title AS conversation_title,
                     c.host_name AS conversation_host_name,
                     p.display_name AS platform_display_name,
                     u.full_name AS owner_user_name
-                FROM session_runtimes sr
-                LEFT JOIN conversations c ON c.session_id = sr.session_id
-                LEFT JOIN platforms p ON p.platform_id = sr.platform_id
-                LEFT JOIN users u ON u.user_id = sr.owner_user_id
-                WHERE sr.session_id = ?
+                FROM workspace_runtimes wr
+                LEFT JOIN conversations c ON c.conversation_id = wr.owner_conversation_id
+                LEFT JOIN platforms p ON p.platform_id = wr.platform_id
+                LEFT JOIN users u ON u.user_id = wr.owner_user_id
+                WHERE wr.workspace_id = ?
                 """,
-                (session_id,),
+                (workspace_id,),
             ).fetchone()
-        return self._row_to_session_runtime(row)
+        return self._row_to_workspace_runtime(row)
 
-    def list_session_runtimes(self) -> list[dict[str, Any]]:
+    def list_workspace_runtimes(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT
-                    sr.*,
+                    wr.*,
                     c.title AS conversation_title,
                     c.host_name AS conversation_host_name,
                     p.display_name AS platform_display_name,
                     u.full_name AS owner_user_name
-                FROM session_runtimes sr
-                LEFT JOIN conversations c ON c.session_id = sr.session_id
-                LEFT JOIN platforms p ON p.platform_id = sr.platform_id
-                LEFT JOIN users u ON u.user_id = sr.owner_user_id
-                ORDER BY COALESCE(sr.last_used_at, sr.updated_at) DESC, sr.session_id ASC
+                FROM workspace_runtimes wr
+                LEFT JOIN conversations c ON c.conversation_id = wr.owner_conversation_id
+                LEFT JOIN platforms p ON p.platform_id = wr.platform_id
+                LEFT JOIN users u ON u.user_id = wr.owner_user_id
+                ORDER BY COALESCE(wr.last_used_at, wr.updated_at) DESC, wr.workspace_id ASC
                 """
             ).fetchall()
-        return [self._row_to_session_runtime(row) for row in rows if row is not None]
+        return [self._row_to_workspace_runtime(row) for row in rows if row is not None]
 
     def get_system_audit_overview(self) -> dict[str, Any]:
         with self._connect() as conn:
@@ -1849,13 +2341,13 @@ class StoreService:
             runtime_rows = conn.execute(
                 """
                 SELECT
-                    sr.platform_id,
-                    sr.status,
-                    COALESCE(sr.last_used_at, sr.updated_at) AS activity_at
-                FROM session_runtimes sr
-                JOIN platforms p ON p.platform_id = sr.platform_id
+                    wr.platform_id,
+                    wr.status,
+                    COALESCE(wr.last_used_at, wr.updated_at) AS activity_at
+                FROM workspace_runtimes wr
+                JOIN platforms p ON p.platform_id = wr.platform_id
                 WHERE p.host_type = 'embedded'
-                ORDER BY COALESCE(sr.last_used_at, sr.updated_at) DESC
+                ORDER BY COALESCE(wr.last_used_at, wr.updated_at) DESC
                 """
             ).fetchall()
 
@@ -2108,10 +2600,11 @@ class StoreService:
         series.sort(key=lambda item: -item["points"][-1]["total_messages"])
         return series
 
-    def upsert_session_runtime(
+    def upsert_workspace_runtime(
         self,
         *,
-        session_id: str,
+        workspace_id: str,
+        owner_session_id: str,
         conversation_id: str | None,
         platform_id: int | None,
         owner_user_id: int | None,
@@ -2138,15 +2631,18 @@ class StoreService:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO session_runtimes(
-                    session_id, conversation_id, platform_id, owner_user_id, external_user_id,
+                INSERT INTO workspace_runtimes(
+                    workspace_id, owner_session_id, owner_conversation_id,
+                    platform_id, owner_user_id, external_user_id,
                     container_name, container_id, image, status, generation, network_mode,
                     created_at, updated_at, last_started_at, last_used_at,
                     idle_expires_at, max_expires_at, destroyed_at, destroy_reason,
                     restart_count, workspace_root, home_root, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    conversation_id = excluded.conversation_id,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id) DO UPDATE SET
+                    owner_session_id = excluded.owner_session_id,
+                    owner_conversation_id = excluded.owner_conversation_id,
+                    platform_id = excluded.platform_id,
                     platform_id = excluded.platform_id,
                     owner_user_id = excluded.owner_user_id,
                     external_user_id = excluded.external_user_id,
@@ -2170,7 +2666,8 @@ class StoreService:
                     metadata_json = excluded.metadata_json
                 """,
                 (
-                    session_id,
+                    workspace_id,
+                    owner_session_id,
                     conversation_id,
                     platform_id,
                     owner_user_id,
@@ -2195,14 +2692,14 @@ class StoreService:
                     json.dumps(metadata or {}, ensure_ascii=False),
                 ),
             )
-        runtime = self.get_session_runtime(session_id)
+        runtime = self.get_workspace_runtime(workspace_id)
         if runtime is None:
-            raise RuntimeError("Failed to persist session runtime")
+            raise RuntimeError("Failed to persist workspace runtime")
         return runtime
 
-    def delete_session_runtime(self, session_id: str) -> bool:
+    def delete_workspace_runtime(self, workspace_id: str) -> bool:
         with self._connect() as conn:
-            result = conn.execute("DELETE FROM session_runtimes WHERE session_id = ?", (session_id,))
+            result = conn.execute("DELETE FROM workspace_runtimes WHERE workspace_id = ?", (workspace_id,))
             return result.rowcount > 0
 
     def _inflate_platform_request(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -2267,7 +2764,7 @@ class StoreService:
             "enabled": bool(row["enabled"]),
         }
 
-    def _row_to_session_runtime(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _row_to_workspace_runtime(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
             return None
         payload = dict(row)

@@ -264,6 +264,7 @@ class EmbedBootstrapResponse(BaseModel):
 class ConversationSummary(BaseModel):
     conversation_id: str
     session_id: str
+    workspace_id: str
     title: str
     host_name: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

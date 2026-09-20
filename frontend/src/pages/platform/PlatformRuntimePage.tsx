@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { collectAdminRuntime, listAdminRuntimes, listAdminRuntimesHistory, type SessionRuntimeSummary } from "../../api/client";
+import { collectAdminRuntime, listAdminRuntimes, listAdminRuntimesHistory, type WorkspaceRuntimeSummary } from "../../api/client";
 import { getRuntimeStatusClass, getRuntimeStatusLabel, isRuntimeActive } from "../../components/ManagementConsole";
 import { useAppPreferences } from "../../i18n";
 import { TabPageShell } from "./TabPageShell";
@@ -17,7 +17,7 @@ export default function PlatformRuntimePage() {
   const { t } = useAppPreferences();
   const params = useParams();
   const platformId = Number(params.platformId);
-  const [runtimes, setRuntimes] = useState<SessionRuntimeSummary[]>([]);
+  const [runtimes, setRuntimes] = useState<WorkspaceRuntimeSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -28,7 +28,7 @@ export default function PlatformRuntimePage() {
     setError("");
     try {
       const result = includeHistory ? await listAdminRuntimesHistory() : await listAdminRuntimes();
-      setRuntimes(((result.data ?? []) as SessionRuntimeSummary[]).filter((item) => item.platform_id === platformId));
+    setRuntimes(((result.data ?? []) as WorkspaceRuntimeSummary[]).filter((item) => item.platform_id === platformId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "加载 runtime 列表失败");
     } finally {
@@ -41,11 +41,11 @@ export default function PlatformRuntimePage() {
     void loadRuntimes(showHistory);
   }, [platformId, showHistory]);
 
-  const handleCollectRuntime = async (sessionId: string) => {
-    if (!window.confirm("确定立即回收这个会话 runtime 吗？下次执行命令时会自动重建。")) return;
+  const handleCollectRuntime = async (workspaceId: string) => {
+    if (!window.confirm("确定立即回收这个 Workspace runtime 吗？下次执行命令时会自动重建。")) return;
     try {
       setBusy(true);
-      await collectAdminRuntime(sessionId);
+      await collectAdminRuntime(workspaceId);
       await loadRuntimes(showHistory);
     } catch (err) {
       setError(err instanceof Error ? err.message : "回收 runtime 失败");
@@ -74,19 +74,19 @@ export default function PlatformRuntimePage() {
           {loading ? <div className="admin-panel__empty">正在加载 runtime...</div> : null}
           {!loading && runtimes.length === 0 ? <div className="admin-panel__empty">{t("platformDetail.noRuntime")}</div> : null}
           {runtimes.map((item) => (
-            <article key={item.session_id} className={`management-console__card runtime-card ${isRuntimeActive(item.status) ? "" : "runtime-card--closed"}`}>
+            <article key={item.workspace_id} className={`management-console__card runtime-card ${isRuntimeActive(item.status) ? "" : "runtime-card--closed"}`}>
               <div className="management-console__card-head">
                 <div>
-                  <strong>{item.conversation_title || item.session_id}</strong>
+                  <strong>{item.conversation_title || item.workspace_id}</strong>
                   <p>{item.container_name || t("common.notRecorded")}</p>
                 </div>
                 <span className={`request-status request-status--${getRuntimeStatusClass(item.status)}`}>{getRuntimeStatusLabel(item.status)}</span>
               </div>
               <p>{t("platformDetail.owner")}：{item.owner_user_name || item.external_user_id || t("common.unknown")}</p>
-              <p>{t("platformDetail.session")}：{item.session_id} · {t("platformDetail.generation")}：{item.generation ?? 0}</p>
+              <p>Workspace：{item.workspace_id} · {t("platformDetail.generation")}：{item.generation ?? 0}</p>
               <p>{t("platformDetail.lastUsed")}：{formatTime(item.last_used_at) || t("common.notRecorded")} · {t("platformDetail.idleExpires")}：{formatTime(item.idle_expires_at) || t("common.notRecorded")}</p>
               {isRuntimeActive(item.status) ? (
-                <button type="button" className="action-button action-button--ghost danger-button" disabled={busy || item.status === "busy"} onClick={() => void handleCollectRuntime(item.session_id)}>
+                <button type="button" className="action-button action-button--ghost danger-button" disabled={busy || item.status === "busy"} onClick={() => void handleCollectRuntime(item.workspace_id)}>
                   {t("platformDetail.collectRuntime")}
                 </button>
               ) : null}

@@ -26,7 +26,7 @@ from app.api.routes.capabilities import router as capabilities_router
 from app.api.routes.extensions import router as extensions_router
 from app.core.config import settings
 from app.core.logging import configure_logging
-from app.services.session_runtime_service import session_runtime_service
+from app.services.workspace_runtime_service import workspace_runtime_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
 
@@ -38,11 +38,11 @@ store_service.initialize()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await session_runtime_service.start_background_tasks()
+    await workspace_runtime_service.start_background_tasks()
     try:
         yield
     finally:
-        await session_runtime_service.stop_background_tasks()
+        await workspace_runtime_service.stop_background_tasks()
 
 
 app = FastAPI(title=settings.app_name, debug=settings.app_debug, lifespan=lifespan)

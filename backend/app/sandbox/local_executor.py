@@ -139,7 +139,7 @@ class LocalSandboxExecutor(SandboxExecutor):
                 env[name] = value
         env.update(
             {
-                "AETHER_SESSION_ID": workspace.session_id,
+                "AETHER_WORKSPACE_ID": workspace.workspace_id,
                 "AETHER_SANDBOX_ROOT": str(workspace.root),
                 "AETHER_SKILLS_DIR": str(workspace.skills_dir),
                 "AETHER_WORK_DIR": str(workspace.work_dir),

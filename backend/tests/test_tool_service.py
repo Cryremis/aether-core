@@ -317,14 +317,14 @@ def test_sandbox_shell_passes_timeout_override(monkeypatch, tmp_path):
 def test_sandbox_shell_returns_runtime_busy_payload(monkeypatch, tmp_path):
     from app.core.config import settings
     from app.services.session_service import session_service
-    from app.services.session_runtime_service import RuntimeBusyError
+    from app.services.workspace_runtime_service import RuntimeBusyError
 
     settings.storage_root = tmp_path / "storage"
     session = session_service.get_or_create("sess_shell_busy")
 
     async def fake_run_shell(*, workspace, command, shell, timeout_seconds=None, session=None, run_id=None):
         raise RuntimeBusyError(
-            session_id=workspace.session_id,
+            workspace_id=workspace.workspace_id,
             summary="前一个命令仍在退出中，当前沙箱暂时不可用。可以继续等待，或调用 rebuild_runtime 重建沙箱。",
             runtime={"status": "terminating", "generation": 2},
         )
@@ -350,14 +350,14 @@ def test_sandbox_shell_returns_runtime_busy_payload(monkeypatch, tmp_path):
 def test_sandbox_shell_returns_runtime_start_failed_payload(monkeypatch, tmp_path):
     from app.core.config import settings
     from app.services.session_service import session_service
-    from app.services.session_runtime_service import RuntimeStartError
+    from app.services.workspace_runtime_service import RuntimeStartError
 
     settings.storage_root = tmp_path / "storage"
     session = session_service.get_or_create("sess_shell_start_failed")
 
     async def fake_run_shell(*, workspace, command, shell, timeout_seconds=None, session=None, run_id=None):
         raise RuntimeStartError(
-            session_id=workspace.session_id,
+            workspace_id=workspace.workspace_id,
             summary="沙箱 runtime 未能处于可执行状态，请重建运行环境。",
             runtime={"status": "failed_start", "generation": 3, "destroy_reason": "bootstrap_failed"},
         )
@@ -398,7 +398,7 @@ def test_rebuild_runtime_tool_reports_runtime_event(monkeypatch, tmp_path):
             "idle_expires_at": "2026-01-01T00:00:00Z",
         }
 
-    monkeypatch.setattr("app.services.tool_service.session_runtime_service.rebuild_runtime", fake_rebuild_runtime)
+    monkeypatch.setattr("app.services.tool_service.workspace_runtime_service.rebuild_runtime", fake_rebuild_runtime)
 
     result = __import__("asyncio").run(
         tool_service.execute(

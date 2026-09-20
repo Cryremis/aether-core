@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 from typing import Any
 
 from app.schemas.agent import AgentEvent
@@ -16,8 +15,8 @@ from app.services.store import store_service
 class SubagentService:
     """一层 Subagent 编排服务。
 
-    子 Agent 拥有独立 session/run/workspace，但不获得 subagent 工具，
-    从而默认保证主 Agent -> Subagent 的一层结构。
+    子 Agent 拥有独立上下文与 run，并共享父 Workspace；
+    子 Agent 不获得 subagent 工具，保证默认只有一层结构。
     """
 
     def __init__(self) -> None:
@@ -98,6 +97,7 @@ class SubagentService:
         )
         row = store_service.create_subagent_run(
             child_run_id=child_run_id,
+            workspace_id=parent_session.workspace_id,
             parent_run_id=parent_run_id,
             parent_session_id=parent_session.session_id,
             child_session_id=child_session.session_id,
@@ -271,7 +271,11 @@ class SubagentService:
         name: str,
         allowed_tools: list[str] | None,
     ) -> AgentSession:
-        child = session_service.get_or_create()
+        child = session_service.get_or_create(
+            workspace_id=parent_session.workspace_id,
+            role="subagent",
+            parent_session_id=parent_session.session_id,
+        )
         session_service.clone_host_state(parent_session, child)
         child.platform_files = [dict(item) for item in parent_session.platform_files]
         child.platform_skills = [dict(item) for item in parent_session.platform_skills]
@@ -281,11 +285,9 @@ class SubagentService:
         child.allow_network = parent_session.allow_network
         child.allowed_tools = list(dict.fromkeys(allowed_tools)) if allowed_tools else parent_session.allowed_tools
         child.subagent_tools_enabled = False
-        if parent_session.baseline_root:
-            session_service.bind_baseline_root(child, Path(parent_session.baseline_root))
-
         conversation = store_service.create_conversation(
             session_id=child.session_id,
+            workspace_id=parent_session.workspace_id,
             title=f"Subagent: {name}",
             host_name=parent_session.host_name or "AetherCore",
             platform_id=parent_session.platform_id,
@@ -297,6 +299,7 @@ class SubagentService:
             metadata={
                 "subagent": True,
                 "parent_session_id": parent_session.session_id,
+                "workspace_id": parent_session.workspace_id,
             },
         )
         child.conversation_id = conversation["conversation_id"]
@@ -371,27 +374,21 @@ class SubagentService:
     ) -> None:
         parent = session_service.get_or_create(parent_session_id)
         content = f"Subagent {name} {status}: {result_text}"
-        active_run = parent.active_run
-        waiting_for_subagent = (
-            active_run is not None
-            and active_run.run_id == parent_run_id
-            and active_run.tool_name == "subagent_wait"
-        )
-        if not waiting_for_subagent:
-            turn_index = max([int(item.get("turn_index") or 0) for item in parent.messages], default=0) + 1
-            parent.messages.append(
-                context_message_adapter.ensure_runtime_metadata(
-                    {
-                        "role": "user",
-                        "content": content,
-                        "subagent_run_id": subagent_run_id,
-                        "child_run_id": latest_run_id,
-                    },
-                    turn_index=turn_index,
-                    kind="subagent_result",
-                )
+        turn_index = max([int(item.get("turn_index") or 0) for item in parent.messages], default=0) + 1
+        parent.messages.append(
+            context_message_adapter.ensure_runtime_metadata(
+                {
+                    "role": "user",
+                    "content": content,
+                    "subagent_run_id": subagent_run_id,
+                    "child_run_id": latest_run_id,
+                    "workspace_id": parent.workspace_id,
+                },
+                turn_index=turn_index,
+                kind="subagent_result",
             )
-            session_service.persist(parent)
+        )
+        session_service.persist(parent)
 
         await self._publish_parent_event(
             parent,
@@ -438,6 +435,7 @@ class SubagentService:
     def _public_row(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "subagent_run_id": str(row.get("child_run_id")),
+            "workspace_id": str(row.get("workspace_id") or ""),
             "run_id": str(row.get("latest_run_id")),
             "name": str(row.get("name")),
             "task": str(row.get("task")),

@@ -17,7 +17,7 @@ from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
-from app.services.session_workspace_sync_service import WorkspaceState, session_workspace_sync_service
+from app.services.workspace_sync_service import WorkspaceState, workspace_sync_service
 
 
 class FakeUploadFile:
@@ -140,7 +140,7 @@ def test_deleted_baseline_file_is_hidden_from_list_and_read(tmp_path):
     session = conversation_service.bootstrap_admin_workbench(admin)
     assert session.workspace is not None
 
-    session_workspace_sync_service.save_state(
+    workspace_sync_service.save_state(
         session.workspace,
         WorkspaceState(tombstones=("work/repo/main.py",)),
     )

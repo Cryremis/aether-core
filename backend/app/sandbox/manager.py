@@ -7,13 +7,18 @@ from app.sandbox.models import SandboxWorkspace
 
 
 class SandboxManager:
-    """负责为每个会话准备独立工作区。"""
+    """负责准备可被多个上下文共享的工作区。"""
 
     _SESSION_ROOTS = ("skills", "work", "logs")
     _WRITABLE_DIR_MODE = 0o777
 
-    def ensure_workspace(self, session_id: str, baseline_root: Path | None = None) -> SandboxWorkspace:
-        session_root = (settings.sessions_root / session_id / "sandbox").resolve()
+    def ensure_workspace(
+        self,
+        workspace_id: str,
+        owner_session_id: str,
+        baseline_root: Path | None = None,
+    ) -> SandboxWorkspace:
+        session_root = (settings.sessions_root / "workspaces" / workspace_id / "sandbox").resolve()
         skills_dir = session_root / "skills"
         work_dir = session_root / "work"
         logs_dir = session_root / "logs"
@@ -42,7 +47,8 @@ class SandboxManager:
         self._ensure_writable_permissions(session_root)
 
         return SandboxWorkspace(
-            session_id=session_id,
+            workspace_id=workspace_id,
+            owner_session_id=owner_session_id,
             root=session_root,
             baseline_root=baseline_root.resolve() if baseline_root else None,
             skills_dir=skills_dir,

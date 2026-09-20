@@ -21,7 +21,7 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAu
 from app.core.config import settings
 from app.services.session_types import AgentSession
 from app.services.store import store_service
-from app.services.session_runtime_service import session_runtime_service
+from app.services.workspace_runtime_service import workspace_runtime_service
 from app.services.secret_store_service import secret_store_service
 
 
@@ -125,10 +125,10 @@ class McpRuntimeService:
             if config["transport"] == "stdio":
                 if session.workspace is None:
                     raise McpRuntimeError("会话沙箱未初始化")
-                await session_runtime_service.ensure_runtime(session.workspace)
-                runtime = store_service.get_session_runtime(session.session_id)
+                await workspace_runtime_service.ensure_runtime(session.workspace)
+                runtime = store_service.get_workspace_runtime(session.workspace_id)
                 if not runtime or runtime.get("status") != "running" or not runtime.get("container_name"):
-                    raise McpRuntimeError("STDIO MCP 需要已运行的会话沙箱")
+                    raise McpRuntimeError("STDIO MCP 需要已运行的 Workspace 沙箱")
                 command = list(config.get("command") or []) + list(config.get("args") or [])
                 docker_env: list[str] = []
                 process_env = os.environ.copy()

@@ -11,7 +11,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.sandbox.executors import SandboxExecutor, SandboxOutputCallback
 from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
-from app.services.session_runtime_service import session_runtime_service
+from app.services.workspace_runtime_service import workspace_runtime_service
 from app.services.session_types import AgentSession
 
 
@@ -42,7 +42,7 @@ class DockerSandboxExecutor(SandboxExecutor):
         run_id: str | None = None,
         output_callback: SandboxOutputCallback | None = None,
     ) -> SandboxCommandResult:
-        return await session_runtime_service.run_shell(
+        return await workspace_runtime_service.run_shell(
             workspace,
             command=command,
             shell=shell,
@@ -53,7 +53,7 @@ class DockerSandboxExecutor(SandboxExecutor):
         )
 
     async def check_availability(self) -> tuple[bool, str]:
-        return await session_runtime_service.check_availability()
+        return await workspace_runtime_service.check_availability()
 
     def _resolve_docker_binary(self) -> str | None:
         configured = settings.sandbox_docker_command.strip()
@@ -103,7 +103,7 @@ class DockerSandboxExecutor(SandboxExecutor):
             "--cap-add",
             "SYS_ADMIN",
             "--env",
-            f"AETHER_SESSION_ID={workspace.session_id}",
+            f"AETHER_WORKSPACE_ID={workspace.workspace_id}",
             "--env",
             f"AETHER_SANDBOX_ROOT={settings.sandbox_docker_workspace_mount}",
             "--env",

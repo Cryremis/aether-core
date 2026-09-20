@@ -431,7 +431,7 @@ def test_platform_admin_can_update_runtime_image_and_recycle_runtimes(tmp_path, 
         return 3
 
     monkeypatch.setattr(
-        "app.api.routes.platform_runtime_images.session_runtime_service.collect_platform_runtimes",
+        "app.api.routes.platform_runtime_images.workspace_runtime_service.collect_platform_runtimes",
         fake_collect_platform_runtimes,
     )
 
@@ -480,7 +480,7 @@ def test_platform_admin_can_update_sandbox_proxy_and_recycle_runtimes(tmp_path, 
         return 4
 
     monkeypatch.setattr(
-        "app.api.routes.platform_sandbox_proxy.session_runtime_service.collect_platform_runtimes",
+        "app.api.routes.platform_sandbox_proxy.workspace_runtime_service.collect_platform_runtimes",
         fake_collect_platform_runtimes,
     )
 
@@ -584,7 +584,7 @@ def test_platform_admin_can_upload_runtime_image_and_enable_it(tmp_path, monkeyp
         fake_publish,
     )
     monkeypatch.setattr(
-        "app.api.routes.platform_runtime_images.session_runtime_service.collect_platform_runtimes",
+        "app.api.routes.platform_runtime_images.workspace_runtime_service.collect_platform_runtimes",
         fake_collect_platform_runtimes,
     )
     monkeypatch.setattr(
@@ -1478,8 +1478,9 @@ def test_platform_admin_runtime_list_hides_inactive_by_default(tmp_path, monkeyp
     assert other_conversation is not None
 
     now = datetime.now(timezone.utc).isoformat()
-    store_service.upsert_session_runtime(
-        session_id=managed_session.session_id,
+    store_service.upsert_workspace_runtime(
+        workspace_id=managed_session.workspace_id,
+        owner_session_id=managed_session.session_id,
         conversation_id=managed_conversation["conversation_id"],
         platform_id=managed_platform["platform_id"],
         owner_user_id=None,
@@ -1503,8 +1504,9 @@ def test_platform_admin_runtime_list_hides_inactive_by_default(tmp_path, monkeyp
         home_root="home-a",
         metadata={},
     )
-    store_service.upsert_session_runtime(
-        session_id=closed_session.session_id,
+    store_service.upsert_workspace_runtime(
+        workspace_id=closed_session.workspace_id,
+        owner_session_id=closed_session.session_id,
         conversation_id=closed_conversation["conversation_id"],
         platform_id=managed_platform["platform_id"],
         owner_user_id=None,
@@ -1528,8 +1530,9 @@ def test_platform_admin_runtime_list_hides_inactive_by_default(tmp_path, monkeyp
         home_root="home-b",
         metadata={},
     )
-    store_service.upsert_session_runtime(
-        session_id=other_session.session_id,
+    store_service.upsert_workspace_runtime(
+        workspace_id=other_session.workspace_id,
+        owner_session_id=other_session.session_id,
         conversation_id=other_conversation["conversation_id"],
         platform_id=unmanaged_platform["platform_id"],
         owner_user_id=None,
@@ -1555,22 +1558,22 @@ def test_platform_admin_runtime_list_hides_inactive_by_default(tmp_path, monkeyp
     )
 
     async def fake_list_runtimes(*, refresh: bool = True):
-        return store_service.list_session_runtimes()
+        return store_service.list_workspace_runtimes()
 
-    monkeypatch.setattr("app.api.routes.runtimes.session_runtime_service.list_runtimes", fake_list_runtimes)
+    monkeypatch.setattr("app.api.routes.runtimes.workspace_runtime_service.list_runtimes", fake_list_runtimes)
 
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {platform_admin_token}"}
 
     listing = client.get("/api/v1/admin/runtimes", headers=headers)
     assert listing.status_code == 200
-    assert [item["session_id"] for item in listing.json()["data"]] == [managed_session.session_id]
+    assert [item["workspace_id"] for item in listing.json()["data"]] == [managed_session.workspace_id]
 
     all_items = client.get("/api/v1/admin/runtimes?include_inactive=true", headers=headers)
     assert all_items.status_code == 200
-    assert {item["session_id"] for item in all_items.json()["data"]} == {
-        managed_session.session_id,
-        closed_session.session_id,
+    assert {item["workspace_id"] for item in all_items.json()["data"]} == {
+        managed_session.workspace_id,
+        closed_session.workspace_id,
     }
 
 
@@ -1638,8 +1641,9 @@ def test_system_audit_overview_aggregates_host_platform_metrics(tmp_path):
     assert closed_conversation is not None
 
     now = datetime.now(timezone.utc).isoformat()
-    store_service.upsert_session_runtime(
-        session_id=active_session.session_id,
+    store_service.upsert_workspace_runtime(
+        workspace_id=active_session.workspace_id,
+        owner_session_id=active_session.session_id,
         conversation_id=active_conversation["conversation_id"],
         platform_id=platform["platform_id"],
         owner_user_id=None,
@@ -1663,8 +1667,9 @@ def test_system_audit_overview_aggregates_host_platform_metrics(tmp_path):
         home_root="home-live",
         metadata={},
     )
-    store_service.upsert_session_runtime(
-        session_id=closed_session.session_id,
+    store_service.upsert_workspace_runtime(
+        workspace_id=closed_session.workspace_id,
+        owner_session_id=closed_session.session_id,
         conversation_id=closed_conversation["conversation_id"],
         platform_id=platform["platform_id"],
         owner_user_id=None,

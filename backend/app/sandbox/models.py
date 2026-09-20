@@ -6,9 +6,10 @@ from typing import Any
 
 @dataclass(frozen=True)
 class SandboxWorkspace:
-    """会话沙箱工作区。"""
+    """共享沙箱工作区。"""
 
-    session_id: str
+    workspace_id: str
+    owner_session_id: str
     root: Path
     baseline_root: Path | None
     skills_dir: Path

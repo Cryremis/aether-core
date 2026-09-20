@@ -40,9 +40,10 @@ class SessionRunContext:
 
 @dataclass
 class AgentSession:
-    """AetherCore 运行时会话状态。"""
+    """AetherCore 运行时会话状态；上下文隔离，Workspace 显式引用。"""
 
     session_id: str
+    workspace_id: str = ""
     conversation_id: str | None = None
     owner_user_id: int | None = None
     platform_id: int | None = None

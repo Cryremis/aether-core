@@ -204,6 +204,7 @@ def test_assistant_messages_include_run_status_and_subagent_results(tmp_path):
     )
     store_service.create_subagent_run(
         child_run_id="run_sub",
+        workspace_id=session.workspace_id,
         parent_run_id="run_second",
         parent_session_id=session.session_id,
         child_session_id="sess_sub",
@@ -392,6 +393,7 @@ def test_subagent_result_is_proactively_injected_into_parent_context(tmp_path):
     )
     store_service.create_subagent_run(
         child_run_id="run_child_result",
+        workspace_id=parent.workspace_id,
         parent_run_id="run_parent_result",
         parent_session_id=parent.session_id,
         child_session_id="sess_child_result",

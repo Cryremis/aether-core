@@ -101,6 +101,7 @@ class HostRegistry:
             "platform_key": platform["platform_key"],
             "host_name": request.host_name,
             "session_id": session.session_id,
+            "workspace_id": session.workspace_id,
             "conversation_id": conversation["conversation_id"],
             "conversation_key": conversation.get("conversation_key"),
             "token": token,

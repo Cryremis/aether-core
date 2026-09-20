@@ -15,7 +15,7 @@ from app.schemas.files import FileRecord
 from app.sandbox.manager import sandbox_manager
 from app.services.artifact_service import artifact_service
 from app.services.session_service import session_service
-from app.services.session_workspace_sync_service import session_workspace_sync_service
+from app.services.workspace_sync_service import workspace_sync_service
 from app.services.session_types import AgentSession
 from app.services.workspace_path_service import workspace_path_service
 
@@ -81,7 +81,7 @@ class FileService:
     def list_work_files(self, session: AgentSession) -> list[FileRecord]:
         assert session.workspace is not None
         records_by_relative: dict[str, FileRecord] = {}
-        tombstones = set(session_workspace_sync_service.load_state(session.workspace).tombstones)
+        tombstones = set(workspace_sync_service.load_state(session.workspace).tombstones)
 
         if session.workspace.work_dir.exists():
             for file_path in sorted(
@@ -144,12 +144,12 @@ class FileService:
             target_path = self.resolve_file_path(session, file_id)
         elif relative_path:
             normalized_relative = self._normalize_relative_path(relative_path)
-            if session.workspace is not None and session_workspace_sync_service.is_deleted(session.workspace, normalized_relative):
+            if session.workspace is not None and workspace_sync_service.is_deleted(session.workspace, normalized_relative):
                 raise FileNotFoundError("目标文件不存在。")
             target_path = workspace_path_service.resolve_path(session, relative_path).host_path
 
         if not target_path or not target_path.exists():
-            if relative_path and session.workspace is not None and session_workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(relative_path)):
+            if relative_path and session.workspace is not None and workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(relative_path)):
                 raise FileNotFoundError("目标文件不存在。")
             raise FileNotFoundError("目标文件不存在。")
         if target_path.is_dir():
@@ -180,7 +180,7 @@ class FileService:
                 )
         elif file_path:
             normalized_relative = workspace_path_service.logical_to_relative_path(file_path)
-            if session.workspace is not None and session_workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(normalized_relative)):
+            if session.workspace is not None and workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(normalized_relative)):
                 raise FileNotFoundError("目标文件不存在。")
             resolved = workspace_path_service.resolve_path(session, file_path)
             target_path = resolved.host_path
@@ -192,7 +192,7 @@ class FileService:
                 logical_candidate = workspace_path_service.logical_to_relative_path(file_path)
             elif logical_path:
                 logical_candidate = workspace_path_service.logical_to_relative_path(logical_path)
-            if logical_candidate and session.workspace is not None and session_workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(logical_candidate)):
+            if logical_candidate and session.workspace is not None and workspace_sync_service.is_deleted(session.workspace, self._normalize_relative_path(logical_candidate)):
                 raise FileNotFoundError("目标文件不存在。")
             raise FileNotFoundError("目标文件不存在。")
         if target_path.is_dir():
@@ -251,7 +251,7 @@ class FileService:
         relative_dir = workspace_path_service.logical_to_relative_path(resolved.logical_path)
         workspace_dir = sandbox_manager.ensure_within_workspace(session.workspace, session.workspace.root / relative_dir)
         baseline_dir = self._baseline_path_for_relative(session, relative_dir)
-        tombstones = set(session_workspace_sync_service.load_state(session.workspace).tombstones)
+        tombstones = set(workspace_sync_service.load_state(session.workspace).tombstones)
         merged_children = self._merge_directory_children(
             relative_dir=relative_dir,
             workspace_dir=workspace_dir,

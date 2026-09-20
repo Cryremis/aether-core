@@ -29,7 +29,7 @@ from app.services.tool_catalog_service import HostToolCatalogSnapshot, tool_cata
 from app.services.search_service import search_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
-from app.services.session_runtime_service import RuntimeBusyError, RuntimeStartError, session_runtime_service
+from app.services.workspace_runtime_service import RuntimeBusyError, RuntimeStartError, workspace_runtime_service
 
 
 ToolHandler = Callable[[AgentSession, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -522,7 +522,7 @@ class ToolService:
     async def _handle_rebuild_runtime(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
         if session.workspace is None:
             raise RuntimeError("会话沙箱尚未初始化。")
-        metadata = await session_runtime_service.rebuild_runtime(
+        metadata = await workspace_runtime_service.rebuild_runtime(
             session.workspace,
             reason=str(arguments.get("reason") or "agent_requested_rebuild"),
         )

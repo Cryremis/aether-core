@@ -1,14 +1,15 @@
 # backend/app/services/session_service.py
-"""会话服务。
+"""会话上下文服务。
 
-负责会话生命周期、元数据落盘与工作区绑定。
-会话数据模型定义位于 session_types，避免类型与服务实现耦合。
+AgentSession 只代表上下文；文件、基线与 runtime 归 Workspace 所有。
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import copy
+import json
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -18,34 +19,94 @@ from app.core.config import settings
 from app.sandbox.manager import sandbox_manager
 from app.services.context.bootstrap import configure_context_runtime
 from app.services.session_types import AgentSession
+from app.services.store import store_service
 from app.services.transcript_service import transcript_service
 from app.services.tool_catalog_service import tool_catalog_service
+from app.services.workspace_service import workspace_service
 
 
 class SessionService:
-    """管理 AetherCore 会话与对应工作区。"""
+    """管理会话上下文与共享 Workspace 的引用关系。"""
 
     def __init__(self) -> None:
         self._sessions: dict[str, AgentSession] = {}
 
-    def get_or_create(self, session_id: str | None = None) -> AgentSession:
+    def get_or_create(
+        self,
+        session_id: str | None = None,
+        workspace_id: str | None = None,
+        *,
+        role: str = "owner",
+        parent_session_id: str | None = None,
+    ) -> AgentSession:
         if session_id and session_id in self._sessions:
             session = self._sessions[session_id]
+            if workspace_id and session.workspace_id != workspace_id:
+                raise ValueError("会话已绑定到另一个 Workspace")
             session.touch()
+            store_service.touch_workspace_session(session.session_id)
             return session
 
         new_id = session_id or f"sess_{uuid.uuid4().hex}"
         session = self._load_from_disk(new_id) or AgentSession(session_id=new_id)
-        session.workspace = sandbox_manager.ensure_workspace(
-            new_id,
-            Path(session.baseline_root) if session.baseline_root else None,
+        resolved_workspace_id = session.workspace_id or workspace_id or self._find_workspace_id(new_id)
+        if resolved_workspace_id is None:
+            workspace = workspace_service.create_workspace(
+                new_id,
+                baseline_root=session.baseline_root,
+            )
+            resolved_workspace_id = str(workspace["workspace_id"])
+
+        if workspace_id and resolved_workspace_id != workspace_id:
+            raise ValueError("会话元数据与指定 Workspace 不一致")
+
+        workspace_record = store_service.get_workspace(resolved_workspace_id)
+        if workspace_record is None:
+            raise LookupError("Workspace 不存在")
+        if session.baseline_root:
+            store_service.update_workspace(
+                resolved_workspace_id,
+                baseline_root=session.baseline_root,
+            )
+        elif workspace_record.get("baseline_root"):
+            session.baseline_root = str(workspace_record["baseline_root"])
+
+        existing_member = store_service.get_workspace_member(new_id) or {}
+        effective_role = str(existing_member.get("role") or role)
+        effective_parent = str(existing_member.get("parent_session_id") or "") or parent_session_id
+        store_service.attach_workspace_session(
+            workspace_id=resolved_workspace_id,
+            session_id=new_id,
+            conversation_id=session.conversation_id,
+            role=effective_role,
+            parent_session_id=effective_parent,
+        )
+        if session.conversation_id:
+            store_service.update_workspace(
+                resolved_workspace_id,
+                owner_conversation_id=session.conversation_id,
+            )
+
+        session.workspace_id = resolved_workspace_id
+        session.workspace = workspace_service.resolve_workspace(
+            resolved_workspace_id,
+            workspace_record.get("owner_session_id") or new_id,
         )
         self._sessions[new_id] = session
         self._write_metadata(session)
         return session
 
+    def _find_workspace_id(self, session_id: str) -> str | None:
+        conversation = store_service.get_conversation_by_session(session_id)
+        if conversation and conversation.get("workspace_id"):
+            return str(conversation["workspace_id"])
+        member = store_service.get_workspace_member(session_id)
+        if member and member.get("workspace_id"):
+            return str(member["workspace_id"])
+        return None
+
     def _metadata_path(self, session_id: str) -> Path:
-        return settings.sessions_root / session_id / "sandbox" / "metadata" / "session.json"
+        return settings.sessions_root / "session-state" / session_id / "session.json"
 
     def attach_host(
         self,
@@ -72,16 +133,16 @@ class SessionService:
         session.host_skills = skills
         session.host_system_prompts = system_prompts
         session.host_apis = apis
-        session.touch()
-        self._write_metadata(session)
+        self.persist(session)
         return session
 
     def persist(self, session: AgentSession) -> None:
         session.touch()
+        store_service.touch_workspace_session(session.session_id)
         self._write_metadata(session)
 
     def clone_host_state(self, source: AgentSession, target: AgentSession) -> None:
-        """Clone a coherent host binding, including dynamic tool provenance and policy."""
+        """克隆宿主绑定，不克隆消息历史，也不改变 Workspace 归属。"""
         target.host_name = source.host_name
         target.owner_user_id = source.owner_user_id
         target.platform_id = source.platform_id
@@ -96,8 +157,7 @@ class SessionService:
         target.host_skills = copy.deepcopy(source.host_skills)
         target.host_system_prompts = copy.deepcopy(source.host_system_prompts)
         target.host_apis = copy.deepcopy(source.host_apis)
-        target.touch()
-        self._write_metadata(target)
+        self.persist(target)
 
     def set_allow_network(self, session: AgentSession, allow_network: bool) -> None:
         session.allow_network = allow_network
@@ -124,8 +184,18 @@ class SessionService:
         self.persist(session)
 
     def bind_baseline_root(self, session: AgentSession, baseline_root: Path) -> None:
+        if not session.workspace_id:
+            raise RuntimeError("会话尚未绑定 Workspace")
         session.baseline_root = str(baseline_root.resolve())
-        session.workspace = sandbox_manager.ensure_workspace(session.session_id, baseline_root)
+        store_service.update_workspace(
+            session.workspace_id,
+            baseline_root=session.baseline_root,
+        )
+        workspace_record = store_service.get_workspace(session.workspace_id) or {}
+        session.workspace = workspace_service.resolve_workspace(
+            session.workspace_id,
+            str(workspace_record.get("owner_session_id") or session.session_id),
+        )
         self.persist(session)
 
     def _load_from_disk(self, session_id: str) -> AgentSession | None:
@@ -135,6 +205,7 @@ class SessionService:
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
         return AgentSession(
             session_id=session_id,
+            workspace_id=str(payload.get("workspace_id") or ""),
             conversation_id=payload.get("conversation_id"),
             owner_user_id=payload.get("owner_user_id"),
             platform_id=payload.get("platform_id"),
@@ -142,7 +213,10 @@ class SessionService:
             host_name=payload.get("host_name", ""),
             baseline_root=payload.get("baseline_root", ""),
             messages=payload.get("messages", []),
-            transcript=payload.get("transcript", transcript_service.build_persisted_transcript(payload.get("messages", []))),
+            transcript=payload.get(
+                "transcript",
+                transcript_service.build_persisted_transcript(payload.get("messages", [])),
+            ),
             host_context=payload.get("host_context", {}),
             platform_files=payload.get("platform_files", []),
             platform_skills=payload.get("platform_skills", []),
@@ -176,19 +250,15 @@ class SessionService:
             subagent_tools_enabled=bool(payload.get("subagent_tools_enabled", True)),
             created_at=float(payload.get("created_at", time.time())),
             last_access=float(payload.get("last_access", time.time())),
-            workspace=sandbox_manager.ensure_workspace(
-                session_id,
-                Path(payload["baseline_root"]) if payload.get("baseline_root") else None,
-            ),
             active_run_view=payload.get("active_run_view"),
         )
 
     def _write_metadata(self, session: AgentSession) -> None:
-        if session.workspace is None:
-            return
-        metadata_path = Path(session.workspace.metadata_dir) / "session.json"
+        if not session.workspace_id:
+            raise RuntimeError("会话尚未绑定 Workspace")
         payload = {
             "session_id": session.session_id,
+            "workspace_id": session.workspace_id,
             "conversation_id": session.conversation_id,
             "owner_user_id": session.owner_user_id,
             "platform_id": session.platform_id,
@@ -223,32 +293,59 @@ class SessionService:
             "last_access": session.last_access,
             "active_run_view": session.active_run_view,
         }
-        metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        metadata_path = self._metadata_path(session.session_id)
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = metadata_path.with_suffix(".json.tmp")
+        temporary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_path.replace(metadata_path)
 
     def delete_session(self, session_id: str) -> bool:
-        if session_id in self._sessions:
-            del self._sessions[session_id]
+        session = self._sessions.get(session_id)
+        workspace_id = (session.workspace_id if session else None) or self._find_workspace_id(session_id)
+        self._sessions.pop(session_id, None)
+        store_service.delete_workspace_session(session_id)
+
+        if workspace_id and store_service.count_workspace_members(workspace_id) == 0:
+            self._delete_workspace(workspace_id)
+
+        state_path = self._metadata_path(session_id)
+        existed = state_path.exists()
+        if state_path.parent.exists():
+            self._remove_directory(state_path.parent)
+        return existed
+
+    def _delete_workspace(self, workspace_id: str) -> None:
+        from app.services.workspace_runtime_service import workspace_runtime_service
+
+        async def cleanup() -> None:
+            await workspace_runtime_service.delete_runtime(workspace_id, reason="workspace_deleted")
+            store_service.mark_workspace_deleted(workspace_id)
+            self._remove_workspace_directory(workspace_id)
+
         try:
-            from app.services.session_runtime_service import session_runtime_service
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(cleanup())
+        else:
+            loop.create_task(cleanup())
 
-            import asyncio
+    @staticmethod
+    def _remove_workspace_directory(workspace_id: str) -> None:
+        target = (settings.sessions_root / "workspaces" / workspace_id).resolve()
+        root = (settings.sessions_root / "workspaces").resolve()
+        if target != root and root in target.parents:
+            shutil.rmtree(target, ignore_errors=True)
 
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.run(session_runtime_service.delete_runtime(session_id, reason="session_deleted"))
-            else:
-                loop.create_task(session_runtime_service.delete_runtime(session_id, reason="session_deleted"))
-        except Exception:
-            pass
-        metadata_path = self._metadata_path(session_id)
-        session_dir = settings.sessions_root / session_id
-        if session_dir.exists():
-            import shutil
-
-            shutil.rmtree(session_dir, ignore_errors=True)
-            return True
-        return metadata_path.exists()
+    @staticmethod
+    def _remove_directory(target: Path) -> None:
+        resolved = target.resolve()
+        root = settings.sessions_root.resolve()
+        if resolved == root or root not in resolved.parents:
+            raise RuntimeError("拒绝删除 sessions_root 之外的目录")
+        shutil.rmtree(resolved, ignore_errors=True)
 
 
 session_service = SessionService()

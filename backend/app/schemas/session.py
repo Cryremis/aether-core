@@ -13,6 +13,7 @@ class SessionSummary(BaseModel):
     """会话摘要，用于工作台初始化与宿主调试。"""
 
     session_id: str
+    workspace_id: str = ""
     conversation_id: str | None = None
     title: str = "新对话"
     host_name: str

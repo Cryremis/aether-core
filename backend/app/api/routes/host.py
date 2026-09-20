@@ -147,6 +147,48 @@ def get_host_conversation(
     return ApiResponse(message="宿主会话详情", data=result)
 
 
+@router.get("/workspaces/{workspace_id}")
+def get_host_workspace(
+    workspace_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = host_control_service.get_workspace(platform=platform, workspace_id=workspace_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Workspace 不存在") from exc
+    return ApiResponse(message="Workspace 详情", data=result)
+
+
+@router.get("/workspaces/{workspace_id}/members")
+def list_host_workspace_members(
+    workspace_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = host_control_service.list_workspace_members(
+            platform=platform,
+            workspace_id=workspace_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Workspace 不存在") from exc
+    return ApiResponse(message="Workspace 成员列表", data=result)
+
+
+@router.get("/workspaces/{workspace_id}/runtime")
+def get_host_workspace_runtime(
+    workspace_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = host_control_service.get_workspace_runtime(
+            platform=platform,
+            workspace_id=workspace_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Workspace 不存在") from exc
+    return ApiResponse(message="Workspace runtime 状态", data=result)
+
+
 @router.patch("/conversations/{conversation_id}")
 def patch_host_conversation(
     conversation_id: str,

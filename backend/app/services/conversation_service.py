@@ -121,6 +121,7 @@ class ConversationService:
         return ConversationSummary(
             conversation_id=row["conversation_id"],
             session_id=row["session_id"],
+            workspace_id=str(row.get("workspace_id") or ""),
             title=row["title"],
             host_name=row["host_name"],
             created_at=row["created_at"],
