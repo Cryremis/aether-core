@@ -1925,6 +1925,146 @@ details[open]::details-content {
   gap: 12px;
 }
 
+/* 任务清单暗色主题：统一使用全局设计变量，避免浅色硬编码破坏夜间模式。 */
+:root[data-theme="dark"] .workboard-dock,
+:root[data-theme="dark"] .workboard-modal__dialog {
+  border-color: var(--line-soft);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-0) 96%, transparent), color-mix(in srgb, var(--surface-1) 94%, transparent)),
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 10%, transparent), transparent 38%);
+  box-shadow: var(--shadow-float);
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .workboard-dock__summary,
+:root[data-theme="dark"] .workboard-item__priority {
+  background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .workboard-dock__count,
+:root[data-theme="dark"] .workboard-item__title-row strong,
+:root[data-theme="dark"] .workboard-modal__header h3 {
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .workboard-dock__summary,
+:root[data-theme="dark"] .workboard-dock__eyebrow,
+:root[data-theme="dark"] .workboard-dock__empty-text,
+:root[data-theme="dark"] .workboard-item__notes,
+:root[data-theme="dark"] .workboard-item__owner,
+:root[data-theme="dark"] .workboard-modal__field > span {
+  color: var(--text-tertiary);
+}
+
+:root[data-theme="dark"] .workboard-dock__mini-meter {
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+}
+
+:root[data-theme="dark"] .workboard-dock__complete-badge {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+
+:root[data-theme="dark"] .workboard-dock__complete-badge svg {
+  stroke: var(--success);
+}
+
+:root[data-theme="dark"] .workboard-dock__toggle-btn,
+:root[data-theme="dark"] .workboard-item__icon-btn {
+  border-color: var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 82%, transparent);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .workboard-dock__toggle-btn:hover,
+:root[data-theme="dark"] .workboard-item__icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .workboard-dock__action-btn {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .workboard-dock__action-btn:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+:root[data-theme="dark"] .workboard-dock__input,
+:root[data-theme="dark"] .workboard-dock__textarea,
+:root[data-theme="dark"] .workboard-dock__select {
+  border-color: var(--border-color);
+  background: var(--surface-0);
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .workboard-dock__secondary-btn {
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .workboard-dock__secondary-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .workboard-dock__error {
+  color: var(--error);
+}
+
+:root[data-theme="dark"] .workboard-item {
+  border-color: var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .workboard-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line-soft));
+  background: color-mix(in srgb, var(--surface-2) 74%, transparent);
+}
+
+:root[data-theme="dark"] .workboard-item__drag-handle {
+  color: var(--text-tertiary);
+}
+
+:root[data-theme="dark"] .workboard-item__status--completed,
+:root[data-theme="dark"] .workboard-item__priority--low {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+
+:root[data-theme="dark"] .workboard-item__status--blocked,
+:root[data-theme="dark"] .workboard-item__priority--high {
+  background: color-mix(in srgb, var(--error) 16%, transparent);
+  color: var(--error);
+}
+
+:root[data-theme="dark"] .workboard-item__status--in_progress {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+:root[data-theme="dark"] .workboard-item__status--pending,
+:root[data-theme="dark"] .workboard-item__status--cancelled {
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  color: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .workboard-item__icon-btn.is-danger:hover {
+  color: var(--error);
+}
+
+:root[data-theme="dark"] .workboard-modal__backdrop {
+  background: rgba(2, 6, 12, 0.58);
+}
+
+:root[data-theme="dark"] .workboard-modal__header,
+:root[data-theme="dark"] .workboard-modal__footer {
+  border-color: var(--line-soft);
+}
+
 .workboard-modal__footer {
   border-top: 1px solid rgba(226, 232, 240, 0.85);
   justify-content: flex-end;
