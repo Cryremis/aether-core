@@ -5,6 +5,7 @@ import {
   abortSession,
   bootstrapAdminSession,
   deleteUserLlmConfig,
+  destroySubagent,
   editSessionTimeline,
   type ElicitationRequest,
   type ElicitationResponseItem,
@@ -13,6 +14,7 @@ import {
   getDownloadUrl,
   getUserLlmConfig,
   getSessionSummary,
+  listSubagents,
   listFiles,
   listSkills,
   readFileContent,
@@ -35,7 +37,6 @@ import { ElicitationPanel } from "../components/ElicitationPanel";
 import { WorkboardDock } from "../components/WorkboardDock";
 import { ChatTimeline } from "../components/workbench/ChatTimeline";
 import { Composer } from "../components/workbench/Composer";
-import { SubagentPanel } from "../components/workbench/SubagentPanel";
 import { ContextStatusPill } from "../components/workbench/ContextStatusPill";
 import { LlmConfigDialog } from "../components/workbench/LlmConfigDialog";
 import { PersonalSettingsDialog } from "../components/workbench/PersonalSettingsDialog";
@@ -238,6 +239,8 @@ function trimTranscriptForRerun(
 }
 
 
+type LiveRunRef = { current: { runId: string; assistantId: string } | null };
+
 export function WorkbenchPage({
   conversations,
   currentUser,
@@ -329,6 +332,12 @@ export function WorkbenchPage({
   const [workboard, setWorkboard] = useState<WorkboardState | null>(null);
   const [workboardVisibilityBySession, setWorkboardVisibilityBySession] = useState<Record<string, boolean>>({});
   const [subagents, setSubagents] = useState<SubagentRunSummary[]>([]);
+  const [subagentPopoverOpen, setSubagentPopoverOpen] = useState(false);
+  const [activeSubagentSessionId, setActiveSubagentSessionId] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get("subagent_session_id"),
+  );
+  const [activeSubagentName, setActiveSubagentName] = useState("");
+  const [childBusy, setChildBusy] = useState(false);
   const [elicitation, setElicitation] = useState<ElicitationState | null>(null);
   const [elicitationBusy, setElicitationBusy] = useState(false);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
@@ -340,6 +349,10 @@ export function WorkbenchPage({
   const pendingUserEchoRef = useRef<PendingUserEcho | null>(null);
   const pendingAssistantIdRef = useRef<string | null>(null);
   const isStreamingRef = useRef(false);
+  const childAbortControllerRef = useRef<AbortController | null>(null);
+  const activeViewSessionIdRef = useRef("");
+  const returningFromSubagentRef = useRef(false);
+  const lastMainSessionIdRef = useRef<string | null>(null);
 
   const notifyHost = (type: "aethercore:run-status" | "aethercore:tool-status", payload: Record<string, unknown>) => {
     if (!isEmbedMode || !embedHostOrigin || window.parent === window) return;
@@ -347,6 +360,7 @@ export function WorkbenchPage({
   };
   const abortControllerRef = useRef<AbortController | null>(null);
   const liveRunRef = useRef<{ runId: string; assistantId: string } | null>(null);
+  const childLiveRunRef = useRef<{ runId: string; assistantId: string } | null>(null);
   const lastRunIdRef = useRef("");
   const newlyCreatedSessionRef = useRef<string | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -363,10 +377,13 @@ export function WorkbenchPage({
 
   const historyRef = useRef<HTMLDivElement | null>(null);
   const historyContentRef = useRef<HTMLDivElement | null>(null);
-  const activeSessionId = sessionId || localSessionId || "";
-  const displayedWorkboard = workboard?.session_id === activeSessionId ? workboard : null;
-  const pendingElicitationRequest = elicitation?.session_id === activeSessionId ? elicitation.pending : null;
-  const workboardVisible = activeSessionId ? (workboardVisibilityBySession[activeSessionId] ?? false) : false;
+  const mainSessionId = sessionId || localSessionId || "";
+  const isSubagentView = Boolean(activeSubagentSessionId);
+  const activeSessionId = activeSubagentSessionId || mainSessionId;
+  const displayedBusy = isSubagentView ? childBusy : busy;
+  const displayedWorkboard = !isSubagentView && workboard?.session_id === mainSessionId ? workboard : null;
+  const pendingElicitationRequest = !isSubagentView && elicitation?.session_id === mainSessionId ? elicitation.pending : null;
+  const workboardVisible = !isSubagentView && mainSessionId ? (workboardVisibilityBySession[mainSessionId] ?? false) : false;
   const messages: ChatMessage[] = (() => {
     if (!pendingUserEcho) return transcriptMessages;
     const anchorAssistantId = pendingAssistantIdRef.current || liveRunRef.current?.assistantId;
@@ -381,6 +398,25 @@ export function WorkbenchPage({
   })();
 
   useEffect(() => {
+    activeViewSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (lastMainSessionIdRef.current === null) {
+      lastMainSessionIdRef.current = mainSessionId;
+      return;
+    }
+    if (lastMainSessionIdRef.current !== mainSessionId && activeSubagentSessionId) {
+      childAbortControllerRef.current?.abort();
+      activeViewSessionIdRef.current = mainSessionId;
+      setActiveSubagentSessionId(null);
+      setActiveSubagentName("");
+      updateSubagentUrl(null);
+    }
+    lastMainSessionIdRef.current = mainSessionId;
+  }, [activeSubagentSessionId, mainSessionId]);
+
+  useEffect(() => {
     pendingUserEchoRef.current = pendingUserEcho;
   }, [pendingUserEcho]);
 
@@ -389,25 +425,25 @@ export function WorkbenchPage({
   }, [transcriptMessages]);
 
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!mainSessionId || isSubagentView) return;
 
     const nextOpenCount = getOpenWorkItemCount(displayedWorkboard);
-    const previousOpenCount = workboardOpenCountBySessionRef.current[activeSessionId];
-    workboardOpenCountBySessionRef.current[activeSessionId] = nextOpenCount;
+    const previousOpenCount = workboardOpenCountBySessionRef.current[mainSessionId];
+    workboardOpenCountBySessionRef.current[mainSessionId] = nextOpenCount;
 
     if (previousOpenCount === undefined) {
       return;
     }
 
     if (previousOpenCount === 0 && nextOpenCount > 0) {
-      setWorkboardVisibilityBySession((current) => ({ ...current, [activeSessionId]: true }));
+      setWorkboardVisibilityBySession((current) => ({ ...current, [mainSessionId]: true }));
       return;
     }
 
     if (previousOpenCount > 0 && nextOpenCount === 0) {
-      setWorkboardVisibilityBySession((current) => ({ ...current, [activeSessionId]: false }));
+      setWorkboardVisibilityBySession((current) => ({ ...current, [mainSessionId]: false }));
     }
-  }, [activeSessionId, displayedWorkboard]);
+  }, [displayedWorkboard, isSubagentView, mainSessionId]);
 
   const isNearBottom = (node: HTMLDivElement, threshold = 80) => {
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
@@ -782,9 +818,13 @@ window.addEventListener("resize", handleResize);
     }
   };
 
-  const loadSession = async (nextSessionId: string) => {
+  const loadSession = async (
+    nextSessionId: string,
+    options?: { preserveSubagents?: boolean; liveRunTarget?: LiveRunRef },
+  ) => {
     const summaryResult = await getSessionSummary(nextSessionId);
     const summary = (summaryResult.data ?? {}) as {
+      title?: string;
       transcript?: TranscriptChatMessage[];
       allow_network?: boolean;
       host_name?: string | null;
@@ -815,7 +855,9 @@ window.addEventListener("resize", handleResize);
     setFiles(summary.files ?? []);
     setWorkboard(summary.workboard ?? null);
     setElicitation(summary.elicitation ?? null);
-    setSubagents(summary.subagents ?? []);
+    if (!options?.preserveSubagents) {
+      setSubagents(summary.subagents ?? []);
+    }
     if (summary.context_state && summary.context_state.model_id) {
       const ctx = summary.context_state;
       const estimatedTokens = ctx.last_known_token_estimate || ctx.last_api_usage?.prompt_tokens || 0;
@@ -834,12 +876,57 @@ window.addEventListener("resize", handleResize);
         detail: "已恢复上下文状态",
       });
     }
-    liveRunRef.current = null;
+    const targetLiveRunRef = options?.liveRunTarget ?? liveRunRef;
+    if (targetLiveRunRef === liveRunRef) {
+      liveRunRef.current = null;
+    }
+    if (options?.preserveSubagents && summary.title) {
+      setActiveSubagentName(summary.title.replace(/^Subagent:\s*/, ""));
+    }
     if (summary.active_run?.status === "running") {
-      restoreActiveRunAssistant(summary.active_run);
+      restoreActiveRunAssistant(summary.active_run, targetLiveRunRef);
       return summary.active_run;
     }
     return null;
+  };
+
+  const refreshSubagents = async (targetSessionId = mainSessionId) => {
+    if (!targetSessionId) return;
+    const result = await listSubagents(targetSessionId);
+    setSubagents(((result.data ?? []) as SubagentRunSummary[]));
+  };
+
+  const updateSubagentUrl = (childSessionId: string | null) => {
+    const params = new URLSearchParams(window.location.search);
+    if (childSessionId) {
+      params.set("subagent_session_id", childSessionId);
+    } else {
+      params.delete("subagent_session_id");
+    }
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  };
+
+  const openSubagentSession = (childSessionId: string, name?: string) => {
+    if (!childSessionId) return;
+    if (activeSubagentSessionId && activeSubagentSessionId !== childSessionId) {
+      childAbortControllerRef.current?.abort();
+    }
+    activeViewSessionIdRef.current = childSessionId;
+    setActiveSubagentSessionId(childSessionId);
+    setActiveSubagentName(name || "子代理");
+    setSubagentPopoverOpen(false);
+    updateSubagentUrl(childSessionId);
+  };
+
+  const exitSubagentSession = () => {
+    childAbortControllerRef.current?.abort();
+    returningFromSubagentRef.current = true;
+    activeViewSessionIdRef.current = mainSessionId;
+    setActiveSubagentSessionId(null);
+    setActiveSubagentName("");
+    setSubagentPopoverOpen(false);
+    updateSubagentUrl(null);
   };
 
   const handleWorkboardOps = async (ops: WorkboardOperation[]) => {
@@ -878,11 +965,11 @@ window.addEventListener("resize", handleResize);
       return;
     }
 
-    if (isStreamingRef.current) {
+    if (isStreamingRef.current && !activeSubagentSessionId && !returningFromSubagentRef.current) {
       return;
     }
 
-    const targetSessionId = sessionId || localSessionId;
+    const targetSessionId = activeSubagentSessionId || sessionId || localSessionId;
     if (!targetSessionId) {
       setLoading(false);
       return;
@@ -899,20 +986,45 @@ window.addEventListener("resize", handleResize);
     previousScrollTopRef.current = 0;
     setLoading(true);
     setError("");
-    void loadSession(targetSessionId)
+    const isChildView = Boolean(activeSubagentSessionId);
+    if (!isChildView && isStreamingRef.current && returningFromSubagentRef.current) {
+      returningFromSubagentRef.current = false;
+      void loadSession(targetSessionId)
+        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : "初始化失败"))
+        .finally(() => setLoading(false));
+      return;
+    }
+    if (!isChildView) {
+      returningFromSubagentRef.current = false;
+    }
+
+    void loadSession(targetSessionId, {
+      preserveSubagents: isChildView,
+      liveRunTarget: isChildView ? childLiveRunRef : liveRunRef,
+    })
       .then((activeRun) => {
         if (!activeRun) return;
         const reconnectAssistantId = activeRun.assistant.id || `live-${activeRun.run_id}`;
         const reconnectAbortController = new AbortController();
-        abortControllerRef.current = reconnectAbortController;
-        isStreamingRef.current = true;
-        setBusy(true);
+        if (isChildView) {
+          childAbortControllerRef.current = reconnectAbortController;
+          setChildBusy(true);
+        } else {
+          abortControllerRef.current = reconnectAbortController;
+          isStreamingRef.current = true;
+          setBusy(true);
+        }
         const reconnectRefs = {
           activeReasoningId: { value: "" },
           activeContentId: { value: "" },
           activeContentText: { value: "" },
         };
-        const handleEvent = buildEventProcessor(reconnectAssistantId, targetSessionId, reconnectRefs);
+        const handleEvent = buildEventProcessor(
+          reconnectAssistantId,
+          targetSessionId,
+          reconnectRefs,
+          isChildView ? childLiveRunRef : liveRunRef,
+        );
         void streamRunEvents(targetSessionId, activeRun.run_id, handleEvent, reconnectAbortController.signal)
           .catch((streamError) => {
             if (!(streamError instanceof Error && streamError.name === "AbortError")) {
@@ -920,10 +1032,20 @@ window.addEventListener("resize", handleResize);
             }
           })
           .finally(() => {
-            isStreamingRef.current = false;
-            abortControllerRef.current = null;
-            setBusy(false);
-            void onSessionRefresh?.();
+            if (isChildView) {
+              if (childAbortControllerRef.current === reconnectAbortController) {
+                childAbortControllerRef.current = null;
+              }
+              if (activeViewSessionIdRef.current === targetSessionId) {
+                setChildBusy(false);
+              }
+              void refreshSubagents(sessionId || localSessionId).catch(() => undefined);
+            } else {
+              isStreamingRef.current = false;
+              abortControllerRef.current = null;
+              setBusy(false);
+              void onSessionRefresh?.();
+            }
           });
       })
       .catch((loadError) => {
@@ -934,10 +1056,18 @@ window.addEventListener("resize", handleResize);
         setFiles([]);
         setWorkboard(null);
         setElicitation(null);
-        setSubagents([]);
+        if (!isChildView) setSubagents([]);
       })
       .finally(() => setLoading(false));
-  }, [sessionId, isNewSession, localSessionId]);
+  }, [activeSubagentSessionId, sessionId, isNewSession, localSessionId]);
+
+  useEffect(() => {
+    if (!mainSessionId || !subagents.some((item) => item.status === "running")) return;
+    const timer = window.setInterval(() => {
+      void refreshSubagents(mainSessionId).catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [mainSessionId, subagents]);
 
 const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boolean(pendingElicitationRequest?.blocking);
 
@@ -1029,9 +1159,9 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
     }
   };
 
-  const restoreActiveRunAssistant = (activeRun: ActiveRunSummary) => {
+  const restoreActiveRunAssistant = (activeRun: ActiveRunSummary, targetLiveRunRef: LiveRunRef = liveRunRef) => {
     const assistantId = activeRun.assistant.id || `live-${activeRun.run_id}`;
-    liveRunRef.current = { runId: activeRun.run_id, assistantId };
+    targetLiveRunRef.current = { runId: activeRun.run_id, assistantId };
     const responseStartedAt = Date.parse(activeRun.assistant.response_started_at ?? "");
     const normalizedResponseStartedAt = Number.isFinite(responseStartedAt) ? responseStartedAt : undefined;
     upsertAssistantMessage(assistantId, () => ({
@@ -1082,20 +1212,22 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       wasAborted?: { value: boolean };
       partialContent?: { value: string };
     },
+    activeLiveRunRef: LiveRunRef = liveRunRef,
   ) => {
     return (event: Record<string, unknown>) => {
+      if (activeViewSessionIdRef.current !== effectiveSessionId) return;
       const eventType = String(event.type ?? "");
       const payload = (event.payload ?? {}) as Record<string, unknown>;
 
       if (eventType === "run_started") {
         const runId = String(payload.run_id ?? "");
         if (runId) {
-          liveRunRef.current = { runId, assistantId };
+          activeLiveRunRef.current = { runId, assistantId };
           lastRunIdRef.current = runId;
         }
         notifyHost("aethercore:run-status", {
           session_id: effectiveSessionId,
-          run_id: String(payload.run_id ?? liveRunRef.current?.runId ?? ""),
+          run_id: String(payload.run_id ?? activeLiveRunRef.current?.runId ?? ""),
           assistant_id: assistantId,
           active: true,
         });
@@ -1110,13 +1242,16 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           const next: SubagentRunSummary = {
             subagent_run_id: subagentRunId,
             run_id: String(payload.run_id ?? existing?.run_id ?? ""),
+            child_session_id: String(payload.child_session_id ?? existing?.child_session_id ?? ""),
             name: String(payload.name ?? existing?.name ?? "Subagent"),
             task: String(payload.task ?? existing?.task ?? ""),
             status: String(payload.status ?? (eventType === "subagent_created" ? "running" : existing?.status ?? "running")),
+            current_action: existing?.current_action ?? null,
             result: typeof payload.result === "string" ? payload.result : existing?.result ?? null,
             error: typeof payload.error === "string" ? payload.error : existing?.error ?? null,
             created_at: existing?.created_at ?? null,
             finished_at: existing?.finished_at ?? null,
+            destroyed_at: existing?.destroyed_at ?? null,
             user_can_message: false,
           };
           const others = current.filter((item) => item.subagent_run_id !== subagentRunId);
@@ -1373,7 +1508,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       if (eventType === "tool_started") {
         notifyHost("aethercore:tool-status", {
           session_id: effectiveSessionId,
-          run_id: liveRunRef.current?.runId ?? "",
+          run_id: activeLiveRunRef.current?.runId ?? "",
           tool_call_id: String(payload.id ?? ""),
           tool_name: String(payload.tool_name ?? ""),
           status: "started",
@@ -1433,7 +1568,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       if (eventType === "tool_finished") {
         notifyHost("aethercore:tool-status", {
           session_id: effectiveSessionId,
-          run_id: liveRunRef.current?.runId ?? "",
+          run_id: activeLiveRunRef.current?.runId ?? "",
           tool_call_id: String(payload.id ?? ""),
           tool_name: String(payload.tool_name ?? ""),
           status: "finished",
@@ -1527,7 +1662,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
               : item,
           ),
         );
-        liveRunRef.current = null;
+        activeLiveRunRef.current = null;
         notifyHost("aethercore:run-status", {
           session_id: effectiveSessionId,
           run_id: String(payload.run_id ?? ""),
@@ -1917,15 +2052,50 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
   };
 
   const handleStop = async () => {
-    if (!abortControllerRef.current || !isStreamingRef.current) return;
-    const effectiveSessionId = sessionId || localSessionId;
-    if (effectiveSessionId) {
+    if (isSubagentView && activeSessionId) {
       try {
-        await abortSession(effectiveSessionId);
+        await abortSession(activeSessionId);
       } catch (err) {
-        console.error("中断请求失败:", err);
-        abortControllerRef.current.abort();
+        console.error("中断子代理失败:", err);
+      } finally {
+        childAbortControllerRef.current?.abort();
       }
+      return;
+    }
+
+    const effectiveSessionId = sessionId || localSessionId;
+    if (!effectiveSessionId) return;
+    try {
+      await abortSession(effectiveSessionId);
+    } catch (err) {
+      console.error("中断请求失败:", err);
+    } finally {
+      if (isStreamingRef.current) {
+        abortControllerRef.current?.abort();
+      }
+    }
+  };
+
+  const handleStopSubagent = async (subagent: SubagentRunSummary) => {
+    if (!subagent.child_session_id) return;
+    try {
+      await abortSession(subagent.child_session_id);
+      await refreshSubagents();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "停止子代理失败");
+    }
+  };
+
+  const handleDestroySubagent = async (subagent: SubagentRunSummary) => {
+    if (!mainSessionId || !window.confirm(`确定销毁子代理「${subagent.name}」吗？历史记录会保留。`)) return;
+    try {
+      await destroySubagent(mainSessionId, subagent.subagent_run_id);
+      await refreshSubagents(mainSessionId);
+      if (activeSubagentSessionId === subagent.child_session_id) {
+        exitSubagentSession();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "销毁子代理失败");
     }
   };
 
@@ -2272,7 +2442,13 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             <button className="icon-button subtle nav-trigger" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
               {isSidebarOpen ? <Icons.SidebarClose /> : <Icons.Menu />}
             </button>
-            <span className="session-badge">{isNewSession && !sessionId && !localSessionId ? t("workbench.session.new") : `Session ID: ${sessionId || localSessionId || t("workbench.session.initializing")}`}</span>
+            <span className="session-badge">
+              {isSubagentView
+                ? `子代理 · ${activeSubagentName || activeSubagentSessionId}`
+                : isNewSession && !sessionId && !localSessionId
+                  ? t("workbench.session.new")
+                  : `Session ID: ${sessionId || localSessionId || t("workbench.session.initializing")}`}
+            </span>
           </div>
           <div className="nav-right">
             {!themeLocked ? (
@@ -2296,7 +2472,8 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             contentRef={historyContentRef}
             loading={loading}
             messages={messages}
-            actionsDisabled={busy || loading}
+            actionsDisabled={displayedBusy || loading}
+            onOpenSubagent={(childSessionId) => openSubagentSession(childSessionId)}
             onForkUserMessage={(messageId) => void handleForkFromMessage(messageId)}
             onRerunFromMessage={(messageId) => void handleRerunFromMessage(messageId)}
             onEditUserMessage={(messageId, content) => void handleEditUserMessage(messageId, content)}
@@ -2304,29 +2481,28 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         </div>
 
         <div className="runtime-panels">
-          <SubagentPanel subagents={subagents} />
           <WorkboardDock
             workboard={displayedWorkboard}
             visible={workboardVisible}
-            busy={busy}
+            busy={displayedBusy}
             onToggle={() => {
-              if (!activeSessionId) return;
+              if (!mainSessionId) return;
               setWorkboardVisibilityBySession((current) => ({
                 ...current,
-                [activeSessionId]: false,
+                [mainSessionId]: false,
               }));
             }}
             onApplyOps={handleWorkboardOps}
           />
           <ElicitationPanel
             request={pendingElicitationRequest}
-            busy={busy || elicitationBusy}
+            busy={displayedBusy || elicitationBusy}
             onSubmit={(responses) => void handleElicitationSubmit(responses)}
           />
         </div>
 
         <Composer
-          busy={busy}
+          busy={displayedBusy}
           disabled={composerDisabled}
           allowNetwork={allowNetwork}
           reasoningEffort={reasoningEffort}
@@ -2335,16 +2511,25 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           workboardVisible={workboardVisible}
           workboardCount={displayedWorkboard?.items?.length ?? 0}
           workboardCompleted={displayedWorkboard?.items?.filter((i) => i.status === "completed").length ?? 0}
+          subagents={subagents}
+          subagentPopoverOpen={subagentPopoverOpen}
+          activeChildSessionId={activeSubagentSessionId}
+          readOnlySubagentView={isSubagentView}
           onAllowNetworkChange={setAllowNetwork}
           onReasoningEffortChange={setReasoningEffort}
           onWorkboardToggle={() =>
-            activeSessionId
+            mainSessionId
               ? setWorkboardVisibilityBySession((current) => ({
                   ...current,
-                  [activeSessionId]: !(current[activeSessionId] ?? false),
+                  [mainSessionId]: !(current[mainSessionId] ?? false),
                 }))
               : undefined
           }
+          onSubagentPopoverOpenChange={setSubagentPopoverOpen}
+          onOpenSubagent={(subagent) => openSubagentSession(subagent.child_session_id, subagent.name)}
+          onStopSubagent={(subagent) => void handleStopSubagent(subagent)}
+          onDestroySubagent={(subagent) => void handleDestroySubagent(subagent)}
+          onExitSubagent={exitSubagentSession}
           onSend={(text) => void handleSend(text)}
           onStop={() => void handleStop()}
           onRemoveQueued={handleRemoveQueued}

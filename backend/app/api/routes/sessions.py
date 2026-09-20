@@ -13,6 +13,7 @@ from app.services.file_service import file_service
 from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.skill_service import skill_service
+from app.services.subagent_service import subagent_service
 from app.services.store import store_service
 
 router = APIRouter(prefix="/api/v1/agent/sessions", tags=["sessions"])
@@ -154,9 +155,29 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         archived_at=conversation.get("archived_at"),
         pinned_at=conversation.get("pinned_at"),
         revision=int(conversation.get("revision") or 0),
-        subagents=store_service.list_subagent_runs_for_session(session.session_id),
+        subagents=subagent_service.list_subagents(session),
     )
     return ApiResponse(message="会话摘要", data=summary.model_dump(mode="json"))
+
+
+@router.get("/{session_id}/subagents")
+def list_session_subagents(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    _, session = _ensure_session_access(session_id, auth)
+    return ApiResponse(message="子代理列表", data=subagent_service.list_subagents(session))
+
+
+@router.post("/{session_id}/subagents/{subagent_run_id}/destroy")
+async def destroy_subagent(
+    session_id: str,
+    subagent_run_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+) -> ApiResponse:
+    _, session = _ensure_session_access(session_id, auth)
+    try:
+        destroyed = await subagent_service.destroy(session, subagent_run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(message="子代理已销毁", data=destroyed)
 
 
 @router.get("/{session_id}/workboard")

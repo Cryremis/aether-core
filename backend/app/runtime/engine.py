@@ -309,6 +309,12 @@ class AgentEngine:
                     break
         conversation = store_service.get_conversation_by_session(session.session_id)
         is_new_conversation = conversation is None or conversation.get("message_count", 0) == 0
+        conversation_metadata = {}
+        if conversation is not None:
+            try:
+                conversation_metadata = json.loads(conversation.get("metadata_json") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                conversation_metadata = {}
         if conversation is None:
             seed = self._resolve_conversation_seed(session) or {}
             conversation = store_service.create_conversation(
@@ -325,7 +331,11 @@ class AgentEngine:
             )
             session.conversation_id = conversation.get("conversation_id")
             session_service.persist(session)
-        new_title = message.strip()[:80] or "新对话" if is_new_conversation else None
+        new_title = (
+            message.strip()[:80] or "新对话"
+            if is_new_conversation and not conversation_metadata.get("subagent")
+            else None
+        )
         store_service.touch_conversation(
             session.session_id,
             title=new_title,
@@ -481,13 +491,21 @@ class AgentEngine:
                 )
                 return
 
+            destroyed_subagent_ids = store_service.list_destroyed_subagent_run_ids_for_session(
+                session.session_id
+            )
+            visible_messages = [
+                message
+                for message in session.messages
+                if str(message.get("subagent_run_id") or "") not in destroyed_subagent_ids
+            ]
             raw_messages: list[dict[str, Any]] = [
                 *self._build_system_messages(
                     session,
                     conversation=conversation,
                     runtime_sections=self._build_runtime_state_sections(session),
                 ),
-                *session.messages,
+                *visible_messages,
             ]
             try:
                 prepared = context_pipeline.prepare_for_llm(

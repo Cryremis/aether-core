@@ -370,7 +370,10 @@ class StoreService:
                     error_text TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    finished_at TEXT
+                    finished_at TEXT,
+                    destroyed_at TEXT,
+                    destroyed_by TEXT,
+                    destroy_reason TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_subagent_runs_parent_session
@@ -394,6 +397,10 @@ class StoreService:
             )
             self._ensure_column(conn, "subagent_runs", "latest_run_id", "TEXT")
             self._ensure_column(conn, "subagent_runs", "workspace_id", "TEXT")
+            self._ensure_column(conn, "subagent_runs", "destroyed_at", "TEXT")
+            self._ensure_column(conn, "subagent_runs", "destroyed_by", "TEXT")
+            self._ensure_column(conn, "subagent_runs", "destroy_reason", "TEXT")
+            self._migrate_subagent_conversation_ownership(conn)
             self._ensure_column(conn, "users", "last_login_at", "TEXT")
             self._ensure_column(conn, "platform_admins", "assigned_by", "INTEGER")
             self._ensure_column(conn, "platform_admins", "is_primary", "INTEGER NOT NULL DEFAULT 0")
@@ -546,6 +553,34 @@ class StoreService:
             """
         )
         self._migrate_workspace_runtimes(conn, workspace_by_session)
+
+    def _migrate_subagent_conversation_ownership(self, conn: sqlite3.Connection) -> None:
+        """将子代理会话的访问归属补齐为父会话归属，修复早期创建的隐藏子会话。"""
+        conn.execute(
+            """
+            UPDATE conversations AS child
+            SET platform_id = COALESCE(child.platform_id, parent.platform_id),
+                owner_user_id = COALESCE(child.owner_user_id, parent.owner_user_id),
+                external_user_id = COALESCE(child.external_user_id, parent.external_user_id),
+                external_org_id = COALESCE(child.external_org_id, parent.external_org_id)
+            FROM subagent_runs AS relation
+            JOIN conversations AS parent
+              ON parent.session_id = relation.parent_session_id
+            WHERE child.session_id = relation.child_session_id
+            """
+        )
+        conn.execute(
+            """
+            UPDATE conversations AS child
+            SET title = 'Subagent: ' || relation.name
+            FROM subagent_runs AS relation
+            WHERE child.session_id = relation.child_session_id
+              AND (
+                child.title IS NULL
+                OR child.title <> 'Subagent: ' || relation.name
+              )
+            """
+        )
 
     def _legacy_session_baseline(self, session_id: str) -> str:
         metadata_path = settings.sessions_root / session_id / "sandbox" / "metadata" / "session.json"
@@ -2221,17 +2256,50 @@ class StoreService:
                 (latest_run_id, utcnow_iso(), child_run_id),
             )
 
+    def mark_subagent_destroyed(
+        self,
+        child_run_id: str,
+        *,
+        destroyed_by: str = "user",
+        destroy_reason: str = "",
+    ) -> dict[str, Any] | None:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE subagent_runs
+                SET destroyed_at = COALESCE(destroyed_at, ?),
+                    destroyed_by = COALESCE(destroyed_by, ?),
+                    destroy_reason = COALESCE(destroy_reason, ?),
+                    updated_at = ?
+                WHERE child_run_id = ?
+                """,
+                (now, destroyed_by, destroy_reason, now, child_run_id),
+            )
+        return self.get_subagent_run(child_run_id)
+
     def list_subagent_runs_for_session(self, session_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM subagent_runs
-                WHERE parent_session_id = ?
+                WHERE parent_session_id = ? AND destroyed_at IS NULL
                 ORDER BY created_at DESC
                 """,
                 (session_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_destroyed_subagent_run_ids_for_session(self, session_id: str) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT child_run_id FROM subagent_runs
+                WHERE parent_session_id = ? AND destroyed_at IS NOT NULL
+                """,
+                (session_id,),
+            ).fetchall()
+        return {str(row["child_run_id"]) for row in rows}
 
     def backfill_conversation_metadata(self, session_id: str, updates: dict[str, Any]) -> bool:
         """补全会话 metadata 中缺失的字段,已有非空值不会被覆盖。

@@ -117,6 +117,7 @@ class SubagentService:
             "subagent_created",
             subagent_run_id=str(row["child_run_id"]),
             run_id=child_run_id,
+            child_session_id=child_session.session_id,
             name=name,
             task=task,
         )
@@ -126,6 +127,7 @@ class SubagentService:
             "subagent_started",
             subagent_run_id=str(row["child_run_id"]),
             run_id=child_run_id,
+            child_session_id=child_session.session_id,
             name=name,
         )
         return self._public_row(store_service.get_subagent_run(str(row["child_run_id"])) or row)
@@ -138,7 +140,9 @@ class SubagentService:
         subagent_run_id: str,
         message: str,
     ) -> dict[str, Any]:
-        row = self._owned_row(parent_session, subagent_run_id)
+        row = self._owned_row(parent_session, subagent_run_id, include_destroyed=True)
+        if row.get("destroyed_at"):
+            raise RuntimeError("子 Agent 已销毁，不能继续发送消息")
         latest_run_id = str(row["latest_run_id"])
         latest_run = store_service.get_agent_run(latest_run_id)
         if latest_run and str(latest_run.get("status")) in {"queued", "running", "waiting_input"}:
@@ -165,6 +169,7 @@ class SubagentService:
             "subagent_status_changed",
             subagent_run_id=subagent_run_id,
             run_id=new_run_id,
+            child_session_id=str(row["child_session_id"]),
             status="running",
             reason="follow_up_message",
         )
@@ -230,7 +235,9 @@ class SubagentService:
         ]
 
     async def cancel(self, parent_session: AgentSession, subagent_run_id: str) -> dict[str, Any]:
-        row = self._owned_row(parent_session, subagent_run_id)
+        row = self._owned_row(parent_session, subagent_run_id, include_destroyed=True)
+        if row.get("destroyed_at"):
+            raise RuntimeError("子 Agent 已销毁，不能停止")
         child_session = session_service.get_or_create(str(row["child_session_id"]))
         run_id = child_session.request_abort()
         return {
@@ -240,7 +247,9 @@ class SubagentService:
         }
 
     def get_result(self, parent_session: AgentSession, subagent_run_id: str) -> dict[str, Any]:
-        row = self._owned_row(parent_session, subagent_run_id)
+        row = self._owned_row(parent_session, subagent_run_id, include_destroyed=True)
+        if row.get("destroyed_at"):
+            raise RuntimeError("子 Agent 已销毁，结果已从主 Agent 上下文移除")
         run = store_service.get_agent_run(str(row["latest_run_id"])) or {}
         result = run.get("result_json")
         if isinstance(result, str):
@@ -255,6 +264,27 @@ class SubagentService:
             "result": result,
             "error": run.get("error_json"),
         }
+
+    async def destroy(
+        self,
+        parent_session: AgentSession,
+        subagent_run_id: str,
+        *,
+        destroyed_by: str = "user",
+        destroy_reason: str = "",
+    ) -> dict[str, Any]:
+        row = self._owned_row(parent_session, subagent_run_id, include_destroyed=True)
+        if row.get("destroyed_at"):
+            return self._public_row(row)
+
+        child_session = session_service.get_or_create(str(row["child_session_id"]))
+        child_session.request_abort()
+        updated = store_service.mark_subagent_destroyed(
+            subagent_run_id,
+            destroyed_by=destroyed_by,
+            destroy_reason=destroy_reason,
+        )
+        return self._public_row(updated or row)
 
     async def cancel_for_parent_run(self, parent_run_id: str, parent_session_id: str) -> None:
         # 只取消当前父 run 创建的子任务，避免影响同一会话历史轮次。
@@ -271,12 +301,16 @@ class SubagentService:
         name: str,
         allowed_tools: list[str] | None,
     ) -> AgentSession:
+        parent_conversation = store_service.get_conversation_by_session(parent_session.session_id) or {}
         child = session_service.get_or_create(
             workspace_id=parent_session.workspace_id,
             role="subagent",
             parent_session_id=parent_session.session_id,
         )
         session_service.clone_host_state(parent_session, child)
+        child.platform_id = parent_session.platform_id or parent_conversation.get("platform_id")
+        child.owner_user_id = parent_session.owner_user_id or parent_conversation.get("owner_user_id")
+        child.external_user_id = parent_session.external_user_id or parent_conversation.get("external_user_id")
         child.platform_files = [dict(item) for item in parent_session.platform_files]
         child.platform_skills = [dict(item) for item in parent_session.platform_skills]
         child.uploaded_skills = [dict(item) for item in parent_session.uploaded_skills]
@@ -290,10 +324,10 @@ class SubagentService:
             workspace_id=parent_session.workspace_id,
             title=f"Subagent: {name}",
             host_name=parent_session.host_name or "AetherCore",
-            platform_id=parent_session.platform_id,
-            owner_user_id=parent_session.owner_user_id,
-            external_user_id=parent_session.external_user_id,
-            external_org_id=None,
+            platform_id=child.platform_id,
+            owner_user_id=child.owner_user_id,
+            external_user_id=child.external_user_id,
+            external_org_id=parent_conversation.get("external_org_id"),
             conversation_key=f"subagent-{child.session_id}",
             visibility="hidden",
             metadata={
@@ -373,6 +407,9 @@ class SubagentService:
         result_text: str,
     ) -> None:
         parent = session_service.get_or_create(parent_session_id)
+        row = store_service.get_subagent_run(subagent_run_id)
+        if row is not None and row.get("destroyed_at"):
+            return
         content = f"Subagent {name} {status}: {result_text}"
         turn_index = max([int(item.get("turn_index") or 0) for item in parent.messages], default=0) + 1
         parent.messages.append(
@@ -425,17 +462,25 @@ class SubagentService:
         )
         await agent_run_service.publish_event(parent_run_id, event)
 
-    def _owned_row(self, parent_session: AgentSession, subagent_run_id: str) -> dict[str, Any]:
+    def _owned_row(
+        self,
+        parent_session: AgentSession,
+        subagent_run_id: str,
+        *,
+        include_destroyed: bool = False,
+    ) -> dict[str, Any]:
         row = store_service.get_subagent_run(subagent_run_id)
         if row is None or str(row.get("parent_session_id")) != parent_session.session_id:
             raise LookupError("子 Agent 不存在或不属于当前会话")
+        if not include_destroyed and row.get("destroyed_at"):
+            raise LookupError("子 Agent 已销毁")
         return row
 
-    @staticmethod
-    def _public_row(row: dict[str, Any]) -> dict[str, Any]:
+    def _public_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "subagent_run_id": str(row.get("child_run_id")),
             "workspace_id": str(row.get("workspace_id") or ""),
+            "child_session_id": str(row.get("child_session_id") or ""),
             "run_id": str(row.get("latest_run_id")),
             "name": str(row.get("name")),
             "task": str(row.get("task")),
@@ -444,8 +489,66 @@ class SubagentService:
             "error": row.get("error_text"),
             "created_at": row.get("created_at"),
             "finished_at": row.get("finished_at"),
+            "destroyed_at": row.get("destroyed_at"),
+            "current_action": self._current_action(row),
             "user_can_message": False,
         }
+
+    def _current_action(self, row: dict[str, Any]) -> dict[str, str] | None:
+        if row.get("destroyed_at"):
+            return {"kind": "destroyed", "label": "已销毁"}
+
+        status = str(row.get("status") or "")
+        terminal_labels = {
+            "completed": "已完成",
+            "failed": "执行失败",
+            "cancelled": "已停止",
+            "timed_out": "已超时",
+        }
+        if status in terminal_labels:
+            return {"kind": status, "label": terminal_labels[status]}
+
+        child_session = session_service.get_or_create(str(row.get("child_session_id") or ""))
+        active_run = child_session.active_run_view or {}
+        assistant = active_run.get("assistant") if isinstance(active_run.get("assistant"), dict) else {}
+        blocks = list(assistant.get("blocks", []))
+        running_tool = next(
+            (
+                block
+                for block in reversed(blocks)
+                if isinstance(block, dict)
+                and block.get("kind") == "tool"
+                and block.get("status") == "running"
+            ),
+            None,
+        )
+        if isinstance(running_tool, dict):
+            label = str(running_tool.get("title") or "正在执行工具")
+            meta = str(running_tool.get("meta") or "").strip()
+            return {"kind": "tool", "label": f"{label} {meta}".strip()}
+
+        speaking = next(
+            (
+                block
+                for block in reversed(blocks)
+                if isinstance(block, dict)
+                and block.get("kind") == "content"
+                and str(block.get("content") or "").strip()
+            ),
+            None,
+        )
+        if isinstance(speaking, dict):
+            return {"kind": "message", "label": str(speaking.get("content") or "").strip()}
+
+        if any(
+            isinstance(block, dict)
+            and block.get("kind") == "reasoning"
+            and str(block.get("content") or "").strip()
+            for block in blocks
+        ):
+            return {"kind": "thinking", "label": "思考中"}
+
+        return {"kind": "running", "label": "准备执行"}
 
 
 subagent_service = SubagentService()

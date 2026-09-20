@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { QueuedMessage } from "../../pages/workbench/types";
+import type { SubagentRunSummary } from "../../api/client";
+import { SubagentPopover } from "./SubagentPopover";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type ComposerProps = {
@@ -11,11 +13,20 @@ type ComposerProps = {
   workboardVisible: boolean;
   workboardCount: number;
   workboardCompleted: number;
+  subagents: SubagentRunSummary[];
+  subagentPopoverOpen: boolean;
+  activeChildSessionId?: string | null;
+  readOnlySubagentView: boolean;
   reasoningEffort: string;
   reasoningEffortOptions: string[];
   onAllowNetworkChange: (value: boolean) => void;
   onReasoningEffortChange: (value: string) => void;
   onWorkboardToggle: () => void;
+  onSubagentPopoverOpenChange: (open: boolean) => void;
+  onOpenSubagent: (subagent: SubagentRunSummary) => void;
+  onStopSubagent: (subagent: SubagentRunSummary) => void;
+  onDestroySubagent: (subagent: SubagentRunSummary) => void;
+  onExitSubagent: () => void;
   onSend: (text: string) => void;
   onStop: () => void;
   onRemoveQueued: (id: string) => void;
@@ -47,11 +58,20 @@ export function Composer({
   workboardVisible,
   workboardCount,
   workboardCompleted,
+  subagents,
+  subagentPopoverOpen,
+  activeChildSessionId,
+  readOnlySubagentView,
   reasoningEffort,
   reasoningEffortOptions,
   onAllowNetworkChange,
   onReasoningEffortChange,
   onWorkboardToggle,
+  onSubagentPopoverOpenChange,
+  onOpenSubagent,
+  onStopSubagent,
+  onDestroySubagent,
+  onExitSubagent,
   onSend,
   onStop,
   onRemoveQueued,
@@ -95,99 +115,126 @@ export function Composer({
 
   return (
     <div className="composer-area">
-      <QueuedMessagesDock messages={queuedMessages} onRemove={onRemoveQueued} />
+      {!readOnlySubagentView ? <QueuedMessagesDock messages={queuedMessages} onRemove={onRemoveQueued} /> : null}
       <div className="composer-box">
-        <textarea
-          ref={textareaRef}
-          className="composer-input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder={busy ? "输入消息将在工具执行后发送..." : "发送指令，与系统深度交互..."}
-          rows={1}
-        />
+        {readOnlySubagentView ? (
+          <div className="composer-readonly">子代理会话为只读，请在主会话继续对话。</div>
+        ) : (
+          <textarea
+            ref={textareaRef}
+            className="composer-input"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder={busy ? "输入消息将在工具执行后发送..." : "发送指令，与系统深度交互..."}
+            rows={1}
+          />
+        )}
         <div className="composer-actions">
           <div className="composer-actions__left">
-            <label className="icon-button attach-btn" title="上传文件">
-              <input
-                type="file"
-                multiple
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0) handleFiles(e.target.files);
-                  e.currentTarget.value = "";
-                }}
-              />
-              <Icons.Attach />
-            </label>
-            <button
-              type="button"
-              className={`workboard-toggle ${workboardVisible ? "active" : ""} ${workboardAllDone ? "completed" : ""} ${workboardCount === 0 ? "empty" : ""}`}
-              onClick={onWorkboardToggle}
-              aria-pressed={workboardVisible}
-              title={workboardCount > 0 ? (workboardAllDone ? "任务已全部完成" : `任务清单 ${workboardCompleted}/${workboardCount}`) : "任务清单"}
-            >
-              <Icons.Checklist />
-              {!workboardVisible && workboardCount > 0 && !workboardAllDone ? (
-                <>
-                  <span className="workboard-toggle__label">{workboardCompleted}/{workboardCount}</span>
-                  <div className="workboard-toggle__mini-bar">
-                    <div className="workboard-toggle__mini-bar-fill" style={{ width: `${workboardPercent}%` }} />
-                  </div>
-                </>
-              ) : null}
-            </button>
-            <button
-              type="button"
-              className={`network-toggle ${allowNetwork ? "active" : ""}`}
-              onClick={() => onAllowNetworkChange(!allowNetwork)}
-              aria-pressed={allowNetwork}
-              title={allowNetwork ? "当前会话已开启联网搜索" : "当前会话未开启联网搜索"}
-            >
-              <Icons.Globe />
-              <span>联网搜索</span>
-            </button>
-          </div>
-          <div className="composer-actions__right">
-            <div className="reasoning-effort-dropdown" ref={effortRef}>
+            {readOnlySubagentView ? (
+              <button type="button" className="icon-button subtle" onClick={onExitSubagent} title="返回主会话">
+                <Icons.ChevronLeft />
+              </button>
+            ) : (
+              <>
+                <label className="icon-button attach-btn" title="上传文件">
+                  <input
+                    type="file"
+                    multiple
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) handleFiles(e.target.files);
+                      e.currentTarget.value = "";
+                    }}
+                  />
+                  <Icons.Attach />
+                </label>
+                <button
+                  type="button"
+                  className={`workboard-toggle ${workboardVisible ? "active" : ""} ${workboardAllDone ? "completed" : ""} ${workboardCount === 0 ? "empty" : ""}`}
+                  onClick={onWorkboardToggle}
+                  aria-pressed={workboardVisible}
+                  title={workboardCount > 0 ? (workboardAllDone ? "任务已全部完成" : `任务清单 ${workboardCompleted}/${workboardCount}`) : "任务清单"}
+                >
+                  <Icons.Checklist />
+                  {!workboardVisible && workboardCount > 0 && !workboardAllDone ? (
+                    <>
+                      <span className="workboard-toggle__label">{workboardCompleted}/{workboardCount}</span>
+                      <div className="workboard-toggle__mini-bar">
+                        <div className="workboard-toggle__mini-bar-fill" style={{ width: `${workboardPercent}%` }} />
+                      </div>
+                    </>
+                  ) : null}
+                </button>
+              </>
+            )}
+            <SubagentPopover
+              subagents={subagents}
+              open={subagentPopoverOpen}
+              activeChildSessionId={activeChildSessionId}
+              onOpenChange={onSubagentPopoverOpenChange}
+              onSelect={onOpenSubagent}
+              onStop={onStopSubagent}
+              onDestroy={onDestroySubagent}
+            />
+            {!readOnlySubagentView ? (
               <button
                 type="button"
-                className={`effort-toggle ${effortOpen ? "active" : ""}`}
-                onClick={() => setEffortOpen((v) => !v)}
-                title="思考深度"
+                className={`network-toggle ${allowNetwork ? "active" : ""}`}
+                onClick={() => onAllowNetworkChange(!allowNetwork)}
+                aria-pressed={allowNetwork}
+                title={allowNetwork ? "当前会话已开启联网搜索" : "当前会话未开启联网搜索"}
               >
-                <span>{reasoningEffort || "auto"}</span>
-                <Icons.ChevronDown />
+                <Icons.Globe />
+                <span>联网搜索</span>
               </button>
-              {effortOpen ? (
-                <div className="effort-popup">
+            ) : null}
+          </div>
+          <div className="composer-actions__right">
+            {!readOnlySubagentView ? (
+              <>
+                <div className="reasoning-effort-dropdown" ref={effortRef}>
                   <button
                     type="button"
-                    className={`effort-option ${reasoningEffort === "" ? "selected" : ""}`}
-                    onClick={() => { onReasoningEffortChange(""); setEffortOpen(false); }}
+                    className={`effort-toggle ${effortOpen ? "active" : ""}`}
+                    onClick={() => setEffortOpen((v) => !v)}
+                    title="思考深度"
                   >
-                    auto
+                    <span>{reasoningEffort || "auto"}</span>
+                    <Icons.ChevronDown />
                   </button>
-                  {reasoningEffortOptions.map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      className={`effort-option ${reasoningEffort === opt ? "selected" : ""}`}
-                      onClick={() => { onReasoningEffortChange(opt); setEffortOpen(false); }}
-                    >
-                      {opt}
-                    </button>
-                  ))}
+                  {effortOpen ? (
+                    <div className="effort-popup">
+                      <button
+                        type="button"
+                        className={`effort-option ${reasoningEffort === "" ? "selected" : ""}`}
+                        onClick={() => { onReasoningEffortChange(""); setEffortOpen(false); }}
+                      >
+                        auto
+                      </button>
+                      {reasoningEffortOptions.map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          className={`effort-option ${reasoningEffort === opt ? "selected" : ""}`}
+                          onClick={() => { onReasoningEffortChange(opt); setEffortOpen(false); }}
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-            <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
-              <Icons.Send />
-            </button>
+                <button className={`icon-button send-btn ${canSend ? "active" : ""}`} disabled={!canSend} onClick={handleSend} title="发送">
+                  <Icons.Send />
+                </button>
+              </>
+            ) : null}
             {busy ? (
               <button className="icon-button stop-btn" onClick={onStop} title="停止">
                 <Icons.Stop />
@@ -196,7 +243,9 @@ export function Composer({
           </div>
         </div>
       </div>
-      <div className="composer-footer">AetherCore System · Advanced Mode</div>
+      <div className="composer-footer">
+        {readOnlySubagentView ? "子代理 · 只读历史与运行状态" : "AetherCore System · Advanced Mode"}
+      </div>
     </div>
   );
 }

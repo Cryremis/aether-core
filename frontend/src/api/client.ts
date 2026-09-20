@@ -471,14 +471,20 @@ export type ActiveRunSummary = {
 export type SubagentRunSummary = {
   subagent_run_id: string;
   workspace_id?: string | null;
+  child_session_id: string;
   run_id: string;
   name: string;
   task: string;
   status: string;
+  current_action?: {
+    kind: "running" | "thinking" | "tool" | "message" | "completed" | "failed" | "cancelled" | "timed_out" | "destroyed";
+    label: string;
+  } | null;
   result?: string | null;
   error?: string | null;
   created_at?: string | null;
   finished_at?: string | null;
+  destroyed_at?: string | null;
   user_can_message?: boolean;
 };
 
@@ -1656,6 +1662,25 @@ export async function abortSession(sessionId: string) {
   });
   if (!response.ok) {
     throw new Error(`中断会话失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function listSubagents(sessionId: string) {
+  const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}/subagents`);
+  if (!response.ok) {
+    throw new Error(`获取子代理列表失败: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function destroySubagent(sessionId: string, subagentRunId: string) {
+  const response = await apiFetch(
+    `/agent/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentRunId)}/destroy`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `销毁子代理失败: ${response.status}`));
   }
   return response.json();
 }

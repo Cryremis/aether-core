@@ -62,6 +62,7 @@ export default function App() {
 
   const updateWorkbenchQuery = (nextSessionId: string, nextIsNewSession: boolean) => {
     const params = new URLSearchParams(new URL(window.location.href).searchParams);
+    params.delete("subagent_session_id");
     if (nextIsNewSession || !nextSessionId) {
       params.delete("session_id");
       params.set("new", "1");

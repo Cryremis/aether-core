@@ -15,6 +15,7 @@ type ChatTimelineProps = {
   onForkUserMessage?: (messageId: string) => void;
   onRerunFromMessage?: (messageId: string) => void;
   onEditUserMessage?: (messageId: string, content: string) => void;
+  onOpenSubagent?: (childSessionId: string) => void;
   actionsDisabled?: boolean;
 };
 
@@ -806,12 +807,68 @@ function ToolResultPanel({ outputText, liveOutputText, status }: { outputText: s
   );
 }
 
-function ToolCard({ title, argumentsText, outputText, liveOutputText, status }: {
+type SubagentToolPayload = {
+  subagent_run_id?: string;
+  child_session_id?: string;
+  name?: string;
+  task?: string;
+  status?: string;
+};
+
+function parseSubagentToolPayload(...sources: string[]): SubagentToolPayload | null {
+  for (const source of sources) {
+    if (!source.trim()) continue;
+    try {
+      const parsed = JSON.parse(source) as SubagentToolPayload;
+      if (parsed && (parsed.child_session_id || parsed.subagent_run_id)) return parsed;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function SubagentToolCard({
+  title,
+  argumentsText,
+  outputText,
+  liveOutputText,
+  status,
+  onOpenSubagent,
+}: {
   title: string;
   argumentsText: string;
   outputText: string;
   liveOutputText?: string;
   status: "running" | "done" | "aborted";
+  onOpenSubagent?: (childSessionId: string) => void;
+}) {
+  const payload = parseSubagentToolPayload(outputText, liveOutputText, argumentsText);
+  if (!payload?.child_session_id) return null;
+
+  return (
+    <button
+      type="button"
+      className={`subagent-tool-card ${status}`}
+      onClick={() => onOpenSubagent?.(payload.child_session_id as string)}
+    >
+      <span className="subagent-tool-card__icon"><Icons.User /></span>
+      <span className="subagent-tool-card__body">
+        <strong>{payload.name || "子代理"}</strong>
+        <span>{title === "subagent_send_message" ? "已发送跟进消息" : payload.task || "已创建子代理"}</span>
+      </span>
+      <span className="subagent-tool-card__action">查看子代理</span>
+    </button>
+  );
+}
+
+function ToolCard({ title, argumentsText, outputText, liveOutputText, status, onOpenSubagent }: {
+  title: string;
+  argumentsText: string;
+  outputText: string;
+  liveOutputText?: string;
+  status: "running" | "done" | "aborted";
+  onOpenSubagent?: (childSessionId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(status === "running");
   const inputSummary = useMemo(() => summarizeToolArguments(argumentsText, title), [argumentsText, title]);
@@ -822,6 +879,22 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status }: 
     // Tool cards follow runtime state by default: open while running, collapse once settled.
     setExpanded(status === "running");
   }, [status]);
+
+  if (title === "subagent_create" || title === "subagent_send_message") {
+    const payload = parseSubagentToolPayload(outputText, liveOutputText, argumentsText);
+    if (payload?.child_session_id) {
+      return (
+        <SubagentToolCard
+          title={title}
+          argumentsText={argumentsText}
+          outputText={outputText}
+          liveOutputText={liveOutputText}
+          status={status}
+          onOpenSubagent={onOpenSubagent}
+        />
+      );
+    }
+  }
 
   return (
     <details className={`tool-card ${status}`} open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
@@ -1005,6 +1078,7 @@ export function ChatTimeline({
   onForkUserMessage,
   onRerunFromMessage,
   onEditUserMessage,
+  onOpenSubagent,
   actionsDisabled = false,
 }: ChatTimelineProps) {
   const { hideReasoning } = useAppPreferences();
@@ -1081,6 +1155,7 @@ export function ChatTimeline({
                     outputText={segment.block.outputText}
                     liveOutputText={segment.block.liveOutputText}
                     status={segment.block.status}
+                    onOpenSubagent={onOpenSubagent}
                   />
                 ) : (
                   <div key={segment.id} className="text-bubble">
