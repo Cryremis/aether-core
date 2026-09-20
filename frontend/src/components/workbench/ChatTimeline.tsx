@@ -288,44 +288,51 @@ function summarizeToolArguments(argumentsText: string, title: string): SummaryRe
 }
 
 function summarizeToolOutput(outputText: string, liveOutputText?: string): SummaryResult {
-  const parsed = parseJsonSafely(outputText);
-  if (parsed) {
-    const preferredKeys = ["stdout", "summary", "result", "content", "text", "message"];
-    const primaryKey = preferredKeys.find((key) => typeof parsed[key] === "string" && String(parsed[key]).trim().length > 0);
-    const primaryValue = primaryKey ? String(parsed[primaryKey] ?? "") : "";
-    return {
-      primary: primaryValue ? primaryValue : liveOutputText?.trim() ? liveOutputText.trim() : prettyJson(parsed),
-      meta: summarizeEntries(parsed, ["exit_code", "duration_ms", "executor", "shell", "status", "stderr_bytes", "stdout_bytes", "log_path"]),
-      raw: prettyJson(parsed),
-    };
+  const metadata: Record<string, unknown> = {};
+  for (const line of outputText.split(/\r\n|\r|\n/)) {
+    const match = /^([a-z][a-z0-9_]*): (.*)$/.exec(line);
+    if (match) metadata[match[1]] = match[2];
   }
+  const primary = outputText.trim() || liveOutputText?.trim() || "";
 
   if (liveOutputText && liveOutputText.trim()) {
     return {
       primary: liveOutputText,
-      meta: [],
+      meta: summarizeEntries(metadata, ["exit_code", "duration_ms", "executor", "shell", "status"]),
       raw: outputText || liveOutputText,
     };
   }
 
   return {
-    primary: outputText,
-    meta: [],
+    primary,
+    meta: summarizeEntries(metadata, ["exit_code", "duration_ms", "executor", "shell", "status", "num_files", "num_lines"]),
     raw: outputText,
   };
 }
 
 function extractTerminalTextFromOutput(outputText: string): string | null {
-  const parsed = parseJsonSafely(outputText);
-  if (!parsed) return null;
-  const hasStdout = typeof parsed.stdout === "string";
-  const hasStderr = typeof parsed.stderr === "string";
-  if (!hasStdout && !hasStderr) return null;
-  const stdout = hasStdout ? String(parsed.stdout ?? "") : "";
-  const stderr = hasStderr ? String(parsed.stderr ?? "") : "";
-  if (!stdout) return stderr;
-  if (!stderr) return stdout;
-  return stdout.endsWith("\n") ? `${stdout}${stderr}` : `${stdout}\n${stderr}`;
+  const stdout = extractPlainTextSection(outputText, "stdout");
+  const stderr = extractPlainTextSection(outputText, "stderr");
+  if (stdout === null && stderr === null) return null;
+  const normalizedStdout = stdout ?? "";
+  const normalizedStderr = stderr ?? "";
+  if (!normalizedStdout) return normalizedStderr;
+  if (!normalizedStderr) return normalizedStdout;
+  return normalizedStdout.endsWith("\n")
+    ? `${normalizedStdout}${normalizedStderr}`
+    : `${normalizedStdout}\n${normalizedStderr}`;
+}
+
+function extractPlainTextSection(outputText: string, label: string): string | null {
+  const lines = outputText.split(/\r\n|\r|\n/);
+  const startIndex = lines.findIndex((line) => line === `${label}:`);
+  if (startIndex === -1) return null;
+  const section: string[] = [];
+  for (const line of lines.slice(startIndex + 1)) {
+    if (/^[a-z][a-z0-9_]*:$/.test(line)) break;
+    section.push(line);
+  }
+  return section.join("\n");
 }
 
 function countTerminalLines(value: string): number {
@@ -818,12 +825,12 @@ type SubagentToolPayload = {
 function parseSubagentToolPayload(...sources: string[]): SubagentToolPayload | null {
   for (const source of sources) {
     if (!source.trim()) continue;
-    try {
-      const parsed = JSON.parse(source) as SubagentToolPayload;
-      if (parsed && (parsed.child_session_id || parsed.subagent_run_id)) return parsed;
-    } catch {
-      continue;
+    const payload: SubagentToolPayload = {};
+    for (const line of source.split(/\r\n|\r|\n/)) {
+      const match = /^(subagent_run_id|child_session_id|name|task|status): (.*)$/.exec(line);
+      if (match) payload[match[1] as keyof SubagentToolPayload] = match[2];
     }
+    if (payload.child_session_id || payload.subagent_run_id) return payload;
   }
   return null;
 }

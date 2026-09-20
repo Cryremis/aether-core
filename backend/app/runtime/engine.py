@@ -28,6 +28,7 @@ from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.tool_service import ToolCatalogSnapshot, tool_service
 from app.services.tool_display_service import tool_display_service
+from app.services.tool_result_service import ToolExecutionResult, tool_result_renderer
 from app.services.transcript_service import transcript_service
 
 
@@ -35,20 +36,6 @@ class AgentEngine:
     """AetherCore runtime loop with production context management."""
 
     _TOOL_PROGRESS_INTERVAL_SECONDS = 15.0
-
-    @staticmethod
-    def _render_tool_result_for_model(result: Any, visible_result: Any) -> str:
-        """让宿主工具可以用纯文本输出，同时保留旧 JSON 工具的兼容性。"""
-        if isinstance(visible_result, str):
-            return visible_result
-        if isinstance(result, dict) and result.get("error") is not None:
-            lines = [f"ERROR[TOOL_EXECUTION_FAILED] {result.get('error')}"]
-            if result.get("summary") and result["summary"] != result.get("error"):
-                lines.append(f"SUMMARY: {result['summary']}")
-            lines.append("RETRYABLE: unknown")
-            lines.append("NEXT: Read the error above, correct the request, or inspect current state before retrying.")
-            return "\n".join(lines)
-        return json.dumps(visible_result, ensure_ascii=False, indent=2)
 
     def _append_assistant_block(self, blocks: list[dict[str, Any]], block: dict[str, Any]) -> None:
         blocks.append(block)
@@ -188,22 +175,13 @@ class AgentEngine:
             subtype="aborted",
         )
 
-    async def _cancel_tool_execution(self, execution_task: asyncio.Task[Any]) -> dict[str, Any]:
+    async def _cancel_tool_execution(self, execution_task: asyncio.Task[ToolExecutionResult]) -> ToolExecutionResult:
         execution_task.cancel()
         try:
             await execution_task
         except asyncio.CancelledError:
             pass
-        return {
-            "summary": "工具执行已停止",
-            "aborted": True,
-        }
-
-    def _synthetic_aborted_tool_result(self) -> dict[str, Any]:
-        return {
-            "summary": "工具执行已停止",
-            "aborted": True,
-        }
+        return ToolExecutionResult.aborted()
 
     async def _cleanup_tool_execution(self, execution_task: asyncio.Task[Any]) -> None:
         try:
@@ -221,7 +199,7 @@ class AgentEngine:
         tool_call_id: str,
         output_event_queue: asyncio.Queue[dict[str, Any]],
         catalog_snapshot: ToolCatalogSnapshot,
-    ) -> asyncio.Task[Any]:
+    ) -> asyncio.Task[ToolExecutionResult]:
         execute_kwargs: dict[str, Any] = {}
         try:
             signature = inspect.signature(tool_service.execute)
@@ -840,13 +818,13 @@ class AgentEngine:
                     try:
                         while True:
                             if self._run_is_aborted(session, run_id):
-                                result = self._synthetic_aborted_tool_result()
+                                result = ToolExecutionResult.aborted()
                                 cleanup_task = asyncio.create_task(self._cleanup_tool_execution(execution_task))
                                 session.set_cleanup_task(run_id, cleanup_task)
                                 self._update_assistant_block(
                                     persisted_assistant_blocks,
                                     tool_block_id,
-                                    outputText=json.dumps(result, ensure_ascii=False, indent=2),
+                                    outputText=tool_result_renderer.render(result),
                                     status="aborted",
                                 )
                                 yield make_event(
@@ -854,7 +832,8 @@ class AgentEngine:
                                     "tool_finished",
                                     id=tool_call["id"],
                                     tool_name=tool_name,
-                                    output=result,
+                                    output=tool_result_renderer.render(result),
+                                    result=result.public_payload(),
                                 )
                                 self._ensure_elapsed_block(
                                     persisted_assistant_blocks,
@@ -959,22 +938,22 @@ class AgentEngine:
                                         except asyncio.CancelledError:
                                             pass
                             except asyncio.CancelledError:
-                                result = {
-                                    "summary": "工具执行已停止",
-                                    "aborted": True,
-                                }
+                                result = ToolExecutionResult.aborted()
                                 break
                     except Exception as exc:  # noqa: BLE001
-                        result = {
-                            "error": str(exc),
-                            "summary": f"工具执行失败: {exc}",
-                        }
+                        result = ToolExecutionResult.failure(
+                            "tool.execution",
+                            "工具执行失败",
+                            code="TOOL_EXECUTION_FAILED",
+                            message=str(exc),
+                            retryable=False,
+                            next_action="阅读错误信息，修正请求或先检查当前状态后再重试。",
+                        )
                     finally:
                         session.clear_tool_running(run_id)
                         session.set_tool_task(run_id, None)
-                    visible_result = result.get("public_output", result) if isinstance(result, dict) else result
-                    tool_result_text = self._render_tool_result_for_model(result, visible_result)
-                    for runtime_event in result.get("runtime_events", []) if isinstance(result, dict) else []:
+                    tool_result_text = tool_result_renderer.render(result)
+                    for runtime_event in result.runtime_events:
                         event_type = runtime_event.get("type")
                         event_payload = runtime_event.get("payload") or {}
                         if event_type == "runtime_recreated" and isinstance(event_payload, dict):
@@ -987,6 +966,7 @@ class AgentEngine:
                         id=tool_call["id"],
                         tool_name=tool_name,
                         output=tool_result_text,
+                        result=result.public_payload(),
                     )
                     self._update_assistant_block(
                         persisted_assistant_blocks,
@@ -994,9 +974,8 @@ class AgentEngine:
                         outputText=tool_result_text,
                         status="done",
                     )
-                    artifact_payload = visible_result.get("artifact") if isinstance(visible_result, dict) else None
-                    if artifact_payload:
-                        yield make_event(session, "artifact_created", artifact=artifact_payload)
+                    if result.artifact is not None:
+                        yield make_event(session, "artifact_created", artifact=result.artifact)
                     if tool_name in {"sandbox_shell", "create_text_artifact"}:
                         yield make_event(
                             session,
@@ -1012,7 +991,7 @@ class AgentEngine:
                         )
                     )
                     session_service.persist(session)
-                    injected_messages = result.get("injected_messages", []) if isinstance(result, dict) else []
+                    injected_messages = result.injected_messages
                     if injected_messages:
                         for injected_message in injected_messages:
                             session.messages.append(
@@ -1023,7 +1002,7 @@ class AgentEngine:
                             )
                         session_service.persist(session)
 
-                    control = result.get("control", {}) if isinstance(result, dict) else {}
+                    control = result.control or {}
                     if control.get("type") == "await_user_input" and control.get("blocking", True):
                         self._ensure_elapsed_block(
                             persisted_assistant_blocks,

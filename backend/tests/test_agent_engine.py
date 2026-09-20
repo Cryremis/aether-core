@@ -15,6 +15,7 @@ from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.tool_catalog_service import tool_catalog_service
+from app.services.tool_result_service import ToolExecutionResult
 
 
 async def collect_stream(session: AgentSession, message: str) -> list[dict]:
@@ -368,16 +369,19 @@ def test_agent_engine_does_not_interrupt_long_run_when_stall_guard_disabled(monk
         yield current
 
     async def fake_execute(session, tool_name, arguments):
-        return {
-            "command": arguments["command"],
-            "shell": arguments.get("shell", "bash"),
-            "executor": "docker",
-            "exit_code": 0,
-            "stdout": "hello\n",
-            "stderr": "",
-            "duration_ms": 10,
-            "log_path": "logs/cmd_demo.json",
-        }
+        return ToolExecutionResult.success(
+            "shell.executed",
+            "命令执行成功",
+            {
+                "shell": arguments.get("shell", "bash"),
+                "executor": "docker",
+                "exit_code": 0,
+                "stdout": "hello\n",
+                "stderr": "",
+                "duration_ms": 10,
+                "log_path": "logs/cmd_demo.json",
+            },
+        )
 
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
@@ -465,10 +469,13 @@ def test_agent_engine_refreshes_host_tools_between_model_rounds(monkeypatch, tmp
                 }],
                 removals=[],
             )
-            return {"summary": "dynamic tool loaded"}
+            return ToolExecutionResult.success("host_tool.completed", "dynamic tool loaded")
         assert tool_name == "dynamic_task_tool"
         assert "dynamic_task_tool" in catalog_snapshot.host_descriptors_by_name
-        return {"summary": f"executed {arguments['task_id']}"}
+        return ToolExecutionResult.success(
+            "host_tool.completed",
+            f"executed {arguments['task_id']}",
+        )
 
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
@@ -544,15 +551,17 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
 
     async def fake_execute(session, tool_name, arguments):
         assert tool_name == "invoke_skill"
-        return {
-            "public_output": {"loaded": True, "skill": {"name": "data-analysis"}},
-            "injected_messages": [
+        return ToolExecutionResult.success(
+            "skill.loaded",
+            "技能 data-analysis 已加载",
+            {"skill_name": "data-analysis"},
+            injected_messages=[
                 {
                     "role": "user",
                     "content": '<aether_skill name="data-analysis" source="built_in">skill loaded</aether_skill>',
                 }
             ],
-        }
+        )
 
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
@@ -613,16 +622,19 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
         }
 
     async def fake_execute(session, tool_name, arguments):
-        return {
-            "command": arguments["command"],
-            "shell": arguments.get("shell", "bash"),
-            "executor": "docker",
-            "exit_code": 0,
-            "stdout": "ok\n",
-            "stderr": "",
-            "duration_ms": 10,
-            "log_path": "logs/cmd_runtime.json",
-            "runtime_events": [
+        return ToolExecutionResult.success(
+            "shell.executed",
+            "命令执行成功",
+            {
+                "shell": arguments.get("shell", "bash"),
+                "executor": "docker",
+                "exit_code": 0,
+                "stdout": "ok\n",
+                "stderr": "",
+                "duration_ms": 10,
+                "log_path": "logs/cmd_runtime.json",
+            },
+            runtime_events=[
                 {
                     "type": "runtime_recreated",
                     "payload": {
@@ -632,7 +644,7 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
                     },
                 }
             ],
-        }
+        )
 
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
@@ -647,6 +659,10 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
     assert "runtime_recreated" in event_types
     assert "tool_finished" in event_types
     assert event_types.index("runtime_recreated") < event_types.index("tool_finished")
+    tool_finished = next(item for item in events if item["type"] == "tool_finished")
+    assert tool_finished["payload"]["output"].startswith("shell.executed: success")
+    assert tool_finished["payload"]["result"]["kind"] == "shell.executed"
+    assert tool_finished["payload"]["result"]["status"] == "success"
     assert any(
         block.get("kind") == "runtime_notice" and block.get("eventType") == "runtime_recreated"
         for block in session.transcript[-1]["blocks"]
@@ -692,16 +708,19 @@ def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tm
 
     async def fake_execute(session, tool_name, arguments):
         await asyncio.sleep(0.03)
-        return {
-            "command": arguments["command"],
-            "shell": arguments.get("shell", "bash"),
-            "executor": "docker",
-            "exit_code": 0,
-            "stdout": "done\n",
-            "stderr": "",
-            "duration_ms": 30,
-            "log_path": "logs/cmd_slow.json",
-        }
+        return ToolExecutionResult.success(
+            "shell.executed",
+            "命令执行成功",
+            {
+                "shell": arguments.get("shell", "bash"),
+                "executor": "docker",
+                "exit_code": 0,
+                "stdout": "done\n",
+                "stderr": "",
+                "duration_ms": 30,
+                "log_path": "logs/cmd_slow.json",
+            },
+        )
 
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
@@ -872,7 +891,8 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
 
     assert any(item["type"] == "aborted" for item in first_events)
     tool_finished = next(item for item in first_events if item["type"] == "tool_finished")
-    assert tool_finished["payload"]["output"]["aborted"] is True
+    assert tool_finished["payload"]["result"]["status"] == "aborted"
+    assert tool_finished["payload"]["output"].startswith("tool.execution: aborted")
     assert session.current_run_id() is None
 
     result_event = next(item for item in second_events if item["type"] == "result")
@@ -919,14 +939,16 @@ def test_agent_engine_persists_transcript_when_tool_requests_user_input(monkeypa
         }
 
     async def fake_execute(session, tool_name, arguments):
-        return {
-            "control": {
+        return ToolExecutionResult.success(
+            "elicitation.requested",
+            "waiting",
+            {"request_id": "ask_1"},
+            control={
                 "type": "await_user_input",
                 "blocking": True,
                 "request_id": "ask_1",
             },
-            "summary": "waiting",
-        }
+        )
 
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)

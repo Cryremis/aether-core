@@ -1573,18 +1573,8 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           tool_name: String(payload.tool_name ?? ""),
           status: "finished",
         });
-        const toolName = String(payload.tool_name ?? "");
-        const output = payload.output;
-        if (toolName === "update_workboard") {
-          const nextWorkboard = ((output as Record<string, unknown> | undefined)?.workboard ??
-            (output as Record<string, unknown> | undefined)?.snapshot) as WorkboardState | undefined;
-          if (nextWorkboard) setWorkboard(nextWorkboard);
-        }
-        if (toolName === "request_user_input") {
-          const nextElicitation = ((output as Record<string, unknown> | undefined)?.elicitation ??
-            (output as Record<string, unknown> | undefined)?.snapshot) as ElicitationState | undefined;
-          if (nextElicitation) setElicitation(nextElicitation);
-        }
+        const output = typeof payload.output === "string" ? payload.output : "";
+        const structuredResult = payload.result as { status?: string } | undefined;
         const toolId = String(payload.id ?? "");
         upsertAssistantBlock(
           assistantId,
@@ -1595,23 +1585,17 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
             title: "运行命令",
             meta: "",
             argumentsText: "",
-            outputText: stringifyStructured(output),
+            outputText: output,
             liveOutputText: undefined,
-            status:
-              typeof output === "object" && output !== null && "aborted" in (output as Record<string, unknown>) && (output as Record<string, unknown>).aborted === true
-                ? "aborted"
-                : "done",
+            status: structuredResult?.status === "aborted" ? "aborted" : "done",
           }),
           (block) =>
             block.kind === "tool"
               ? {
                   ...block,
-                  outputText: stringifyStructured(output),
+                  outputText: output,
                   liveOutputText: undefined,
-                  status:
-                    typeof output === "object" && output !== null && "aborted" in (output as Record<string, unknown>) && (output as Record<string, unknown>).aborted === true
-                      ? "aborted"
-                      : "done",
+                  status: structuredResult?.status === "aborted" ? "aborted" : "done",
                 }
               : block,
         );

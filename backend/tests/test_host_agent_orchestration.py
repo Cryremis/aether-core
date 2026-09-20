@@ -284,8 +284,8 @@ def test_all_subagent_tools_dispatch_with_tool_name_and_run_id(tmp_path, monkeyp
 
     results = asyncio.run(execute_all())
     assert set(results) == set(cases)
-    assert all(result["parent_run_id"] == "run_parent" for result in results.values())
-    assert all(result["tool_name"] == name for name, result in results.items())
+    assert all(result.data["parent_run_id"] == "run_parent" for result in results.values())
+    assert all(result.data["tool_name"] == name for name, result in results.items())
 
 
 def test_missing_subagent_id_returns_domain_error_not_internal_name_error(tmp_path):

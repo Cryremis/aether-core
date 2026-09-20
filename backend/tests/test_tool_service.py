@@ -71,6 +71,58 @@ def test_host_tool_error_preserves_plain_text_detail(monkeypatch):
         raise AssertionError("expected host tool failure")
 
 
+def test_host_tool_success_uses_unified_result_contract(monkeypatch):
+    async def fake_request(_self, method, url, headers, json):
+        request = httpx.Request(method, url, headers=headers, json=json)
+        return httpx.Response(200, request=request, json={"page_id": "page_1", "title": "Demo"})
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+    session = AgentSession(
+        session_id="sess_host_success",
+        host_context={"extras": {"host_callback_base_url": "http://host.example"}},
+    )
+    descriptor = {
+        "name": "host_read_page",
+        "endpoint": "/api/tools/read",
+        "method": "POST",
+        "requires_auth": False,
+        "auth_inject": False,
+    }
+
+    result = asyncio.run(tool_service._invoke_host_tool(session, descriptor, {}))
+
+    assert result.kind == "host_tool.completed"
+    assert result.status == "success"
+    assert result.data == {"page_id": "page_1", "title": "Demo"}
+
+
+def test_mcp_tool_success_uses_unified_result_contract(monkeypatch):
+    from app.services.mcp_runtime_service import mcp_runtime_service
+
+    session = AgentSession(
+        session_id="sess_mcp_success",
+        host_tools=[{
+            "name": "mcp_search",
+            "description": "search documents",
+            "kind": "mcp",
+            "mcp_config_id": "mcp_config_1",
+            "mcp_tool": "search",
+        }],
+    )
+
+    async def fake_invoke(_session, _config, tool_name, _arguments):
+        return {"server": "docs", "tool": tool_name, "result": {"content": [{"type": "text", "text": "found"}]}}
+
+    monkeypatch.setattr(mcp_runtime_service, "resolve_config", lambda _session, config_id: {"id": config_id})
+    monkeypatch.setattr(mcp_runtime_service, "invoke", fake_invoke)
+
+    result = asyncio.run(tool_service.execute(session, "mcp_search", {"query": "aether"}))
+
+    assert result.kind == "mcp_tool.completed"
+    assert result.data["server"] == "docs"
+    assert result.data["result"]["content"][0]["text"] == "found"
+
+
 def make_runtime_config(*, base_url: str, model: str) -> RuntimeLlmConfig:
     return RuntimeLlmConfig(
         scope="global",
@@ -164,7 +216,8 @@ def test_request_user_input_tool_returns_control_payload(tmp_path):
         )
     )
 
-    assert result["control"]["type"] == "await_user_input"
+    assert result.control is not None
+    assert result.control["type"] == "await_user_input"
     assert runtime_state_service.get_elicitation(session).pending is not None
 
 
@@ -188,8 +241,9 @@ def test_update_workboard_tool_supports_ops(tmp_path):
         )
     )
 
-    assert result["workboard"]["items"][0]["id"] == "task_1"
-    assert result["workboard"]["items"][0]["status"] == "completed"
+    assert result.data["revision"] >= 1
+    assert result.runtime_events[0]["payload"]["snapshot"]["items"][0]["id"] == "task_1"
+    assert result.runtime_events[0]["payload"]["snapshot"]["items"][0]["status"] == "completed"
 
 
 def test_sandbox_shell_reports_runtime_recreated(monkeypatch, tmp_path):
@@ -231,10 +285,10 @@ def test_sandbox_shell_reports_runtime_recreated(monkeypatch, tmp_path):
         )
     )
 
-    assert result["runtime"]["status"] == "recreated"
-    assert result["runtime_events"][0]["type"] == "runtime_recreated"
-    assert "injected_messages" not in result
-    assert "command" not in result
+    assert result.data["runtime"]["status"] == "recreated"
+    assert result.runtime_events[0]["type"] == "runtime_recreated"
+    assert result.injected_messages == ()
+    assert "command" not in result.data
 
 
 def test_sandbox_shell_raw_output_omits_command(monkeypatch, tmp_path):
@@ -270,8 +324,8 @@ def test_sandbox_shell_raw_output_omits_command(monkeypatch, tmp_path):
         )
     )
 
-    assert "command" not in result
-    assert result["shell"] == "bash"
+    assert "command" not in result.data
+    assert result.data["shell"] == "bash"
 
 
 def test_sandbox_shell_passes_timeout_override(monkeypatch, tmp_path):
@@ -311,7 +365,7 @@ def test_sandbox_shell_passes_timeout_override(monkeypatch, tmp_path):
     )
 
     assert observed["timeout_seconds"] == 321
-    assert result["runtime"]["timeout_seconds"] == 321
+    assert result.data["runtime"]["timeout_seconds"] == 321
 
 
 def test_sandbox_shell_returns_runtime_busy_payload(monkeypatch, tmp_path):
@@ -342,9 +396,10 @@ def test_sandbox_shell_returns_runtime_busy_payload(monkeypatch, tmp_path):
         )
     )
 
-    assert result["error_code"] == "runtime_busy"
-    assert result["recoverable"] is True
-    assert "rebuild_runtime" in result["suggested_actions"]
+    assert result.error is not None
+    assert result.error.code == "RUNTIME_BUSY"
+    assert result.error.retryable is True
+    assert "rebuild_runtime" in result.error.next_action
 
 
 def test_sandbox_shell_returns_runtime_start_failed_payload(monkeypatch, tmp_path):
@@ -375,9 +430,10 @@ def test_sandbox_shell_returns_runtime_start_failed_payload(monkeypatch, tmp_pat
         )
     )
 
-    assert result["error_code"] == "runtime_start_failed"
-    assert result["recoverable"] is True
-    assert result["suggested_actions"] == ["rebuild_runtime"]
+    assert result.error is not None
+    assert result.error.code == "RUNTIME_START_FAILED"
+    assert result.error.retryable is True
+    assert "rebuild_runtime" in result.error.next_action
 
 
 def test_rebuild_runtime_tool_reports_runtime_event(monkeypatch, tmp_path):
@@ -410,9 +466,9 @@ def test_rebuild_runtime_tool_reports_runtime_event(monkeypatch, tmp_path):
         )
     )
 
-    assert result["summary"] == "沙箱 runtime 已重建"
-    assert result["runtime"]["status"] == "recreated"
-    assert result["runtime_events"][0]["type"] == "runtime_recreated"
+    assert result.summary == "沙箱 runtime 已重建"
+    assert result.data["status"] == "recreated"
+    assert result.runtime_events[0]["type"] == "runtime_recreated"
 
 
 def test_prompt_workspace_paths_use_container_paths(tmp_path):
@@ -453,11 +509,11 @@ def test_read_tool_supports_offset_and_line_numbers(tmp_path):
         )
     )
 
-    assert result["file"]["file_path"] == "/workspace/work/demo.txt"
-    assert result["file"]["start_line"] == 2
-    assert result["file"]["total_lines"] == 3
-    assert "2\tbeta" in result["file"]["content"]
-    assert "3\tgamma" in result["file"]["content"]
+    assert result.data["file_path"] == "/workspace/work/demo.txt"
+    assert result.data["start_line"] == 2
+    assert result.data["total_lines"] == 3
+    assert "2\tbeta" in result.data["content"]
+    assert "3\tgamma" in result.data["content"]
 
 
 def test_list_tool_defaults_to_workspace_root(tmp_path):
@@ -476,6 +532,6 @@ def test_list_tool_defaults_to_workspace_root(tmp_path):
         )
     )
 
-    names = [item["name"] for item in result["items"]]
-    assert result["path"] == "/workspace"
+    names = [item["name"] for item in result.data["items"]]
+    assert result.data["path"] == "/workspace"
     assert "work" in names

@@ -144,15 +144,12 @@ class SkillService:
 
         final_content = self._render_skill_content(session, skill)
         return {
-            "public_output": {
-                "loaded": True,
-                "skill": {
-                    "name": skill["name"],
-                    "description": skill["description"],
-                    "source": skill["source"],
-                    "allowed_tools": skill.get("allowed_tools", []),
-                    "tags": skill.get("tags", []),
-                },
+            "skill": {
+                "name": skill["name"],
+                "description": skill["description"],
+                "source": skill["source"],
+                "allowed_tools": skill.get("allowed_tools", []),
+                "tags": skill.get("tags", []),
             },
             "injected_messages": [
                 {

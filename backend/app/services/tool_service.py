@@ -26,13 +26,14 @@ from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.tool_execution_service import ToolOutputEvent, tool_execution_service
 from app.services.tool_catalog_service import HostToolCatalogSnapshot, tool_catalog_service
+from app.services.tool_result_service import ToolExecutionResult
 from app.services.search_service import search_service
 from app.services.skill_service import skill_service
 from app.services.store import store_service
 from app.services.workspace_runtime_service import RuntimeBusyError, RuntimeStartError, workspace_runtime_service
 
 
-ToolHandler = Callable[[AgentSession, dict[str, Any]], Awaitable[dict[str, Any]]]
+ToolHandler = Callable[[AgentSession, dict[str, Any]], Awaitable[ToolExecutionResult]]
 
 SUBAGENT_TOOL_NAMES = {
     "subagent_create",
@@ -409,72 +410,130 @@ class ToolService:
                 schema_info["name"],
                 schema_info["description"],
                 schema_info["parameters"],
-                lambda session, args, name=schema_info["name"]: (
-                    search_service.execute_glob(session, args)
-                    if name == "glob"
-                    else search_service.execute_grep(session, args)
-                ),
+                self._handle_glob if schema_info["name"] == "glob" else self._handle_grep,
                 required=["pattern"],
             )
 
-    async def _handle_invoke_skill(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
-        return skill_service.invoke_skill(session, skill_name=str(arguments["skill_name"]))
+    async def _handle_glob(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        result = await search_service.execute_glob(session, arguments)
+        filenames = result.get("filenames", [])
+        return ToolExecutionResult.success(
+            "search.glob",
+            f"匹配到 {result.get('num_files', 0)} 个文件",
+            {
+                "pattern": arguments.get("pattern", ""),
+                "files": filenames,
+                "num_files": result.get("num_files", 0),
+                "truncated": result.get("truncated", False),
+                "duration_ms": result.get("duration_ms", 0),
+                "next": "使用更具体的 path 或 pattern 缩小范围。" if result.get("truncated") else "",
+            },
+        )
 
-    async def _handle_update_workboard(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_grep(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        result = await search_service.execute_grep(session, arguments)
+        mode = str(arguments.get("output_mode") or "files_with_matches")
+        if mode == "content":
+            summary = f"匹配到 {result.get('num_lines', 0)} 行"
+        elif mode == "count":
+            summary = f"匹配到 {result.get('num_matches', 0)} 次，分布在 {result.get('num_files', 0)} 个文件"
+        else:
+            summary = f"匹配到 {result.get('num_files', 0)} 个文件"
+        return ToolExecutionResult.success(
+            "search.grep",
+            summary,
+            {
+                "mode": mode,
+                "content": result.get("content", ""),
+                "num_lines": result.get("num_lines", 0),
+                "num_matches": result.get("num_matches", 0),
+                "num_files": result.get("num_files", 0),
+                "truncated": result.get("truncated", False),
+                "duration_ms": result.get("duration_ms", 0),
+            },
+        )
+
+    async def _handle_invoke_skill(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        payload = skill_service.invoke_skill(session, skill_name=str(arguments["skill_name"]))
+        skill = payload["skill"]
+        return ToolExecutionResult.success(
+            "skill.loaded",
+            f"技能 {skill['name']} 已加载",
+            {
+                "skill_name": skill["name"],
+                "description": skill["description"],
+                "source": skill["source"],
+                "allowed_tools": skill.get("allowed_tools", []),
+                "tags": skill.get("tags", []),
+            },
+            injected_messages=payload["injected_messages"],
+        )
+
+    async def _handle_update_workboard(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         if not isinstance(arguments.get("ops"), list) and not isinstance(arguments.get("items"), list):
             raise RuntimeError("update_workboard requires either ops or items")
         state = runtime_state_service.update_workboard(session, arguments)
-        return {
-            "workboard": state.model_dump(mode="json"),
-            "public_output": {
-                "summary": f"任务清单已更新，共 {len(state.items)} 项",
+        snapshot = state.model_dump(mode="json")
+        open_item_count = sum(item.status not in {"completed", "cancelled"} for item in state.items)
+        return ToolExecutionResult.success(
+            "workboard.updated",
+            f"任务清单已更新，共 {len(state.items)} 项",
+            {
                 "revision": state.revision,
                 "status": state.status,
+                "item_count": len(state.items),
+                "open_item_count": open_item_count,
             },
-            "runtime_events": [
+            runtime_events=[
                 {
                     "type": "workboard_updated",
                     "payload": {
-                        "snapshot": state.model_dump(mode="json"),
+                        "snapshot": snapshot,
                     },
                 }
             ],
-        }
+        )
 
-    async def _handle_request_user_input(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_request_user_input(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         request = runtime_state_service.request_user_input(session, arguments)
         state = runtime_state_service.get_elicitation(session)
-        return {
-            "elicitation": request.model_dump(mode="json"),
-            "public_output": {
-                "summary": f"已发起用户提问：{request.title}",
+        request_payload = request.model_dump(mode="json")
+        return ToolExecutionResult.success(
+            "elicitation.requested",
+            f"已发起用户提问：{request.title}",
+            {
                 "request_id": request.id,
+                "title": request.title,
                 "blocking": request.blocking,
             },
-            "runtime_events": [
+            runtime_events=[
                 {
                     "type": "ask_requested",
                     "payload": {
-                        "request": request.model_dump(mode="json"),
+                        "request": request_payload,
                         "snapshot": state.model_dump(mode="json"),
                     },
                 }
             ],
-            "control": {
+            control={
                 "type": "await_user_input",
                 "request_id": request.id,
                 "blocking": request.blocking,
                 "title": request.title,
             },
-        }
+        )
 
-    async def _handle_list_skills(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
-        return {"items": [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]}
+    async def _handle_list_skills(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        skills = [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]
+        return ToolExecutionResult.success(
+            "skills.listed",
+            f"当前会话可见 {len(skills)} 个技能",
+            {"count": len(skills), "skills": skills},
+        )
 
-    async def _handle_list(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "path": arguments.get("path") or "/workspace",
-            "items": [
+    async def _handle_list(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        path = arguments.get("path") or "/workspace"
+        items = [
                 {
                     "path": item.path,
                     "name": item.name,
@@ -485,13 +544,17 @@ class ToolService:
                 }
                 for item in file_service.list(
                     session,
-                    path=arguments.get("path"),
+                    path=path,
                     limit=int(arguments.get("limit") or 200),
                 )
-            ],
-        }
+        ]
+        return ToolExecutionResult.success(
+            "workspace.listed",
+            f"{path} 下共有 {len(items)} 个条目",
+            {"path": path, "item_count": len(items), "items": items},
+        )
 
-    async def _handle_read(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_read(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         result = file_service.read(
             session,
             file_id=arguments.get("file_id"),
@@ -499,43 +562,52 @@ class ToolService:
             offset=int(arguments.get("offset") or 1),
             limit=int(arguments["limit"]) if arguments.get("limit") is not None else None,
         )
-        return {
-            "file": {
+        return ToolExecutionResult.success(
+            "file.read",
+            f"已读取 {result.file_path}",
+            {
                 "file_path": result.file_path,
                 "content": result.content,
-                "num_lines": result.num_lines,
                 "start_line": result.start_line,
+                "end_line": result.start_line + result.num_lines - 1,
                 "total_lines": result.total_lines,
                 "truncated": result.truncated,
                 "size": result.size,
-            }
-        }
+            },
+        )
 
-    async def _handle_create_text_artifact(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_create_text_artifact(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         artifact = artifact_service.create_text_artifact(
             session=session,
             name=str(arguments["name"]),
             content=str(arguments["content"]),
         )
-        return {"artifact": artifact.model_dump(mode="json")}
+        payload = artifact.model_dump(mode="json")
+        return ToolExecutionResult.success(
+            "artifact.created",
+            f"文本产物 {artifact.name} 已创建",
+            {"artifact": payload},
+            artifact=payload,
+        )
 
-    async def _handle_rebuild_runtime(self, session: AgentSession, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_rebuild_runtime(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         if session.workspace is None:
             raise RuntimeError("会话沙箱尚未初始化。")
         metadata = await workspace_runtime_service.rebuild_runtime(
             session.workspace,
             reason=str(arguments.get("reason") or "agent_requested_rebuild"),
         )
-        return {
-            "summary": "沙箱 runtime 已重建",
-            "runtime": metadata,
-            "runtime_events": [
+        return ToolExecutionResult.success(
+            "runtime.rebuilt",
+            "沙箱 runtime 已重建",
+            metadata,
+            runtime_events=[
                 {
                     "type": "runtime_recreated" if metadata["status"] == "recreated" else "runtime_created",
                     "payload": metadata,
                 }
             ],
-        }
+        )
 
     async def _handle_sandbox_shell(
         self,
@@ -545,7 +617,7 @@ class ToolService:
         run_id: str | None = None,
         tool_call_id: str | None = None,
         output_event_callback: Callable[[ToolOutputEvent], Awaitable[None]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> ToolExecutionResult:
         if session.workspace is None:
             raise RuntimeError("会话沙箱尚未初始化。")
         runner_kwargs: dict[str, Any] = {
@@ -602,20 +674,15 @@ class ToolService:
                     tool_call_id=tool_call_id,
                     error=exc.summary,
                 )
-            return {
-                "summary": exc.summary,
-                "error_code": "runtime_busy",
-                "recoverable": True,
-                "suggested_actions": list(exc.suggested_actions),
-                "runtime": exc.runtime,
-                "public_output": {
-                    "summary": exc.summary,
-                    "error_code": "runtime_busy",
-                    "recoverable": True,
-                    "suggested_actions": list(exc.suggested_actions),
-                    "runtime": exc.runtime,
-                },
-            }
+            return ToolExecutionResult.failure(
+                "shell.executed",
+                "沙箱暂时不可用",
+                code="RUNTIME_BUSY",
+                message=exc.summary,
+                retryable=True,
+                next_action="; ".join(exc.suggested_actions) or "稍后重试，或调用 rebuild_runtime。",
+                data={"runtime": exc.runtime},
+            )
         except RuntimeStartError as exc:
             if streaming_enabled and tool_call_id is not None:
                 tool_execution_service.fail_execution(
@@ -623,22 +690,17 @@ class ToolService:
                     tool_call_id=tool_call_id,
                     error=exc.summary,
                 )
-            return {
-                "summary": exc.summary,
-                "error_code": "runtime_start_failed",
-                "recoverable": True,
-                "suggested_actions": ["rebuild_runtime"],
-                "runtime": exc.runtime,
-                "public_output": {
-                    "summary": exc.summary,
-                    "error_code": "runtime_start_failed",
-                    "recoverable": True,
-                    "suggested_actions": ["rebuild_runtime"],
-                    "runtime": exc.runtime,
-                },
-            }
+            return ToolExecutionResult.failure(
+                "shell.executed",
+                "沙箱 runtime 启动失败",
+                code="RUNTIME_START_FAILED",
+                message=exc.summary,
+                retryable=True,
+                next_action="调用 rebuild_runtime 重建沙箱。",
+                data={"runtime": exc.runtime},
+            )
         artifact_service.sync_work_directory(session)
-        response: dict[str, Any] = {
+        data: dict[str, Any] = {
             "shell": result.shell,
             "executor": result.executor,
             "exit_code": result.exit_code,
@@ -649,24 +711,32 @@ class ToolService:
         }
         runtime_metadata = result.runtime_metadata or {}
         if runtime_metadata:
-            response["runtime"] = runtime_metadata
+            data["runtime"] = runtime_metadata
         runtime_status = str(runtime_metadata.get("status") or "")
         if runtime_status in {"created", "recreated"}:
-            response["runtime_events"] = [
+            runtime_events = [
                 {
                     "type": "runtime_created" if runtime_status == "created" else "runtime_recreated",
                     "payload": runtime_metadata,
                 }
             ]
+        else:
+            runtime_events = []
         if streaming_enabled and tool_call_id is not None:
             tool_execution_service.finish_execution(
                 session,
                 tool_call_id=tool_call_id,
                 exit_code=result.exit_code,
-                final_output=response,
+                final_output=ToolExecutionResult.success("shell.executed", "命令已执行", data).public_payload(),
                 status="completed" if result.exit_code == 0 else "failed",
             )
-        return response
+        return ToolExecutionResult(
+            kind="shell.executed",
+            summary="命令执行成功" if result.exit_code == 0 else f"命令退出码为 {result.exit_code}",
+            status="success" if result.exit_code == 0 else "partial",
+            data=data,
+            runtime_events=tuple(runtime_events),
+        )
 
     def list_tool_schemas(
         self,
@@ -781,7 +851,7 @@ class ToolService:
         tool_call_id: str | None = None,
         output_event_callback: Callable[[ToolOutputEvent], Awaitable[None]] | None = None,
         catalog_snapshot: ToolCatalogSnapshot | None = None,
-    ) -> dict[str, Any]:
+    ) -> ToolExecutionResult:
         """执行指定工具。"""
         # 检查注册表中的内置工具
         handler = self._registry.get_handler(tool_name)
@@ -809,7 +879,7 @@ class ToolService:
         runtime_config = self._resolve_runtime_config(session)
 
         if tool_name == "web_search":
-            return await network_service.web_search(
+            payload = await network_service.web_search(
                 session=session,
                 runtime_config=runtime_config,
                 query=str(arguments["query"]),
@@ -817,13 +887,30 @@ class ToolService:
                 blocked_domains=[str(item) for item in arguments.get("blocked_domains", [])],
                 max_results=self._parse_int(arguments.get("max_results")),
             )
+            results = payload.get("results", [])
+            return ToolExecutionResult.success(
+                "web.searched",
+                f"搜索完成，返回 {len(results)} 条结果",
+                {
+                    "query": payload.get("query", ""),
+                    "provider": payload.get("provider", ""),
+                    "result_count": len(results),
+                    "answer": payload.get("summary", ""),
+                    "results": results,
+                },
+            )
 
         if tool_name == "web_fetch":
-            return await network_service.web_fetch(
+            payload = await network_service.web_fetch(
                 runtime_config=runtime_config,
                 url=str(arguments["url"]),
                 format_type=str(arguments.get("format") or "markdown"),
                 timeout_seconds=self._parse_int(arguments.get("timeout_seconds")),
+            )
+            return ToolExecutionResult.success(
+                "web.fetched",
+                f"已抓取 {payload.get('url', '')}",
+                payload,
             )
 
         # 处理宿主工具
@@ -836,7 +923,12 @@ class ToolService:
             if descriptor.get("kind") == "mcp":
                 from app.services.mcp_runtime_service import mcp_runtime_service
                 config = mcp_runtime_service.resolve_config(session, str(descriptor["mcp_config_id"]))
-                return await mcp_runtime_service.invoke(session, config, str(descriptor["mcp_tool"]), arguments)
+                payload = await mcp_runtime_service.invoke(session, config, str(descriptor["mcp_tool"]), arguments)
+                return ToolExecutionResult.success(
+                    "mcp_tool.completed",
+                    f"MCP 工具 {tool_name} 执行完成",
+                    payload,
+                )
             return await self._invoke_host_tool(session, descriptor, arguments)
 
         raise RuntimeError(f"未知工具: {tool_name}")
@@ -848,22 +940,64 @@ class ToolService:
         *,
         tool_name: str,
         run_id: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> ToolExecutionResult:
         from app.services.subagent_service import subagent_service
 
-        return await subagent_service.execute_tool(
+        payload = await subagent_service.execute_tool(
             session,
             arguments,
             parent_run_id=run_id,
             tool_name=tool_name,
         )
+        return self._subagent_result(tool_name, payload)
+
+    def _subagent_result(self, tool_name: str, payload: dict[str, Any]) -> ToolExecutionResult:
+        if tool_name == "subagent_create":
+            return ToolExecutionResult.success(
+                "subagent.created",
+                f"子代理 {payload.get('name', '')} 已创建",
+                payload,
+            )
+        if tool_name == "subagent_send_message":
+            return ToolExecutionResult.success(
+                "subagent.message_sent",
+                f"已向子代理 {payload.get('name', '')} 发送跟进消息",
+                payload,
+            )
+        if tool_name == "subagent_wait":
+            status = str(payload.get("status") or "unknown")
+            return ToolExecutionResult.success(
+                "subagent.waited",
+                "子代理已全部完成" if status == "completed" else "子代理仍在运行",
+                payload,
+            )
+        if tool_name == "subagent_list":
+            rows = payload.get("subagents", [])
+            return ToolExecutionResult.success(
+                "subagent.listed",
+                f"当前会话共有 {len(rows)} 个子代理",
+                payload,
+            )
+        if tool_name == "subagent_cancel":
+            return ToolExecutionResult.success(
+                "subagent.cancel_requested",
+                "已请求停止子代理",
+                payload,
+            )
+        if tool_name == "subagent_get_result":
+            return ToolExecutionResult.success(
+                "subagent.result",
+                f"子代理状态：{payload.get('status', 'unknown')}",
+                payload,
+            )
+        raise RuntimeError(f"未知 subagent 工具: {tool_name}")
 
     async def _invoke_host_tool(
         self,
         session: AgentSession,
         descriptor: dict[str, Any],
         arguments: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> ToolExecutionResult:
         """调用宿主工具，自动注入认证并处理 token 刷新。"""
         endpoint = self._resolve_host_url(
             session,
@@ -920,7 +1054,12 @@ class ToolService:
                     f"宿主工具 {descriptor['name']} 返回了无效 JSON: {response.text[:2000]}"
                 ) from exc
 
-        return data if isinstance(data, dict) else {"result": data}
+        payload = data if isinstance(data, dict) else {"result": data}
+        return ToolExecutionResult.success(
+            "host_tool.completed",
+            f"宿主工具 {descriptor['name']} 执行完成",
+            payload,
+        )
 
     @staticmethod
     def _host_error_detail(response: httpx.Response) -> str:
