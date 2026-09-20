@@ -20,6 +20,28 @@ During bind, a host can pass:
 - `skills`: host-provided domain instructions or workflow guidance.
 - `apis`: host API metadata reserved for adapter and tooling expansion.
 
+## Host Control API
+
+In addition to bind, the host backend can manage conversations and runs with the platform secret. User-scoped list operations require `external_user_id`; mutation endpoints verify that the target conversation belongs to the authenticated platform.
+
+- `POST /api/v1/host/conversations`: create or idempotently reuse a conversation. `visibility` can be `normal` or `hidden` at creation time.
+- `GET /api/v1/host/conversations?external_user_id=...`: page conversations with `cursor`, `limit`, `include_hidden`, `include_archived`, and `include_deleted`.
+- `GET/PATCH /api/v1/host/conversations/{conversation_id}`: read or update title, visibility, pinned/archived state, metadata, and revision.
+- `POST .../hide` and `POST .../restore`: convenience lifecycle operations.
+- `DELETE /api/v1/host/conversations/{conversation_id}`: soft-delete and retain audit/recovery data.
+- `POST .../messages`: start an agent run. Use `response_mode=stream` for SSE or `poll` for a `run_id`. `idempotency_key` (or `client_message_id`) replays the same run on retry.
+- `GET .../assistant-messages?limit=N&include_subagents=true`: read recent visible AI replies with each reply's run status.
+- `GET /api/v1/host/runs/{run_id}` and `GET /api/v1/host/runs/{run_id}/events?after_seq=N`: read run state and append-only events after a cursor.
+- `POST /api/v1/host/runs/{run_id}/cancel`: request cooperative cancellation.
+
+Runs and events are persisted in SQLite. SSE frames include `id: <seq>` so clients can reconnect with `Last-Event-ID`; the HTTP event API also accepts `after_seq`.
+
+## Subagent Model
+
+The main agent can use `subagent_create`, `subagent_send_message`, `subagent_wait`, `subagent_list`, `subagent_cancel`, and `subagent_get_result`. Subagents have isolated sessions, runs, and workspaces. They do not receive subagent tools, so the default depth is one layer. There are no low default concurrency/token caps; capacity is delegated to platform configuration and the scheduler.
+
+Subagents are user-visible as read-only cards in the workbench. Users cannot message them directly. When a subagent reaches a terminal state, AetherCore emits `subagent_result_ready`, stores its result, and appends the result to the parent agent context. If the parent is waiting, the wait resolves immediately.
+
 ## Host Tools
 
 Host tools are session-level descriptors, not uploaded host code. A descriptor includes the tool name, model-facing description, JSON input schema, and the host endpoint AetherCore should call.

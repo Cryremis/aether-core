@@ -466,6 +466,19 @@ export type ActiveRunSummary = {
   };
 };
 
+export type SubagentRunSummary = {
+  subagent_run_id: string;
+  run_id: string;
+  name: string;
+  task: string;
+  status: string;
+  result?: string | null;
+  error?: string | null;
+  created_at?: string | null;
+  finished_at?: string | null;
+  user_can_message?: boolean;
+};
+
 export type CommittedChatMessage =
   | { id: string; role: "user"; content: string }
   | {

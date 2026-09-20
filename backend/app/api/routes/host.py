@@ -3,6 +3,7 @@ import traceback
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import require_platform_secret
 from app.core.config import settings
@@ -10,9 +11,15 @@ from app.host.registry import host_registry
 from app.schemas.common import ApiResponse
 from app.schemas.host import (
     HostBindRequest,
+    HostConversationCreateRequest,
+    HostConversationPatchRequest,
+    HostMessageRequest,
     HostToolCatalogPatchRequest,
     HostToolCatalogReplaceRequest,
 )
+from app.schemas.agent import AgentEvent
+from app.services.agent_run_service import agent_run_service
+from app.services.host_control_service import host_control_service
 from app.services.session_service import session_service
 from app.services.store import store_service
 from app.services.tool_catalog_service import (
@@ -41,6 +48,14 @@ def _mutation_payload(result) -> dict:
         "removed": list(result.removed),
         "tool_count": result.tool_count,
     }
+
+
+def _sse(event: AgentEvent) -> str:
+    lines = [f"event: {event.type}"]
+    if event.seq is not None:
+        lines.append(f"id: {event.seq}")
+    lines.append(f"data: {event.model_dump_json()}")
+    return "\n".join(lines) + "\n\n"
 
 
 @router.get("/public/embed/aethercore-embed.js", include_in_schema=False)
@@ -83,6 +98,226 @@ def bind_host(
         f"?embed_token={summary['token']}&session_id={summary['session_id']}"
     )
     return ApiResponse(message="宿主绑定成功", data=summary)
+
+
+@router.post("/conversations")
+def create_host_conversation(
+    request: HostConversationCreateRequest,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    """创建或幂等复用一个宿主会话，可直接指定隐藏状态。"""
+    try:
+        result = host_control_service.create_conversation(platform=platform, request=request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(message="宿主会话已创建", data=result)
+
+
+@router.get("/conversations")
+def list_host_conversations(
+    external_user_id: str = Query(min_length=1, max_length=256),
+    include_hidden: bool = False,
+    include_archived: bool = False,
+    include_deleted: bool = False,
+    limit: int = Query(default=20, ge=1, le=200),
+    cursor: int = Query(default=0, ge=0),
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    result = host_control_service.list_conversations(
+        platform=platform,
+        external_user_id=external_user_id,
+        include_hidden=include_hidden,
+        include_archived=include_archived,
+        include_deleted=include_deleted,
+        limit=limit,
+        offset=cursor,
+    )
+    return ApiResponse(message="宿主会话列表", data=result)
+
+
+@router.get("/conversations/{conversation_id}")
+def get_host_conversation(
+    conversation_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = host_control_service.get_conversation(platform=platform, conversation_id=conversation_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    return ApiResponse(message="宿主会话详情", data=result)
+
+
+@router.patch("/conversations/{conversation_id}")
+def patch_host_conversation(
+    conversation_id: str,
+    request: HostConversationPatchRequest,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = host_control_service.patch_conversation(
+            platform=platform,
+            conversation_id=conversation_id,
+            request=request,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ApiResponse(message="宿主会话已更新", data=result)
+
+
+@router.post("/conversations/{conversation_id}/hide")
+def hide_host_conversation(
+    conversation_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = host_control_service.set_visibility(
+            platform=platform,
+            conversation_id=conversation_id,
+            visibility="hidden",
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    return ApiResponse(message="宿主会话已隐藏", data=result)
+
+
+@router.post("/conversations/{conversation_id}/restore")
+def restore_host_conversation(
+    conversation_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = host_control_service.set_visibility(
+            platform=platform,
+            conversation_id=conversation_id,
+            visibility="normal",
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    return ApiResponse(message="宿主会话已恢复", data=result)
+
+
+@router.delete("/conversations/{conversation_id}")
+def delete_host_conversation(
+    conversation_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        deleted = host_control_service.delete_conversation(platform=platform, conversation_id=conversation_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    if not deleted:
+        raise HTTPException(status_code=409, detail="会话已删除")
+    return ApiResponse(message="宿主会话已删除")
+
+
+@router.post("/conversations/{conversation_id}/messages")
+async def send_host_message(
+    conversation_id: str,
+    request: HostMessageRequest,
+    platform: dict = Depends(require_platform_secret),
+):
+    try:
+        result = await host_control_service.send_message(
+            platform=platform,
+            conversation_id=conversation_id,
+            message=request.message,
+            allow_network=request.allow_network,
+            client_message_id=request.client_message_id,
+            idempotency_key=request.idempotency_key,
+            reasoning_effort=request.reasoning_effort,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if request.response_mode != "stream":
+        return ApiResponse(message="Agent 运行已创建", data=result)
+
+    run_id = str(result["run_id"])
+
+    async def event_stream():
+        queue = await agent_run_service.subscribe(run_id)
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield _sse(event)
+        finally:
+            await agent_run_service.unsubscribe(run_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@router.get("/conversations/{conversation_id}/assistant-messages")
+def list_host_assistant_messages(
+    conversation_id: str,
+    limit: int = Query(default=20, ge=1, le=200),
+    include_subagents: bool = True,
+    run_status: str | None = Query(default=None),
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    statuses = {item.strip() for item in (run_status or "").split(",") if item.strip()} or None
+    try:
+        result = host_control_service.assistant_messages(
+            platform=platform,
+            conversation_id=conversation_id,
+            limit=limit,
+            include_subagents=include_subagents,
+            run_statuses=statuses,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="会话不存在") from exc
+    return ApiResponse(message="最近 AI 回复", data=result)
+
+
+@router.get("/runs/{run_id}")
+def get_host_run(
+    run_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = host_control_service.get_run(platform=platform, run_id=run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="运行不存在") from exc
+    return ApiResponse(message="运行详情", data=result)
+
+
+@router.get("/runs/{run_id}/events")
+def list_host_run_events(
+    run_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=2000),
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        items = host_control_service.list_run_events(
+            platform=platform,
+            run_id=run_id,
+            after_seq=after_seq,
+            limit=limit,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="运行不存在") from exc
+    return ApiResponse(message="运行事件", data={"items": items, "next_cursor": items[-1]["seq"] if items else None})
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_host_run(
+    run_id: str,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    try:
+        result = await host_control_service.cancel_run(platform=platform, run_id=run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="运行不存在") from exc
+    return ApiResponse(message="运行取消请求已提交", data=result)
 
 
 @router.get("/sessions/{session_id}/tools")

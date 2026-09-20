@@ -270,6 +270,11 @@ class ConversationSummary(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_message_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     message_count: int = 0
+    visibility: Literal["normal", "hidden"] = "normal"
+    archived_at: datetime | None = None
+    pinned_at: datetime | None = None
+    deleted_at: datetime | None = None
+    revision: int = 0
 
 
 PlatformBaselineBulkImportResult.model_rebuild()

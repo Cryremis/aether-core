@@ -23,6 +23,7 @@ RUNTIME_META_KEYS = {
     "compression_meta",
     "visible_in_transcript",
     "ephemeral",
+    "run_id",
 }
 
 
@@ -43,8 +44,11 @@ class ContextMessageAdapter:
         tool_calls: list[dict[str, Any]] | None = None,
         blocks: list[dict[str, Any]] | None = None,
         turn_index: int,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         message: dict[str, Any] = {"role": "assistant"}
+        if run_id:
+            message["run_id"] = run_id
         if content:
             message["content"] = content
         if tool_calls:

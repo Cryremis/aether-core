@@ -34,6 +34,15 @@ from app.services.session_runtime_service import RuntimeBusyError, RuntimeStartE
 
 ToolHandler = Callable[[AgentSession, dict[str, Any]], Awaitable[dict[str, Any]]]
 
+SUBAGENT_TOOL_NAMES = {
+    "subagent_create",
+    "subagent_send_message",
+    "subagent_wait",
+    "subagent_list",
+    "subagent_cancel",
+    "subagent_get_result",
+}
+
 
 @dataclass(frozen=True)
 class ToolCatalogSnapshot:
@@ -249,6 +258,77 @@ class ToolService:
             {"properties": {"skill_name": {"type": "string"}}, "additionalProperties": False},
             self._handle_invoke_skill,
             required=["skill_name"],
+        )
+
+        self._registry.register(
+            "subagent_create",
+            "创建一个只执行一层任务的子 Agent。子 Agent 不再拥有 subagent 工具，用户可以只读查看它的状态和最终回复。",
+            {
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "task": {"type": "string", "minLength": 1},
+                    "instructions": {"type": "string"},
+                    "allowed_tools": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["name", "task"],
+                "additionalProperties": False,
+            },
+            self._handle_subagent_tool,
+            required=["name", "task"],
+        )
+        self._registry.register(
+            "subagent_send_message",
+            "向已完成的子 Agent 发送追加消息，进行下一轮沟通。",
+            {
+                "properties": {
+                    "subagent_run_id": {"type": "string"},
+                    "message": {"type": "string", "minLength": 1},
+                },
+                "required": ["subagent_run_id", "message"],
+                "additionalProperties": False,
+            },
+            self._handle_subagent_tool,
+            required=["subagent_run_id", "message"],
+        )
+        self._registry.register(
+            "subagent_wait",
+            "等待一个或全部子 Agent 完成，并返回它们的最终结果。",
+            {
+                "properties": {
+                    "subagent_run_id": {"type": "string"},
+                    "timeout_seconds": {"type": "integer", "minimum": 1},
+                },
+                "additionalProperties": False,
+            },
+            self._handle_subagent_tool,
+        )
+        self._registry.register(
+            "subagent_list",
+            "列出当前主 Agent 会话下的子 Agent 与运行状态。",
+            {"properties": {}, "additionalProperties": False},
+            self._handle_subagent_tool,
+        )
+        self._registry.register(
+            "subagent_cancel",
+            "取消一个子 Agent。",
+            {
+                "properties": {"subagent_run_id": {"type": "string"}},
+                "required": ["subagent_run_id"],
+                "additionalProperties": False,
+            },
+            self._handle_subagent_tool,
+            required=["subagent_run_id"],
+        )
+        self._registry.register(
+            "subagent_get_result",
+            "读取一个子 Agent 的当前结果或错误；通常优先使用 subagent_wait 等待主动回传。",
+            {
+                "properties": {"subagent_run_id": {"type": "string"}},
+                "required": ["subagent_run_id"],
+                "additionalProperties": False,
+            },
+            self._handle_subagent_tool,
+            required=["subagent_run_id"],
         )
 
         self._registry.register(
@@ -642,7 +722,16 @@ class ToolService:
                 descriptor.get("input_schema") or {"type": "object", "properties": {}},
             ))
 
-        return tools
+        allowed_tools = set(session.allowed_tools) if session.allowed_tools is not None else None
+
+        def permitted(schema: dict[str, Any]) -> bool:
+            name = str(schema.get("function", {}).get("name") or "")
+            if not session.subagent_tools_enabled and name in SUBAGENT_TOOL_NAMES:
+                return False
+            return allowed_tools is None or name in allowed_tools
+
+        return [schema for schema in tools if permitted(schema)]
+
 
     def create_catalog_snapshot(self, session: AgentSession) -> ToolCatalogSnapshot:
         """Capture one coherent tool catalog for a complete model round."""
@@ -697,6 +786,13 @@ class ToolService:
         # 检查注册表中的内置工具
         handler = self._registry.get_handler(tool_name)
         if handler:
+            if tool_name in SUBAGENT_TOOL_NAMES:
+                return await self._handle_subagent_tool(
+                    session,
+                    arguments,
+                    tool_name=tool_name,
+                    run_id=run_id,
+                )
             if tool_name == "sandbox_shell":
                 return await self._handle_sandbox_shell(
                     session,
@@ -744,6 +840,23 @@ class ToolService:
             return await self._invoke_host_tool(session, descriptor, arguments)
 
         raise RuntimeError(f"未知工具: {tool_name}")
+
+    async def _handle_subagent_tool(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+        *,
+        tool_name: str,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        from app.services.subagent_service import subagent_service
+
+        return await subagent_service.execute_tool(
+            session,
+            arguments,
+            parent_run_id=run_id,
+            tool_name=tool_name,
+        )
 
     async def _invoke_host_tool(
         self,

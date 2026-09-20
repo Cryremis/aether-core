@@ -82,12 +82,14 @@ class AgentEngine:
         blocks: list[dict[str, Any]],
         tool_calls: list[dict[str, Any]] | None = None,
         visible_in_transcript: bool = True,
+        run_id: str | None = None,
     ) -> None:
         message = context_message_adapter.make_assistant_message(
             content=content if content else None,
             tool_calls=tool_calls,
             blocks=blocks if blocks and visible_in_transcript else None,
             turn_index=turn_index,
+            run_id=run_id,
         )
         if not visible_in_transcript:
             message["visible_in_transcript"] = False
@@ -428,6 +430,7 @@ class AgentEngine:
                         turn_index=request_turn_index,
                         content=partial_text,
                         blocks=persisted_assistant_blocks,
+                        run_id=run_id,
                     )
                 async for event in self._emit_aborted(
                     session,
@@ -548,6 +551,7 @@ class AgentEngine:
                                 turn_index=request_turn_index,
                                 content=partial_text,
                                 blocks=persisted_assistant_blocks,
+                                run_id=run_id,
                             )
                         async for event in self._emit_aborted(
                             session,
@@ -771,6 +775,7 @@ class AgentEngine:
                     blocks=persisted_assistant_blocks,
                     tool_calls=assistant_message["tool_calls"],
                     visible_in_transcript=False,
+                    run_id=run_id,
                 )
 
                 for _, tool_call in sorted(tool_calls.items()):
@@ -843,6 +848,7 @@ class AgentEngine:
                                     turn_index=request_turn_index,
                                     content=session.get_partial_content(run_id).strip() or None,
                                     blocks=persisted_assistant_blocks,
+                                    run_id=run_id,
                                 )
                                 async for event in self._emit_aborted(
                                     session,
@@ -1011,6 +1017,7 @@ class AgentEngine:
                             turn_index=request_turn_index,
                             content=session.get_partial_content(run_id).strip() or None,
                             blocks=persisted_assistant_blocks,
+                            run_id=run_id,
                         )
                         yield make_event(
                             session,
@@ -1033,6 +1040,7 @@ class AgentEngine:
                             turn_index=request_turn_index,
                             content=session.get_partial_content(run_id).strip() or None,
                             blocks=persisted_assistant_blocks,
+                            run_id=run_id,
                         )
                         async for event in self._emit_aborted(
                             session,
@@ -1072,6 +1080,7 @@ class AgentEngine:
                     turn_index=request_turn_index,
                     content=None,
                     blocks=persisted_assistant_blocks,
+                    run_id=run_id,
                 )
                 store_service.touch_conversation(
                     session.session_id,
@@ -1103,6 +1112,7 @@ class AgentEngine:
                     turn_index=request_turn_index,
                     content=final_answer,
                     blocks=persisted_assistant_blocks,
+                    run_id=run_id,
                 )
                 store_service.touch_conversation(
                     session.session_id,

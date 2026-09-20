@@ -68,8 +68,20 @@ class AgentEvent(BaseModel):
         "completed",
         "error",
         "aborted",
+        "run_queued",
+        "run_status_changed",
+        "subagent_created",
+        "subagent_started",
+        "subagent_status_changed",
+        "subagent_result_ready",
+        "subagent_completed",
+        "subagent_failed",
+        "handoff_started",
+        "handoff_completed",
     ]
     session_id: str
+    run_id: str | None = None
+    seq: int | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: dict[str, Any] = Field(default_factory=dict)
 

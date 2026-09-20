@@ -22,6 +22,7 @@ import {
   streamRunEvents,
   type ActiveRunSummary,
   type CommittedChatMessage,
+  type SubagentRunSummary,
   type WorkboardState,
   updateSessionWorkboard,
   updateUserLlmConfig,
@@ -34,6 +35,7 @@ import { ElicitationPanel } from "../components/ElicitationPanel";
 import { WorkboardDock } from "../components/WorkboardDock";
 import { ChatTimeline } from "../components/workbench/ChatTimeline";
 import { Composer } from "../components/workbench/Composer";
+import { SubagentPanel } from "../components/workbench/SubagentPanel";
 import { ContextStatusPill } from "../components/workbench/ContextStatusPill";
 import { LlmConfigDialog } from "../components/workbench/LlmConfigDialog";
 import { PersonalSettingsDialog } from "../components/workbench/PersonalSettingsDialog";
@@ -326,6 +328,7 @@ export function WorkbenchPage({
   const [reasoningEffortOptions, setReasoningEffortOptions] = useState<string[]>(["low", "medium", "high", "max"]);
   const [workboard, setWorkboard] = useState<WorkboardState | null>(null);
   const [workboardVisibilityBySession, setWorkboardVisibilityBySession] = useState<Record<string, boolean>>({});
+  const [subagents, setSubagents] = useState<SubagentRunSummary[]>([]);
   const [elicitation, setElicitation] = useState<ElicitationState | null>(null);
   const [elicitationBusy, setElicitationBusy] = useState(false);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
@@ -801,6 +804,7 @@ window.addEventListener("resize", handleResize);
         last_api_usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       };
       active_run?: ActiveRunSummary | null;
+      subagents?: SubagentRunSummary[];
     };
     const transcriptMessages = fromTranscriptMessages(summary.transcript ?? []);
     setTranscriptMessages(transcriptMessages);
@@ -811,6 +815,7 @@ window.addEventListener("resize", handleResize);
     setFiles(summary.files ?? []);
     setWorkboard(summary.workboard ?? null);
     setElicitation(summary.elicitation ?? null);
+    setSubagents(summary.subagents ?? []);
     if (summary.context_state && summary.context_state.model_id) {
       const ctx = summary.context_state;
       const estimatedTokens = ctx.last_known_token_estimate || ctx.last_api_usage?.prompt_tokens || 0;
@@ -868,6 +873,7 @@ window.addEventListener("resize", handleResize);
       setFiles([]);
       setWorkboard(null);
       setElicitation(null);
+      setSubagents([]);
       setLoading(false);
       return;
     }
@@ -928,6 +934,7 @@ window.addEventListener("resize", handleResize);
         setFiles([]);
         setWorkboard(null);
         setElicitation(null);
+        setSubagents([]);
       })
       .finally(() => setLoading(false));
   }, [sessionId, isNewSession, localSessionId]);
@@ -1091,6 +1098,29 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           run_id: String(payload.run_id ?? liveRunRef.current?.runId ?? ""),
           assistant_id: assistantId,
           active: true,
+        });
+        return;
+      }
+
+      if (eventType.startsWith("subagent_")) {
+        const subagentRunId = String(payload.subagent_run_id ?? "");
+        if (!subagentRunId) return;
+        setSubagents((current) => {
+          const existing = current.find((item) => item.subagent_run_id === subagentRunId);
+          const next: SubagentRunSummary = {
+            subagent_run_id: subagentRunId,
+            run_id: String(payload.run_id ?? existing?.run_id ?? ""),
+            name: String(payload.name ?? existing?.name ?? "Subagent"),
+            task: String(payload.task ?? existing?.task ?? ""),
+            status: String(payload.status ?? (eventType === "subagent_created" ? "running" : existing?.status ?? "running")),
+            result: typeof payload.result === "string" ? payload.result : existing?.result ?? null,
+            error: typeof payload.error === "string" ? payload.error : existing?.error ?? null,
+            created_at: existing?.created_at ?? null,
+            finished_at: existing?.finished_at ?? null,
+            user_can_message: false,
+          };
+          const others = current.filter((item) => item.subagent_run_id !== subagentRunId);
+          return [...others, next].sort((left, right) => left.name.localeCompare(right.name));
         });
         return;
       }
@@ -2274,6 +2304,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         </div>
 
         <div className="runtime-panels">
+          <SubagentPanel subagents={subagents} />
           <WorkboardDock
             workboard={displayedWorkboard}
             visible={workboardVisible}

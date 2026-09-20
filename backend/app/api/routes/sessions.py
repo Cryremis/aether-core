@@ -34,7 +34,7 @@ def _ensure_embed_baseline(auth: AuthContext, conversation: dict, session) -> No
 
 def _ensure_session_access(session_id: str, auth: AuthContext):
     conversation = store_service.get_conversation_by_session(session_id)
-    if conversation is None:
+    if conversation is None or conversation.get("deleted_at") is not None:
         raise HTTPException(status_code=404, detail="会话不存在")
     if auth.kind == "user":
         if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
@@ -149,6 +149,11 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         workboard=runtime_state_service.get_workboard(session),
         elicitation=runtime_state_service.get_elicitation(session),
         active_run=agent_run_service.get_active_run_view(session),
+        visibility=str(conversation.get("visibility") or "normal"),
+        archived_at=conversation.get("archived_at"),
+        pinned_at=conversation.get("pinned_at"),
+        revision=int(conversation.get("revision") or 0),
+        subagents=store_service.list_subagent_runs_for_session(session.session_id),
     )
     return ApiResponse(message="会话摘要", data=summary.model_dump(mode="json"))
 

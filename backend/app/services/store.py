@@ -194,7 +194,13 @@ class StoreService:
                     updated_at TEXT NOT NULL,
                     last_message_at TEXT NOT NULL,
                     message_count INTEGER NOT NULL DEFAULT 0,
-                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    visibility TEXT NOT NULL DEFAULT 'normal',
+                    archived_at TEXT,
+                    pinned_at TEXT,
+                    deleted_at TEXT,
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    last_run_id TEXT
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_conversations_owner
@@ -271,8 +277,82 @@ class StoreService:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    run_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    conversation_id TEXT,
+                    parent_run_id TEXT,
+                    root_run_id TEXT,
+                    agent_kind TEXT NOT NULL DEFAULT 'main',
+                    status TEXT NOT NULL,
+                    request_json TEXT NOT NULL DEFAULT '{}',
+                    result_json TEXT,
+                    error_json TEXT,
+                    event_cursor INTEGER NOT NULL DEFAULT 0,
+                    idempotency_key TEXT,
+                    trace_id TEXT,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_runs_session
+                ON agent_runs(session_id, created_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_agent_runs_parent
+                ON agent_runs(parent_run_id, created_at DESC);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_active_session
+                ON agent_runs(session_id)
+                WHERE status IN ('queued', 'running', 'waiting_input');
+
+                CREATE TABLE IF NOT EXISTS run_events (
+                    run_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    visibility TEXT NOT NULL DEFAULT 'visible',
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (run_id, seq),
+                    FOREIGN KEY (run_id) REFERENCES agent_runs(run_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS subagent_runs (
+                    child_run_id TEXT PRIMARY KEY,
+                    parent_run_id TEXT NOT NULL,
+                    parent_session_id TEXT NOT NULL,
+                    child_session_id TEXT NOT NULL UNIQUE,
+                    latest_run_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    task TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    result_text TEXT,
+                    error_text TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    finished_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_subagent_runs_parent_session
+                ON subagent_runs(parent_session_id, created_at DESC);
                 """
             )
+            self._ensure_column(conn, "conversations", "visibility", "TEXT NOT NULL DEFAULT 'normal'")
+            self._ensure_column(conn, "conversations", "archived_at", "TEXT")
+            self._ensure_column(conn, "conversations", "pinned_at", "TEXT")
+            self._ensure_column(conn, "conversations", "deleted_at", "TEXT")
+            self._ensure_column(conn, "conversations", "revision", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "conversations", "last_run_id", "TEXT")
+            self._ensure_column(conn, "agent_runs", "idempotency_key", "TEXT")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_conversation_idempotency
+                ON agent_runs(conversation_id, idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+                """
+            )
+            self._ensure_column(conn, "subagent_runs", "latest_run_id", "TEXT")
             self._ensure_column(conn, "users", "last_login_at", "TEXT")
             self._ensure_column(conn, "platform_admins", "assigned_by", "INTEGER")
             self._ensure_column(conn, "platform_admins", "is_primary", "INTEGER NOT NULL DEFAULT 0")
@@ -1133,6 +1213,7 @@ class StoreService:
         external_user_id: str | None = None,
         external_org_id: str | None = None,
         conversation_key: str | None = None,
+        visibility: str = "normal",
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         conversation_id = f"conv_{uuid.uuid4().hex}"
@@ -1143,8 +1224,8 @@ class StoreService:
                 INSERT INTO conversations(
                     conversation_id, session_id, platform_id, owner_user_id, external_user_id,
                     external_org_id, conversation_key, title, host_name, created_at,
-                    updated_at, last_message_at, message_count, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    updated_at, last_message_at, message_count, metadata_json, visibility
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(session_id) DO NOTHING
                 """,
                 (
@@ -1161,6 +1242,7 @@ class StoreService:
                     now,
                     now,
                     json.dumps(metadata or {}, ensure_ascii=False),
+                    visibility if visibility in {"normal", "hidden"} else "normal",
                 ),
             )
             # 命中 session_id 冲突时 INSERT 被跳过,按 session_id 读回已有行,保证返回一致
@@ -1189,7 +1271,12 @@ class StoreService:
     ) -> dict[str, Any] | None:
         if conversation_id:
             row = self.get_conversation(conversation_id)
-            if row and row.get("platform_id") == platform_id and row.get("external_user_id") == external_user_id:
+            if (
+                row
+                and row.get("platform_id") == platform_id
+                and row.get("external_user_id") == external_user_id
+                and row.get("deleted_at") is None
+            ):
                 return row
             return None
         with self._connect() as conn:
@@ -1197,7 +1284,7 @@ class StoreService:
                 row = conn.execute(
                     """
                     SELECT * FROM conversations
-                    WHERE platform_id = ? AND external_user_id = ? AND conversation_key = ?
+                    WHERE platform_id = ? AND external_user_id = ? AND conversation_key = ? AND deleted_at IS NULL
                     ORDER BY updated_at DESC LIMIT 1
                     """,
                     (platform_id, external_user_id, conversation_key),
@@ -1206,34 +1293,61 @@ class StoreService:
                 row = conn.execute(
                     """
                     SELECT * FROM conversations
-                    WHERE platform_id = ? AND external_user_id = ?
+                    WHERE platform_id = ? AND external_user_id = ? AND deleted_at IS NULL
                     ORDER BY updated_at DESC LIMIT 1
                     """,
                     (platform_id, external_user_id),
                 ).fetchone()
         return dict(row) if row else None
 
-    def list_conversations_for_user(self, user_id: int) -> list[dict[str, Any]]:
+    def list_conversations_for_user(
+        self,
+        user_id: int,
+        *,
+        include_hidden: bool = False,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM conversations WHERE owner_user_id = ? ORDER BY updated_at DESC",
-                (user_id,),
-            ).fetchall()
+            clauses = ["owner_user_id = ?"]
+            parameters: list[Any] = [user_id]
+            self._apply_conversation_visibility_filters(
+                clauses,
+                parameters,
+                include_hidden=include_hidden,
+                include_archived=include_archived,
+                include_deleted=include_deleted,
+            )
+            rows = self._execute_conversation_page(conn, clauses, parameters, limit=limit, offset=offset)
         return [dict(row) for row in rows]
 
     def list_conversations_for_admin(self, user_id: int) -> list[dict[str, Any]]:
         return self.list_conversations_for_user(user_id)
 
-    def list_conversations_for_host_user(self, *, platform_id: int, external_user_id: str) -> list[dict[str, Any]]:
+    def list_conversations_for_host_user(
+        self,
+        *,
+        platform_id: int,
+        external_user_id: str,
+        include_hidden: bool = False,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM conversations
-                WHERE platform_id = ? AND external_user_id = ?
-                ORDER BY updated_at DESC
-                """,
-                (platform_id, external_user_id),
-            ).fetchall()
+            clauses = ["platform_id = ?", "external_user_id = ?"]
+            parameters: list[Any] = [platform_id, external_user_id]
+            self._apply_conversation_visibility_filters(
+                clauses,
+                parameters,
+                include_hidden=include_hidden,
+                include_archived=include_archived,
+                include_deleted=include_deleted,
+            )
+            rows = self._execute_conversation_page(conn, clauses, parameters, limit=limit, offset=offset)
         return [dict(row) for row in rows]
 
     def list_all_conversations(self) -> list[dict[str, Any]]:
@@ -1290,7 +1404,342 @@ class StoreService:
                 "UPDATE conversations SET title = ?, updated_at = ? WHERE session_id = ?",
                 (title, now, session_id),
             )
+        return result.rowcount > 0
+
+    @staticmethod
+    def _apply_conversation_visibility_filters(
+        clauses: list[str],
+        parameters: list[Any],
+        *,
+        include_hidden: bool,
+        include_archived: bool,
+        include_deleted: bool,
+    ) -> None:
+        if not include_deleted:
+            clauses.append("deleted_at IS NULL")
+        if not include_hidden:
+            clauses.append("visibility = 'normal'")
+        if not include_archived:
+            clauses.append("archived_at IS NULL")
+
+    @staticmethod
+    def _execute_conversation_page(
+        conn: sqlite3.Connection,
+        clauses: list[str],
+        parameters: list[Any],
+        *,
+        limit: int | None,
+        offset: int,
+    ) -> list[sqlite3.Row]:
+        sql = f"""
+            SELECT * FROM conversations
+            WHERE {' AND '.join(clauses)}
+            ORDER BY COALESCE(pinned_at, '') DESC, updated_at DESC, created_at DESC
+        """
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            parameters.extend((max(1, int(limit)), max(0, int(offset))))
+        return list(conn.execute(sql, tuple(parameters)).fetchall())
+
+    def update_conversation(
+        self,
+        conversation_id: str,
+        *,
+        expected_revision: int | None = None,
+        title: str | None = None,
+        visibility: str | None = None,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        current = self.get_conversation(conversation_id)
+        if current is None:
+            return None
+        if current.get("deleted_at") is not None:
+            return None
+        if expected_revision is not None and int(current.get("revision") or 0) != int(expected_revision):
+            raise ValueError("conversation revision conflict")
+
+        updates: dict[str, Any] = {"updated_at": utcnow_iso(), "revision": int(current.get("revision") or 0) + 1}
+        if title is not None:
+            updates["title"] = title.strip() or str(current.get("title") or "新对话")
+        if visibility is not None:
+            if visibility not in {"normal", "hidden"}:
+                raise ValueError("visibility must be normal or hidden")
+            updates["visibility"] = visibility
+        if pinned is not None:
+            updates["pinned_at"] = utcnow_iso() if pinned else None
+        if archived is not None:
+            updates["archived_at"] = utcnow_iso() if archived else None
+        if metadata is not None:
+            merged = json.loads(current.get("metadata_json") or "{}")
+            if not isinstance(merged, dict):
+                merged = {}
+            merged.update(metadata)
+            updates["metadata_json"] = json.dumps(merged, ensure_ascii=False)
+
+        set_sql = ", ".join(f"{key} = ?" for key in updates)
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE conversations SET {set_sql} WHERE conversation_id = ?",
+                (*updates.values(), conversation_id),
+            )
+        return self.get_conversation(conversation_id)
+
+    def soft_delete_conversation(self, conversation_id: str) -> bool:
+        with self._connect() as conn:
+            result = conn.execute(
+                """
+                UPDATE conversations
+                SET deleted_at = ?, revision = revision + 1
+                WHERE conversation_id = ? AND deleted_at IS NULL
+                """,
+                (utcnow_iso(), conversation_id),
+            )
             return result.rowcount > 0
+
+    def set_conversation_last_run(self, conversation_id: str, run_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE conversations SET last_run_id = ? WHERE conversation_id = ?",
+                (run_id, conversation_id),
+            )
+
+    def create_agent_run(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        conversation_id: str | None = None,
+        parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        agent_kind: str = "main",
+        status: str = "running",
+        request: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        trace_id: str | None = None,
+    ) -> dict[str, Any]:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_runs(
+                    run_id, session_id, conversation_id, parent_run_id, root_run_id,
+                    agent_kind, status, request_json, idempotency_key, trace_id, created_at, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    session_id,
+                    conversation_id,
+                    parent_run_id,
+                    root_run_id or parent_run_id or run_id,
+                    agent_kind,
+                    status,
+                    json.dumps(request or {}, ensure_ascii=False),
+                    idempotency_key,
+                    trace_id,
+                    now,
+                    now if status in {"running", "waiting_input"} else None,
+                ),
+            )
+        return self.get_agent_run(run_id) or {}
+
+    def find_agent_run_by_idempotency(self, conversation_id: str, idempotency_key: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE conversation_id = ? AND idempotency_key = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (conversation_id, idempotency_key),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_agent_run(self, run_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_agent_runs(self, run_ids: list[str]) -> list[dict[str, Any]]:
+        normalized = [str(item) for item in dict.fromkeys(run_ids) if item]
+        if not normalized:
+            return []
+        placeholders = ",".join("?" for _ in normalized)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM agent_runs WHERE run_id IN ({placeholders})",
+                tuple(normalized),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def append_agent_run_event(
+        self,
+        *,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        visibility: str = "visible",
+        status: str | None = None,
+        result: Any | None = None,
+        error: Any | None = None,
+    ) -> int:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT event_cursor FROM agent_runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("run does not exist")
+            seq = int(row["event_cursor"]) + 1
+            conn.execute(
+                """
+                INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    seq,
+                    event_type,
+                    json.dumps(payload, ensure_ascii=False),
+                    visibility,
+                    now,
+                ),
+            )
+            updates: dict[str, Any] = {"event_cursor": seq}
+            if status is not None:
+                updates["status"] = status
+            if result is not None:
+                updates["result_json"] = json.dumps(result, ensure_ascii=False)
+            if error is not None:
+                updates["error_json"] = json.dumps(error, ensure_ascii=False)
+            if status in {"completed", "failed", "cancelled", "timed_out"}:
+                updates["finished_at"] = now
+            set_sql = ", ".join(f"{key} = ?" for key in updates)
+            conn.execute(
+                f"UPDATE agent_runs SET {set_sql} WHERE run_id = ?",
+                (*updates.values(), run_id),
+            )
+        return seq
+
+    def list_agent_run_events(
+        self,
+        run_id: str,
+        *,
+        after_seq: int = 0,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM run_events
+                WHERE run_id = ? AND seq > ?
+                ORDER BY seq ASC LIMIT ?
+                """,
+                (run_id, after_seq, max(1, int(limit))),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item.pop("payload_json") or "{}")
+            result.append(item)
+        return result
+
+    def create_subagent_run(
+        self,
+        *,
+        child_run_id: str,
+        parent_run_id: str,
+        parent_session_id: str,
+        child_session_id: str,
+        name: str,
+        task: str,
+    ) -> dict[str, Any]:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO subagent_runs(
+                    child_run_id, parent_run_id, parent_session_id, child_session_id,
+                    latest_run_id, name, task, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                """,
+                (
+                    child_run_id,
+                    parent_run_id,
+                    parent_session_id,
+                    child_session_id,
+                    child_run_id,
+                    name,
+                    task,
+                    now,
+                    now,
+                ),
+            )
+        return self.get_subagent_run(child_run_id) or {}
+
+    def get_subagent_run(self, child_run_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM subagent_runs WHERE child_run_id = ?",
+                (child_run_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_subagent_run(
+        self,
+        child_run_id: str,
+        *,
+        status: str,
+        result_text: str | None = None,
+        error_text: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = utcnow_iso()
+        terminal = status in {"completed", "failed", "cancelled", "timed_out"}
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE subagent_runs
+                SET status = ?, result_text = COALESCE(?, result_text), error_text = COALESCE(?, error_text),
+                    updated_at = ?, finished_at = CASE WHEN ? THEN ? ELSE finished_at END
+                WHERE child_run_id = ?
+                """,
+                (
+                    status,
+                    result_text,
+                    error_text,
+                    now,
+                    1 if terminal else 0,
+                    now,
+                    child_run_id,
+                ),
+            )
+        return self.get_subagent_run(child_run_id)
+
+    def set_subagent_latest_run(self, child_run_id: str, latest_run_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE subagent_runs
+                SET latest_run_id = ?, status = 'running', updated_at = ?
+                WHERE child_run_id = ?
+                """,
+                (latest_run_id, utcnow_iso(), child_run_id),
+            )
+
+    def list_subagent_runs_for_session(self, session_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM subagent_runs
+                WHERE parent_session_id = ?
+                ORDER BY created_at DESC
+                """,
+                (session_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def backfill_conversation_metadata(self, session_id: str, updates: dict[str, Any]) -> bool:
         """补全会话 metadata 中缺失的字段,已有非空值不会被覆盖。

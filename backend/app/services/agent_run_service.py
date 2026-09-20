@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import traceback
 import uuid
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -12,6 +13,7 @@ from app.runtime.event_protocol import make_event
 from app.schemas.agent import AgentEvent
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
+from app.services.store import store_service
 from app.services.tool_execution_service import tool_execution_service
 from app.services.transcript_service import transcript_service
 
@@ -48,6 +50,9 @@ class AgentRunService:
         replace_last_user_message: bool = False,
         client_message_id: str | None = None,
         reasoning_effort: str | None = None,
+        parent_run_id: str | None = None,
+        agent_kind: str = "main",
+        idempotency_key: str | None = None,
     ) -> str:
         async with self._lock:
             existing_run_id = self._session_runs.get(session.session_id)
@@ -56,6 +61,23 @@ class AgentRunService:
 
             run_id = f"run_{uuid.uuid4().hex}"
             started_at = _utcnow_iso()
+            store_service.create_agent_run(
+                run_id=run_id,
+                session_id=session.session_id,
+                conversation_id=session.conversation_id,
+                parent_run_id=parent_run_id,
+                agent_kind=agent_kind,
+                status="running",
+                request={
+                    "message": message,
+                    "client_message_id": client_message_id,
+                    "reasoning_effort": reasoning_effort,
+                    "idempotency_key": idempotency_key,
+                },
+                idempotency_key=idempotency_key,
+            )
+            if session.conversation_id:
+                store_service.set_conversation_last_run(session.conversation_id, run_id)
             session.active_run_view = {
                 "run_id": run_id,
                 "session_id": session.session_id,
@@ -91,14 +113,52 @@ class AgentRunService:
     async def subscribe(self, run_id: str, *, replay_history: bool = True) -> asyncio.Queue[AgentEvent | None]:
         async with self._lock:
             state = self._runs.get(run_id)
-            if state is None:
-                raise RuntimeError("目标运行不存在，可能已经结束。")
-            queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
-            state.subscribers.add(queue)
-            history = list(state.history) if replay_history else []
-        for item in history:
-            await queue.put(item)
+            if state is not None:
+                queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+                state.subscribers.add(queue)
+                history = list(state.history) if replay_history else []
+                for item in history:
+                    await queue.put(item)
+                return queue
+
+        run = store_service.get_agent_run(run_id)
+        if run is None:
+            raise RuntimeError("目标运行不存在。")
+        queue = asyncio.Queue()
+        if replay_history:
+            for row in store_service.list_agent_run_events(run_id, limit=100_000):
+                await queue.put(
+                    AgentEvent(
+                        type=str(row["type"]),
+                        session_id=str(run["session_id"]),
+                        run_id=run_id,
+                        seq=int(row["seq"]),
+                        timestamp=str(row["created_at"]),
+                        payload=dict(row.get("payload") or {}),
+                    )
+                )
+        await queue.put(None)
         return queue
+
+    async def publish_event(self, run_id: str, event: AgentEvent) -> None:
+        await self._publish(run_id, event)
+
+    async def wait_for_run(self, run_id: str) -> dict[str, Any]:
+        state = self._runs.get(run_id)
+        if state is not None and state.task is not None and not state.task.done():
+            await state.task
+        return self.get_run_view(run_id) or {}
+
+    def get_run_view(self, run_id: str) -> dict[str, Any] | None:
+        run = store_service.get_agent_run(run_id)
+        if run is None:
+            return None
+        run["request"] = json.loads(run.pop("request_json") or "{}")
+        run["result"] = json.loads(run["result_json"]) if run.get("result_json") else None
+        run.pop("result_json", None)
+        run["error"] = json.loads(run["error_json"]) if run.get("error_json") else None
+        run.pop("error_json", None)
+        return run
 
     async def unsubscribe(self, run_id: str, queue: asyncio.Queue[AgentEvent | None]) -> None:
         async with self._lock:
@@ -169,10 +229,34 @@ class AgentRunService:
             session.finish_run(run_id)
             session.active_run_view = None
             session_service.persist(session)
+            final_run = store_service.get_agent_run(run_id)
+            if str((final_run or {}).get("status")) in {"failed", "cancelled", "timed_out"}:
+                from app.services.subagent_service import subagent_service
+
+                await subagent_service.cancel_for_parent_run(run_id, session.session_id)
             await self._close_run(run_id, session.session_id)
 
     async def _publish(self, run_id: str, event: AgentEvent) -> None:
         subscribers: list[asyncio.Queue[AgentEvent | None]] = []
+        event.run_id = run_id
+        status = self._status_for_event(event)
+        result = event.payload.get("result") if event.type == "result" else None
+        error = (
+            {
+                "message": event.payload.get("message"),
+                "traceback": event.payload.get("traceback"),
+            }
+            if event.type == "error"
+            else None
+        )
+        event.seq = store_service.append_agent_run_event(
+            run_id=run_id,
+            event_type=event.type,
+            payload=event.payload,
+            status=status,
+            result=result,
+            error=error,
+        )
         async with self._lock:
             state = self._runs.get(run_id)
             if state is None:
@@ -183,6 +267,23 @@ class AgentRunService:
                 state.completed = True
         for queue in subscribers:
             await queue.put(event)
+
+    @staticmethod
+    def _status_for_event(event: AgentEvent) -> str | None:
+        if event.type != "completed":
+            if event.type == "aborted":
+                return "cancelling"
+            return None
+        subtype = str(event.payload.get("subtype") or "")
+        if subtype == "success":
+            return "completed"
+        if subtype == "awaiting_user_input":
+            return "waiting_input"
+        if subtype == "aborted":
+            return "cancelled"
+        if subtype.startswith("error"):
+            return "failed"
+        return "completed"
 
     async def _close_run(self, run_id: str, session_id: str) -> None:
         async with self._lock:
@@ -217,6 +318,9 @@ class AgentRunService:
 
         active_view["updated_at"] = _utcnow_iso()
         active_view["status"] = "completed" if event.type == "completed" else "running"
+        if event.type == "result":
+            active_view["result"] = event.payload.get("result")
+            active_view["is_error"] = bool(event.payload.get("is_error"))
 
         payload = event.payload
         blocks = assistant.setdefault("blocks", [])

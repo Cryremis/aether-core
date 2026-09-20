@@ -71,6 +71,8 @@ class AgentSession:
     message_schema_version: int = CONTEXT_MESSAGE_SCHEMA_VERSION
     allow_network: bool = True
     disabled_capability_ids: list[str] = field(default_factory=list)
+    allowed_tools: list[str] | None = None
+    subagent_tools_enabled: bool = True
     created_at: float = field(default_factory=time.time)
     last_access: float = field(default_factory=time.time)
     workspace: SandboxWorkspace | None = None

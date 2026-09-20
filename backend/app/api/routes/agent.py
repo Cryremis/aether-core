@@ -19,6 +19,14 @@ from app.services.transcript_service import transcript_service
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
 
+def _sse(event: AgentEvent) -> str:
+    lines = [f"event: {event.type}"]
+    if event.seq is not None:
+        lines.append(f"id: {event.seq}")
+    lines.append(f"data: {event.model_dump_json()}")
+    return "\n".join(lines) + "\n\n"
+
+
 class AbortRequest:
     pass
 
@@ -30,7 +38,7 @@ class AbortResponse:
 
 def _ensure_session_access(session_id: str, auth: AuthContext):
     conversation = store_service.get_conversation_by_session(session_id)
-    if conversation is None:
+    if conversation is None or conversation.get("deleted_at") is not None:
         raise HTTPException(status_code=404, detail="会话不存在")
     if auth.kind == "user":
         if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
@@ -63,7 +71,7 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
         session_service.set_allow_network(session, request.allow_network)
 
     async def event_stream():
-        yield f"data: {AgentEvent(type='session_created', session_id=session.session_id).model_dump_json()}\n\n"
+        yield _sse(AgentEvent(type="session_created", session_id=session.session_id))
         try:
             if request.run_id:
                 run_id = request.run_id
@@ -80,14 +88,15 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
                     session_id=session.session_id,
                     payload={"run_id": run_id},
                 )
-                yield f"data: {started_event.model_dump_json()}\n\n"
+                await agent_run_service.publish_event(run_id, started_event)
+                yield _sse(started_event)
             queue = await agent_run_service.subscribe(run_id)
             try:
                 while True:
                     event = await queue.get()
                     if event is None:
                         break
-                    yield f"data: {event.model_dump_json()}\n\n"
+                    yield _sse(event)
             finally:
                 await agent_run_service.unsubscribe(run_id, queue)
         except Exception as exc:  # noqa: BLE001
@@ -96,7 +105,7 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
                 session_id=session.session_id,
                 payload={"message": str(exc), "traceback": traceback.format_exc()},
             )
-            yield f"data: {error_event.model_dump_json()}\n\n"
+            yield _sse(error_event)
 
     return StreamingResponse(
         event_stream(),
@@ -172,7 +181,7 @@ async def respond_to_elicitation(
         committed_message = None
 
     async def event_stream():
-        yield f"data: {AgentEvent(type='session_created', session_id=session.session_id).model_dump_json()}\n\n"
+        yield _sse(AgentEvent(type="session_created", session_id=session.session_id))
         if committed_message is not None:
             yield (
                 "data: "
@@ -214,14 +223,14 @@ async def respond_to_elicitation(
                 visible_user_message=False,
                 user_message_kind="elicitation_resume",
             ):
-                yield f"data: {event.model_dump_json()}\n\n"
+                    yield _sse(event)
         except Exception as exc:  # noqa: BLE001
             error_event = AgentEvent(
                 type="error",
                 session_id=session.session_id,
                 payload={"message": str(exc), "traceback": traceback.format_exc()},
             )
-            yield f"data: {error_event.model_dump_json()}\n\n"
+            yield _sse(error_event)
 
     return StreamingResponse(
         event_stream(),
@@ -318,7 +327,7 @@ async def stream_run_events(
     session = _ensure_session_access(session_id, auth)
 
     async def event_stream():
-        yield f"data: {AgentEvent(type='session_created', session_id=session.session_id).model_dump_json()}\n\n"
+        yield _sse(AgentEvent(type="session_created", session_id=session.session_id))
         try:
             queue = await agent_run_service.subscribe(run_id, replay_history=False)
             try:
@@ -326,7 +335,7 @@ async def stream_run_events(
                     event = await queue.get()
                     if event is None:
                         break
-                    yield f"data: {event.model_dump_json()}\n\n"
+                    yield _sse(event)
             finally:
                 await agent_run_service.unsubscribe(run_id, queue)
         except Exception as exc:  # noqa: BLE001
@@ -335,7 +344,7 @@ async def stream_run_events(
                 session_id=session.session_id,
                 payload={"message": str(exc), "traceback": traceback.format_exc()},
             )
-            yield f"data: {error_event.model_dump_json()}\n\n"
+            yield _sse(error_event)
 
     return StreamingResponse(
         event_stream(),

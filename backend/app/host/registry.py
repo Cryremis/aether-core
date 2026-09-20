@@ -44,6 +44,7 @@ class HostRegistry:
                 external_user_id=str(external_user_id),
                 external_org_id=None,
                 conversation_key=request.conversation_key,
+                visibility=request.visibility,
                 metadata={"external_user_name": external_user_name},
             )
             platform_baseline_service.materialize_to_session(str(platform["platform_key"]), session)

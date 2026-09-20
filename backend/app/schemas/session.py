@@ -28,6 +28,11 @@ class SessionSummary(BaseModel):
     workboard: WorkboardState = Field(default_factory=lambda: WorkboardState(session_id=""))
     elicitation: ElicitationState = Field(default_factory=lambda: ElicitationState(session_id=""))
     active_run: dict[str, Any] | None = None
+    visibility: str = "normal"
+    archived_at: datetime | None = None
+    pinned_at: datetime | None = None
+    revision: int = 0
+    subagents: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkboardUpdateRequest(BaseModel):

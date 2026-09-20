@@ -74,6 +74,7 @@ class HostBindRequest(BaseModel):
     session_id: str | None = None
     conversation_id: str | None = None
     conversation_key: str | None = None
+    visibility: Literal["normal", "hidden"] = "normal"
     context: HostContextDescriptor = Field(default_factory=HostContextDescriptor)
     tools: list[HostToolDescriptor] = Field(default_factory=list)
     skills: list[HostSkillDescriptor] = Field(default_factory=list)
@@ -86,6 +87,58 @@ class HostBindRequest(BaseModel):
         "replace_all_if_source_missing",
     ] = "replace_all"
     tool_refresh_policy: Literal["static_run", "round_boundary"] = "static_run"
+
+
+class HostConversationCreateRequest(BaseModel):
+    """宿主控制面创建会话请求。"""
+
+    external_user_id: str = Field(min_length=1, max_length=256)
+    external_user_name: str = Field(default="Host User", max_length=256)
+    external_org_id: str | None = Field(default=None, max_length=256)
+    conversation_key: str | None = Field(default=None, max_length=256)
+    idempotency_key: str | None = Field(default=None, max_length=256)
+    title: str = Field(default="新对话", max_length=200)
+    host_name: str = Field(default="Host Platform", max_length=200)
+    visibility: Literal["normal", "hidden"] = "normal"
+    context: HostContextDescriptor = Field(default_factory=HostContextDescriptor)
+    tools: list[HostToolDescriptor] = Field(default_factory=list, max_length=256)
+    skills: list[HostSkillDescriptor] = Field(default_factory=list)
+    system_prompts: list[HostSystemPromptDescriptor] = Field(default_factory=list)
+    apis: list[HostApiDescriptor] = Field(default_factory=list)
+
+
+class HostConversationPatchRequest(BaseModel):
+    """宿主控制面更新会话请求。"""
+
+    expected_revision: int | None = Field(default=None, ge=0)
+    title: str | None = Field(default=None, max_length=200)
+    visibility: Literal["normal", "hidden"] | None = None
+    pinned: bool | None = None
+    archived: bool | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class HostMessageRequest(BaseModel):
+    """宿主控制面发送消息请求。"""
+
+    message: str = Field(min_length=1)
+    allow_network: bool | None = None
+    client_message_id: str | None = Field(default=None, max_length=128)
+    idempotency_key: str | None = Field(default=None, max_length=256)
+    reasoning_effort: str | None = None
+    response_mode: Literal["stream", "poll"] = "poll"
+
+
+class HostAssistantMessage(BaseModel):
+    """带运行状态的 AI 回复投影。"""
+
+    message_id: str
+    run_id: str | None = None
+    agent_id: str | None = None
+    subagent_run_id: str | None = None
+    content: str
+    run_status: str | None = None
+    created_at: str
 
 
 class HostToolCatalogReplaceRequest(BaseModel):

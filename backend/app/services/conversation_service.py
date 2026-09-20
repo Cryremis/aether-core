@@ -16,7 +16,11 @@ class ConversationService:
         session: AgentSession
         if session_id:
             conversation = store_service.get_conversation_by_session(session_id)
-            if conversation is None or conversation.get("owner_user_id") != user.user_id:
+            if (
+                conversation is None
+                or conversation.get("deleted_at") is not None
+                or conversation.get("owner_user_id") != user.user_id
+            ):
                 raise PermissionError("目标会话不存在或不属于当前用户")
             session = session_service.get_or_create(session_id)
             session.conversation_id = conversation["conversation_id"]
@@ -123,6 +127,11 @@ class ConversationService:
             updated_at=row["updated_at"],
             last_message_at=row["last_message_at"],
             message_count=row["message_count"],
+            visibility=row.get("visibility") or "normal",
+            archived_at=row.get("archived_at"),
+            pinned_at=row.get("pinned_at"),
+            deleted_at=row.get("deleted_at"),
+            revision=int(row.get("revision") or 0),
         )
 
 
