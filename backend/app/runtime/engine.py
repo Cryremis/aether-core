@@ -38,7 +38,10 @@ class AgentEngine:
 
     @staticmethod
     def _render_tool_result_for_model(result: Any, visible_result: Any) -> str:
-        """让宿主工具可以用纯文本输出，同时保留旧 JSON 工具的兼容性。"""
+        """让宿主工具可以用纯文本输出，同时保留旧 JSON 工具的兼容性。
+
+        字符串直接透传，错误走结构化纯文本，其余 dict/list 用 git 风格的文本渲染。
+        """
         if isinstance(visible_result, str):
             return visible_result
         if isinstance(result, dict) and result.get("error") is not None:
@@ -48,7 +51,78 @@ class AgentEngine:
             lines.append("RETRYABLE: unknown")
             lines.append("NEXT: Read the error above, correct the request, or inspect current state before retrying.")
             return "\n".join(lines)
-        return json.dumps(visible_result, ensure_ascii=False, indent=2)
+        return AgentEngine._to_text(visible_result)
+
+    @staticmethod
+    def _to_text(value: Any) -> str:
+        """把工具结果 dict/list 渲染成 git 风格的纯文本（key: value + 缩进列表），替代 JSON。"""
+        lines: list[str] = []
+        AgentEngine._render_text_lines(value, lines, indent=0)
+        return "\n".join(lines).rstrip() if lines else ""
+
+    @staticmethod
+    def _render_text_lines(value: Any, lines: list[str], indent: int) -> None:
+        pad = "  " * indent
+        if isinstance(value, dict):
+            for key, item in value.items():
+                AgentEngine._render_text_field(str(key), item, lines, indent)
+            return
+        if isinstance(value, list):
+            if not value:
+                lines.append(pad + "[]")
+                return
+            # 全是简单标量时压成一行，否则逐条展开成列表。
+            if all(not isinstance(item, (dict, list)) for item in value):
+                lines.append(pad + ", ".join(AgentEngine._render_text_scalar(item, inline=True) for item in value))
+                return
+            for item in value:
+                if isinstance(item, dict):
+                    entries = list(item.items())
+                    if not entries:
+                        lines.append(pad + "- {}")
+                        continue
+                    key, val = entries[0]
+                    lines.append(f"{pad}- {key}: {AgentEngine._render_text_scalar(val, inline=True)}")
+                    for key, val in entries[1:]:
+                        AgentEngine._render_text_field(str(key), val, lines, indent + 1)
+                elif isinstance(item, list):
+                    AgentEngine._render_text_lines(item, lines, indent + 1)
+                else:
+                    lines.append(f"{pad}- {AgentEngine._render_text_scalar(item)}")
+            return
+        lines.append(pad + AgentEngine._render_text_scalar(value))
+
+    @staticmethod
+    def _render_text_field(key: str, item: Any, lines: list[str], indent: int) -> None:
+        pad = "  " * indent
+        if isinstance(item, str):
+            if "\n" in item:
+                lines.append(f"{pad}{key}:")
+                for line in item.splitlines():
+                    lines.append(f"{pad}  {line}")
+            else:
+                lines.append(f"{pad}{key}: {item}".rstrip())
+        elif isinstance(item, list) and item and all(not isinstance(x, (dict, list)) for x in item):
+            lines.append(f"{pad}{key}: " + ", ".join(AgentEngine._render_text_scalar(x, inline=True) for x in item))
+        elif isinstance(item, (dict, list)) and not item:
+            lines.append(f"{pad}{key}: {'{}' if isinstance(item, dict) else '[]'}")
+        elif isinstance(item, (dict, list)):
+            lines.append(f"{pad}{key}:")
+            AgentEngine._render_text_lines(item, lines, indent + 1)
+        else:
+            lines.append(f"{pad}{key}: {AgentEngine._render_text_scalar(item)}")
+
+    @staticmethod
+    def _render_text_scalar(value: Any, inline: bool = False) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, str):
+            return value.replace("\n", " ").strip() if inline else value
+        if isinstance(value, (dict, list)):
+            return AgentEngine._render_text_scalar(str(value), inline=inline)
+        return str(value)
 
     def _append_assistant_block(self, blocks: list[dict[str, Any]], block: dict[str, Any]) -> None:
         blocks.append(block)
@@ -397,6 +471,7 @@ class AgentEngine:
         while True:
             turn_count += 1
 
+            # 每一轮，判断是否需要增删工具
             if session.tool_refresh_policy == "round_boundary" and turn_count > 1:
                 refreshed_snapshot = tool_service.create_catalog_snapshot(session)
                 if refreshed_snapshot.fingerprint != catalog_snapshot.fingerprint:
@@ -415,6 +490,13 @@ class AgentEngine:
 
             tools = list(catalog_snapshot.schemas)
 
+            # 每轮先检查，要不要继续跑
+            '''
+            两种「已中止」情况：
+
+            这段代码是 run 被中断时的「善后清理」：
+            把模型已经说出来的半截内容抢救保存进历史，补上耗时，通知前端把流收尾，然后干净地结束这次 run。
+            '''
             if self._run_is_aborted(session, run_id):
                 if persisted_assistant_blocks or session.get_partial_content(run_id):
                     partial_text = session.get_partial_content(run_id).strip() or None
@@ -823,7 +905,7 @@ class AgentEngine:
                                 self._update_assistant_block(
                                     persisted_assistant_blocks,
                                     tool_block_id,
-                                    outputText=json.dumps(result, ensure_ascii=False, indent=2),
+                                    outputText=self._to_text(result),
                                     status="aborted",
                                 )
                                 yield make_event(
@@ -831,7 +913,8 @@ class AgentEngine:
                                     "tool_finished",
                                     id=tool_call["id"],
                                     tool_name=tool_name,
-                                    output=result,
+                                    output=self._to_text(result),
+                                    status="aborted",
                                 )
                                 self._ensure_elapsed_block(
                                     persisted_assistant_blocks,

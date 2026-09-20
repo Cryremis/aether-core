@@ -261,10 +261,11 @@ class AgentRunService:
                     break
         elif event.type == "tool_finished":
             tool_id = str(payload.get("id") or "")
+            aborted = payload.get("status") == "aborted"
             for block in blocks:
                 if isinstance(block, dict) and block.get("kind") == "tool" and str(block.get("id")) == tool_id:
                     block["outputText"] = self._pretty_json(payload.get("output"))
-                    block["status"] = "aborted" if self._tool_output_aborted(payload.get("output")) else "done"
+                    block["status"] = "aborted" if aborted else "done"
                     block.pop("liveOutputText", None)
                     break
         elif event.type == "runtime_recreated":
@@ -288,7 +289,7 @@ class AgentRunService:
                     block["status"] = "aborted"
                 if block.get("kind") == "tool" and str(block.get("status")) == "running":
                     block["status"] = "aborted"
-                    block["outputText"] = self._pretty_json({"summary": "工具执行已停止", "aborted": True})
+                    block["outputText"] = "工具执行已停止"
                     block.pop("liveOutputText", None)
         elif event.type == "completed":
             assistant["streaming"] = False
@@ -326,9 +327,6 @@ class AgentRunService:
             return json.dumps(value, ensure_ascii=False, indent=2)
         except Exception:  # noqa: BLE001
             return str(value)
-
-    def _tool_output_aborted(self, value: Any) -> bool:
-        return isinstance(value, dict) and value.get("aborted") is True
 
     def _append_live_output_preview(self, current_output: str, delta: str) -> str:
         merged = f"{current_output}{delta}"

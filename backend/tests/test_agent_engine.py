@@ -872,7 +872,8 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
 
     assert any(item["type"] == "aborted" for item in first_events)
     tool_finished = next(item for item in first_events if item["type"] == "tool_finished")
-    assert tool_finished["payload"]["output"]["aborted"] is True
+    assert tool_finished["payload"]["status"] == "aborted"
+    assert tool_finished["payload"]["output"] == "summary: 工具执行已停止\naborted: true"
     assert session.current_run_id() is None
 
     result_event = next(item for item in second_events if item["type"] == "result")

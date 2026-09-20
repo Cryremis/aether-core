@@ -1421,6 +1421,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           if (nextElicitation) setElicitation(nextElicitation);
         }
         const toolId = String(payload.id ?? "");
+        const aborted = payload.status === "aborted";
         upsertAssistantBlock(
           assistantId,
           toolId,
@@ -1432,10 +1433,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
             argumentsText: "",
             outputText: stringifyStructured(output),
             liveOutputText: undefined,
-            status:
-              typeof output === "object" && output !== null && "aborted" in (output as Record<string, unknown>) && (output as Record<string, unknown>).aborted === true
-                ? "aborted"
-                : "done",
+            status: aborted ? "aborted" : "done",
           }),
           (block) =>
             block.kind === "tool"
@@ -1443,10 +1441,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
                   ...block,
                   outputText: stringifyStructured(output),
                   liveOutputText: undefined,
-                  status:
-                    typeof output === "object" && output !== null && "aborted" in (output as Record<string, unknown>) && (output as Record<string, unknown>).aborted === true
-                      ? "aborted"
-                      : "done",
+                  status: aborted ? "aborted" : "done",
                 }
               : block,
         );
