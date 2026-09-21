@@ -822,9 +822,10 @@ type SubagentToolPayload = {
   status?: string;
 };
 
-function parseSubagentToolPayload(...sources: string[]): SubagentToolPayload | null {
+function parseSubagentToolPayload(...sources: Array<string | null | undefined>): SubagentToolPayload | null {
   for (const source of sources) {
-    if (!source.trim()) continue;
+    // 历史工具块可能没有 liveOutputText；该字段是可选数据，不能假设一定存在。
+    if (typeof source !== "string" || !source.trim()) continue;
     const payload: SubagentToolPayload = {};
     for (const line of source.split(/\r\n|\r|\n/)) {
       const match = /^(subagent_run_id|child_session_id|name|task|status): (.*)$/.exec(line);
