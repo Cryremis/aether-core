@@ -660,7 +660,7 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
     assert "tool_finished" in event_types
     assert event_types.index("runtime_recreated") < event_types.index("tool_finished")
     tool_finished = next(item for item in events if item["type"] == "tool_finished")
-    assert tool_finished["payload"]["output"].startswith("shell.executed: success")
+    assert tool_finished["payload"]["output"] == "ok"
     assert tool_finished["payload"]["result"]["kind"] == "shell.executed"
     assert tool_finished["payload"]["result"]["status"] == "success"
     assert any(
@@ -892,7 +892,7 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
     assert any(item["type"] == "aborted" for item in first_events)
     tool_finished = next(item for item in first_events if item["type"] == "tool_finished")
     assert tool_finished["payload"]["result"]["status"] == "aborted"
-    assert tool_finished["payload"]["output"].startswith("tool.execution: aborted")
+    assert tool_finished["payload"]["output"].startswith("error:")
     assert session.current_run_id() is None
 
     result_event = next(item for item in second_events if item["type"] == "result")
