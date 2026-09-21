@@ -279,24 +279,24 @@ class ToolService:
         )
         self._registry.register(
             "subagent_send_message",
-            "向已完成的子 Agent 发送追加消息，进行下一轮沟通。",
+            "向已完成的子 Agent 发送追加消息，进行下一轮沟通。句柄使用 subagent_id，不是 latest_run_id。",
             {
                 "properties": {
-                    "subagent_run_id": {"type": "string"},
+                    "subagent_id": {"type": "string"},
                     "message": {"type": "string", "minLength": 1},
                 },
-                "required": ["subagent_run_id", "message"],
+                "required": ["subagent_id", "message"],
                 "additionalProperties": False,
             },
             self._handle_subagent_tool,
-            required=["subagent_run_id", "message"],
+            required=["subagent_id", "message"],
         )
         self._registry.register(
             "subagent_wait",
             "等待一个或全部子 Agent 完成，并返回它们的最终结果。",
             {
                 "properties": {
-                    "subagent_run_id": {"type": "string"},
+                    "subagent_id": {"type": "string"},
                     "timeout_seconds": {"type": "integer", "minimum": 1},
                 },
                 "additionalProperties": False,
@@ -311,25 +311,25 @@ class ToolService:
         )
         self._registry.register(
             "subagent_cancel",
-            "取消一个子 Agent。",
+            "停止一个子 Agent，并等待它进入终态后返回真实结果。",
             {
-                "properties": {"subagent_run_id": {"type": "string"}},
-                "required": ["subagent_run_id"],
+                "properties": {"subagent_id": {"type": "string"}},
+                "required": ["subagent_id"],
                 "additionalProperties": False,
             },
             self._handle_subagent_tool,
-            required=["subagent_run_id"],
+            required=["subagent_id"],
         )
         self._registry.register(
             "subagent_get_result",
             "读取一个子 Agent 的当前结果或错误；通常优先使用 subagent_wait 等待主动回传。",
             {
-                "properties": {"subagent_run_id": {"type": "string"}},
-                "required": ["subagent_run_id"],
+                "properties": {"subagent_id": {"type": "string"}},
+                "required": ["subagent_id"],
                 "additionalProperties": False,
             },
             self._handle_subagent_tool,
-            required=["subagent_run_id"],
+            required=["subagent_id"],
         )
 
         self._registry.register(
@@ -980,8 +980,8 @@ class ToolService:
             )
         if tool_name == "subagent_cancel":
             return ToolExecutionResult.success(
-                "subagent.cancel_requested",
-                "已请求停止子代理",
+                "subagent.cancelled",
+                "子代理停止流程已结束",
                 payload,
             )
         if tool_name == "subagent_get_result":

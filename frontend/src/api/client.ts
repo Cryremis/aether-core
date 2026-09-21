@@ -469,10 +469,10 @@ export type ActiveRunSummary = {
 };
 
 export type SubagentRunSummary = {
-  subagent_run_id: string;
+  subagent_id: string;
   workspace_id?: string | null;
   child_session_id: string;
-  run_id: string;
+  latest_run_id: string;
   name: string;
   task: string;
   status: string;
@@ -482,6 +482,7 @@ export type SubagentRunSummary = {
   } | null;
   result?: string | null;
   error?: string | null;
+  cancel_requested_at?: string | null;
   created_at?: string | null;
   finished_at?: string | null;
   destroyed_at?: string | null;
@@ -1674,9 +1675,20 @@ export async function listSubagents(sessionId: string) {
   return response.json();
 }
 
-export async function destroySubagent(sessionId: string, subagentRunId: string) {
+export async function cancelSubagent(sessionId: string, subagentId: string) {
   const response = await apiFetch(
-    `/agent/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentRunId)}/destroy`,
+    `/agent/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}/cancel`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response, `停止子代理失败: ${response.status}`));
+  }
+  return response.json();
+}
+
+export async function destroySubagent(sessionId: string, subagentId: string) {
+  const response = await apiFetch(
+    `/agent/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}/destroy`,
     { method: "POST" },
   );
   if (!response.ok) {

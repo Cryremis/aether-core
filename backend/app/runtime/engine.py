@@ -7,7 +7,7 @@ import inspect
 import json
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -226,6 +226,52 @@ class AgentEngine:
         if signature is not None and "catalog_snapshot" in signature.parameters:
             execute_kwargs["catalog_snapshot"] = catalog_snapshot
         return asyncio.create_task(tool_service.execute(session, tool_name, tool_input, **execute_kwargs))
+
+    async def _stream_llm_until_abort(
+        self,
+        session: AgentSession,
+        run_id: str,
+        stream: AsyncIterator[dict[str, Any]],
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """让无 chunk 的 LLM 等待也能被 abort event 立即唤醒。"""
+        run = session.get_run(run_id)
+        if run is None:
+            async for chunk in stream:
+                yield chunk
+            return
+
+        iterator = stream.__aiter__()
+        while True:
+            next_chunk_task = asyncio.create_task(iterator.__anext__())
+            abort_task = asyncio.create_task(run.abort_event.wait())
+            done, pending = await asyncio.wait(
+                {next_chunk_task, abort_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if abort_task in done:
+                next_chunk_task.cancel()
+                try:
+                    await next_chunk_task
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
+                await iterator.aclose()
+                abort_task.cancel()
+                try:
+                    await abort_task
+                except asyncio.CancelledError:
+                    pass
+                return
+
+            abort_task.cancel()
+            try:
+                await abort_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                chunk = next_chunk_task.result()
+            except StopAsyncIteration:
+                return
+            yield chunk
 
     async def stream_chat(
         self,
@@ -469,13 +515,13 @@ class AgentEngine:
                 )
                 return
 
-            destroyed_subagent_ids = store_service.list_destroyed_subagent_run_ids_for_session(
+            destroyed_subagent_ids = store_service.list_destroyed_subagent_ids_for_session(
                 session.session_id
             )
             visible_messages = [
                 message
                 for message in session.messages
-                if str(message.get("subagent_run_id") or "") not in destroyed_subagent_ids
+                if str(message.get("subagent_id") or "") not in destroyed_subagent_ids
             ]
             raw_messages: list[dict[str, Any]] = [
                 *self._build_system_messages(
@@ -533,7 +579,16 @@ class AgentEngine:
             last_usage_payload: dict[str, int] | None = None
 
             try:
-                async for chunk in llm_client.stream_chat_completion(llm_runtime, messages, tools, reasoning_effort=reasoning_effort):
+                async for chunk in self._stream_llm_until_abort(
+                    session,
+                    run_id,
+                    llm_client.stream_chat_completion(
+                        llm_runtime,
+                        messages,
+                        tools,
+                        reasoning_effort=reasoning_effort,
+                    ),
+                ):
                     if self._run_is_aborted(session, run_id):
                         if persisted_assistant_blocks or session.get_partial_content(run_id):
                             partial_text = session.get_partial_content(run_id).strip() or None
@@ -703,6 +758,30 @@ class AgentEngine:
                 else:
                     raise
 
+            if self._run_is_aborted(session, run_id):
+                if persisted_assistant_blocks or session.get_partial_content(run_id):
+                    self._ensure_elapsed_block(
+                        persisted_assistant_blocks,
+                        int((time.perf_counter() - started_at) * 1000),
+                        response_started_at_iso or started_at_iso,
+                    )
+                    self._persist_assistant_round(
+                        session,
+                        turn_index=request_turn_index,
+                        content=session.get_partial_content(run_id).strip() or None,
+                        blocks=persisted_assistant_blocks,
+                        run_id=run_id,
+                    )
+                async for event in self._emit_aborted(
+                    session,
+                    run_id=run_id,
+                    started_at=started_at,
+                    interrupt_point="llm_stream",
+                ):
+                    yield event
+                session.finish_run(run_id)
+                return
+
             if active_reasoning_block_id:
                 self._update_assistant_block(
                     persisted_assistant_blocks,
@@ -819,8 +898,7 @@ class AgentEngine:
                         while True:
                             if self._run_is_aborted(session, run_id):
                                 result = ToolExecutionResult.aborted()
-                                cleanup_task = asyncio.create_task(self._cleanup_tool_execution(execution_task))
-                                session.set_cleanup_task(run_id, cleanup_task)
+                                await self._cleanup_tool_execution(execution_task)
                                 self._update_assistant_block(
                                     persisted_assistant_blocks,
                                     tool_block_id,

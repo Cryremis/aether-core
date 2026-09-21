@@ -41,14 +41,15 @@ def create_lifecycle_fixture(owner_user_id: int | None = None) -> tuple[AgentSes
         conversation_id=child.conversation_id,
         status="running",
     )
-    row = store_service.create_subagent_run(
-        child_run_id="run_child_lifecycle",
+    row = store_service.create_subagent(
+        subagent_id="subagent_lifecycle",
         workspace_id=parent.workspace_id,
         parent_run_id="run_parent_lifecycle",
         parent_session_id=parent.session_id,
         child_session_id=child.session_id,
         name="researcher",
         task="research the topic",
+        latest_run_id="run_child_lifecycle",
     )
     if owner_user_id is not None:
         store_service.create_conversation(
@@ -88,19 +89,19 @@ def test_subagent_destroy_is_lifecycle_not_execution_status(tmp_path):
     assert listed[0]["destroyed_at"] is None
     assert listed[0]["current_action"] == {"kind": "tool", "label": "read file.txt"}
 
-    destroyed = asyncio.run(subagent_service.destroy(parent, str(row["child_run_id"])))
-    assert destroyed["status"] == "running"
+    destroyed = asyncio.run(subagent_service.destroy(parent, str(row["subagent_id"])))
+    assert destroyed["status"] == "cancelled"
     assert destroyed["destroyed_at"]
     assert subagent_service.list_subagents(parent) == []
-    assert store_service.get_subagent_run(str(row["child_run_id"])) is not None
+    assert store_service.get_subagent(str(row["subagent_id"])) is not None
 
 
 def test_destroyed_subagent_blocks_followup_and_result_injection(tmp_path):
     initialize_isolated_runtime(tmp_path)
     parent, _, row = create_lifecycle_fixture()
-    subagent_run_id = str(row["child_run_id"])
+    subagent_id = str(row["subagent_id"])
 
-    destroyed = asyncio.run(subagent_service.destroy(parent, subagent_run_id))
+    destroyed = asyncio.run(subagent_service.destroy(parent, subagent_id))
     assert destroyed["destroyed_at"]
 
     with pytest.raises(RuntimeError, match="已销毁"):
@@ -108,19 +109,19 @@ def test_destroyed_subagent_blocks_followup_and_result_injection(tmp_path):
             subagent_service.send_message(
                 parent,
                 parent_run_id="run_parent_lifecycle",
-                subagent_run_id=subagent_run_id,
+                subagent_id=subagent_id,
                 message="continue",
             )
         )
 
     with pytest.raises(RuntimeError, match="已销毁"):
-        subagent_service.get_result(parent, subagent_run_id)
+        subagent_service.get_result(parent, subagent_id)
 
     asyncio.run(
         subagent_service._inject_result(
             parent_run_id="run_parent_lifecycle",
             parent_session_id=parent.session_id,
-            subagent_run_id=subagent_run_id,
+            subagent_id=subagent_id,
             latest_run_id="run_child_lifecycle",
             name="researcher",
             status="completed",
@@ -128,8 +129,8 @@ def test_destroyed_subagent_blocks_followup_and_result_injection(tmp_path):
         )
     )
     restored_parent = session_service.get_or_create(parent.session_id)
-    assert all(message.get("subagent_run_id") != subagent_run_id for message in restored_parent.messages)
-    assert store_service.list_destroyed_subagent_run_ids_for_session(parent.session_id) == {subagent_run_id}
+    assert all(message.get("subagent_id") != subagent_id for message in restored_parent.messages)
+    assert store_service.list_destroyed_subagent_ids_for_session(parent.session_id) == {subagent_id}
 
 
 def test_subagent_endpoints_and_exact_hidden_history_access(tmp_path):
@@ -143,11 +144,11 @@ def test_subagent_endpoints_and_exact_hidden_history_access(tmp_path):
 
     listed = client.get(f"/api/v1/agent/sessions/{parent.session_id}/subagents", headers=headers)
     assert listed.status_code == 200
-    assert [item["subagent_run_id"] for item in listed.json()["data"]] == [row["child_run_id"]]
+    assert [item["subagent_id"] for item in listed.json()["data"]] == [row["subagent_id"]]
     assert listed.json()["data"][0]["child_session_id"] == child.session_id
 
     destroyed = client.post(
-        f"/api/v1/agent/sessions/{parent.session_id}/subagents/{row['child_run_id']}/destroy",
+        f"/api/v1/agent/sessions/{parent.session_id}/subagents/{row['subagent_id']}/destroy",
         headers=headers,
     )
     assert destroyed.status_code == 200
@@ -199,14 +200,15 @@ def test_existing_child_conversations_are_backfilled_with_parent_access(tmp_path
         host_name="AetherCore",
         visibility="hidden",
     )
-    store_service.create_subagent_run(
-        child_run_id="run_child_backfill",
+    store_service.create_subagent(
+        subagent_id="subagent_backfill",
         workspace_id=parent.workspace_id,
         parent_run_id="run_parent_backfill",
         parent_session_id=parent.session_id,
         child_session_id=child.session_id,
         name="legacy",
         task="legacy task",
+        latest_run_id="run_child_backfill",
     )
 
     store_service.initialize()

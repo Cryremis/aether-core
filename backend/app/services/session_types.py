@@ -29,7 +29,6 @@ class SessionRunContext:
     tool_call_id: str | None = None
     tool_name: str | None = None
     tool_task: Any | None = None
-    cleanup_task: asyncio.Task[Any] | None = None
 
     def request_abort(self) -> None:
         self.abort_event.set()
@@ -156,15 +155,6 @@ class AgentSession:
     def get_tool_task(self, run_id: str) -> Any | None:
         run = self.get_run(run_id)
         return run.tool_task if run is not None else None
-
-    def set_cleanup_task(self, run_id: str, task: asyncio.Task[Any] | None) -> None:
-        run = self.get_run(run_id)
-        if run is not None:
-            run.cleanup_task = task
-
-    def get_cleanup_task(self, run_id: str) -> asyncio.Task[Any] | None:
-        run = self.get_run(run_id)
-        return run.cleanup_task if run is not None else None
 
     def get_abort_snapshot(self) -> SessionRunContext | None:
         return self.last_abort

@@ -135,7 +135,7 @@ class HostAssistantMessage(BaseModel):
     message_id: str
     run_id: str | None = None
     agent_id: str | None = None
-    subagent_run_id: str | None = None
+    subagent_id: str | None = None
     content: str
     run_status: str | None = None
     created_at: str

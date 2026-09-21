@@ -6,7 +6,7 @@ def test_renderer_outputs_only_actionable_subagent_handle():
         "subagent.created",
         "子代理 数据分析 已创建",
         {
-            "subagent_run_id": "run_sub_1",
+            "subagent_id": "subagent_1",
             "child_session_id": "sess_child_1",
             "name": "数据分析",
             "status": "running",
@@ -16,7 +16,7 @@ def test_renderer_outputs_only_actionable_subagent_handle():
 
     rendered = tool_result_renderer.render(result)
 
-    assert rendered == "subagent_run_id: run_sub_1"
+    assert rendered == "subagent_id: subagent_1"
 
 
 def test_renderer_outputs_recoverable_error_protocol():

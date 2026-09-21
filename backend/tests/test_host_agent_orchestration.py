@@ -202,17 +202,18 @@ def test_assistant_messages_include_run_status_and_subagent_results(tmp_path):
         conversation_id=conversation_id,
         status="completed",
     )
-    store_service.create_subagent_run(
-        child_run_id="run_sub",
+    store_service.create_subagent(
+        subagent_id="subagent_1",
         workspace_id=session.workspace_id,
         parent_run_id="run_second",
         parent_session_id=session.session_id,
         child_session_id="sess_sub",
         name="researcher",
         task="research",
+        latest_run_id="run_sub",
     )
-    store_service.update_subagent_run(
-        "run_sub",
+    store_service.update_subagent(
+        "subagent_1",
         status="completed",
         result_text="subagent answer",
     )
@@ -227,8 +228,9 @@ def test_assistant_messages_include_run_status_and_subagent_results(tmp_path):
     by_id = {item["message_id"]: item for item in items}
     assert by_id["msg_second"]["run_status"] == "completed"
     assert by_id["msg_first"]["run_status"] == "failed"
-    assert by_id["subagent_run_sub"]["subagent_run_id"] == "run_sub"
-    assert by_id["subagent_run_sub"]["content"] == "subagent answer"
+    assert by_id["subagent_subagent_1"]["subagent_id"] == "subagent_1"
+    assert by_id["subagent_subagent_1"]["run_id"] == "run_sub"
+    assert by_id["subagent_subagent_1"]["content"] == "subagent answer"
 
 
 def test_subagent_tools_are_hidden_from_child_sessions(tmp_path):
@@ -269,11 +271,11 @@ def test_all_subagent_tools_dispatch_with_tool_name_and_run_id(tmp_path, monkeyp
     monkeypatch.setattr(subagent_service, "execute_tool", fake_execute_tool)
     cases = {
         "subagent_create": {"name": "researcher", "task": "analyze"},
-        "subagent_send_message": {"subagent_run_id": "run_sub", "message": "continue"},
-        "subagent_wait": {"subagent_run_id": "run_sub", "timeout_seconds": 5},
+        "subagent_send_message": {"subagent_id": "subagent_1", "message": "continue"},
+        "subagent_wait": {"subagent_id": "subagent_1", "timeout_seconds": 5},
         "subagent_list": {},
-        "subagent_cancel": {"subagent_run_id": "run_sub"},
-        "subagent_get_result": {"subagent_run_id": "run_sub"},
+        "subagent_cancel": {"subagent_id": "subagent_1"},
+        "subagent_get_result": {"subagent_id": "subagent_1"},
     }
 
     async def execute_all():
@@ -297,7 +299,7 @@ def test_missing_subagent_id_returns_domain_error_not_internal_name_error(tmp_pa
             tool_service.execute(
                 session,
                 "subagent_get_result",
-                {"subagent_run_id": "run_missing"},
+                {"subagent_id": "subagent_missing"},
                 run_id="run_parent",
             )
         )
@@ -374,7 +376,10 @@ def test_subagent_creation_uses_hidden_child_conversation_and_one_level_depth(tm
             allowed_tools=["read", "glob"],
         )
     )
-    child_session_id = store_service.get_subagent_run(result["subagent_run_id"])["child_session_id"]
+    child_session_id = store_service.get_subagent(result["subagent_id"])["child_session_id"]
+    assert result["subagent_id"].startswith("subagent_")
+    assert result["latest_run_id"] == "run_child_sub"
+    assert "run_id" not in result
     child = session_service.get_or_create(child_session_id)
     child_conversation = store_service.get_conversation_by_session(child_session_id)
     assert child.subagent_tools_enabled is False
@@ -391,21 +396,22 @@ def test_subagent_result_is_proactively_injected_into_parent_context(tmp_path):
         session_id=parent.session_id,
         status="running",
     )
-    store_service.create_subagent_run(
-        child_run_id="run_child_result",
+    store_service.create_subagent(
+        subagent_id="subagent_result",
         workspace_id=parent.workspace_id,
         parent_run_id="run_parent_result",
         parent_session_id=parent.session_id,
         child_session_id="sess_child_result",
         name="researcher",
         task="research",
+        latest_run_id="run_child_result",
     )
 
     asyncio.run(
         subagent_service._inject_result(
             parent_run_id="run_parent_result",
             parent_session_id=parent.session_id,
-            subagent_run_id="run_child_result",
+            subagent_id="subagent_result",
             latest_run_id="run_child_result",
             name="researcher",
             status="completed",
@@ -416,7 +422,7 @@ def test_subagent_result_is_proactively_injected_into_parent_context(tmp_path):
     injected = parent.messages[-1]
     event_types = [event["type"] for event in store_service.list_agent_run_events("run_parent_result")]
     assert injected["kind"] == "subagent_result"
-    assert injected["subagent_run_id"] == "run_child_result"
+    assert injected["subagent_id"] == "subagent_result"
     assert "found the answer" in injected["content"]
     assert "subagent_result_ready" in event_types
     assert "subagent_completed" in event_types

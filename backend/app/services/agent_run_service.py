@@ -152,6 +152,43 @@ class AgentRunService:
             await state.task
         return self.get_run_view(run_id) or {}
 
+    async def cancel_run(
+        self,
+        session: AgentSession,
+        run_id: str,
+        *,
+        grace_seconds: float = 5.0,
+    ) -> dict[str, Any]:
+        """请求取消并等待 run 进入可持久化的终态。"""
+        state = self._runs.get(run_id)
+        run = self.get_run_view(run_id)
+        if run and str(run.get("status")) not in {"queued", "running", "waiting_input"}:
+            return run
+        if state is None or state.task is None or state.task.done():
+            if run is not None:
+                cancelled_run = store_service.cancel_orphan_agent_run(run_id)
+                if cancelled_run is None:
+                    return self.get_run_view(run_id)
+                return self.get_run_view(str(cancelled_run["run_id"]))
+            return {"run_id": run_id, "status": "failed", "error": {"message": "运行任务不存在"}}
+
+        session.request_abort()
+        tool_task = session.get_tool_task(run_id)
+        if tool_task is not None and not tool_task.done():
+            tool_task.cancel()
+
+        try:
+            await asyncio.wait_for(asyncio.shield(state.task), timeout=grace_seconds)
+        except asyncio.TimeoutError:
+            state.task.cancel()
+            try:
+                await state.task
+            except asyncio.CancelledError:
+                pass
+        except asyncio.CancelledError:
+            pass
+        return self.get_run_view(run_id) or {"run_id": run_id, "status": "failed"}
+
     def get_run_view(self, run_id: str) -> dict[str, Any] | None:
         run = store_service.get_agent_run(run_id)
         if run is None:
@@ -200,6 +237,24 @@ class AgentRunService:
                 await self._publish(run_id, event)
                 if event.type == "completed":
                     terminal_event_sent = True
+        except asyncio.CancelledError:
+            aborted_event = make_event(
+                session,
+                "aborted",
+                partial_content=session.get_partial_content(run_id),
+                interrupt_point="run_task_cancelled",
+            )
+            self._apply_event_to_active_view(session, aborted_event)
+            await self._publish(run_id, aborted_event)
+            completed_event = make_event(
+                session,
+                "completed",
+                elapsed_ms=self._active_elapsed_ms(session),
+                subtype="aborted",
+            )
+            self._apply_event_to_active_view(session, completed_event)
+            await self._publish(run_id, completed_event)
+            terminal_event_sent = True
         except Exception as exc:  # noqa: BLE001
             error_event = make_event(
                 session,

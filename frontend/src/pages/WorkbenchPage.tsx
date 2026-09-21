@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   abortSession,
   bootstrapAdminSession,
+  cancelSubagent,
   deleteUserLlmConfig,
   destroySubagent,
   editSessionTimeline,
@@ -1235,13 +1236,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       }
 
       if (eventType.startsWith("subagent_")) {
-        const subagentRunId = String(payload.subagent_run_id ?? "");
-        if (!subagentRunId) return;
+        const subagentId = String(payload.subagent_id ?? "");
+        if (!subagentId) return;
         setSubagents((current) => {
-          const existing = current.find((item) => item.subagent_run_id === subagentRunId);
+          const existing = current.find((item) => item.subagent_id === subagentId);
           const next: SubagentRunSummary = {
-            subagent_run_id: subagentRunId,
-            run_id: String(payload.run_id ?? existing?.run_id ?? ""),
+            subagent_id: subagentId,
+            latest_run_id: String(payload.latest_run_id ?? existing?.latest_run_id ?? ""),
             child_session_id: String(payload.child_session_id ?? existing?.child_session_id ?? ""),
             name: String(payload.name ?? existing?.name ?? "Subagent"),
             task: String(payload.task ?? existing?.task ?? ""),
@@ -1249,12 +1250,13 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
             current_action: existing?.current_action ?? null,
             result: typeof payload.result === "string" ? payload.result : existing?.result ?? null,
             error: typeof payload.error === "string" ? payload.error : existing?.error ?? null,
+            cancel_requested_at: existing?.cancel_requested_at ?? null,
             created_at: existing?.created_at ?? null,
             finished_at: existing?.finished_at ?? null,
             destroyed_at: existing?.destroyed_at ?? null,
             user_can_message: false,
           };
-          const others = current.filter((item) => item.subagent_run_id !== subagentRunId);
+          const others = current.filter((item) => item.subagent_id !== subagentId);
           return [...others, next].sort((left, right) => left.name.localeCompare(right.name));
         });
         return;
@@ -2061,9 +2063,9 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
   };
 
   const handleStopSubagent = async (subagent: SubagentRunSummary) => {
-    if (!subagent.child_session_id) return;
+    if (!mainSessionId) return;
     try {
-      await abortSession(subagent.child_session_id);
+      await cancelSubagent(mainSessionId, subagent.subagent_id);
       await refreshSubagents();
     } catch (err) {
       setError(err instanceof Error ? err.message : "停止子代理失败");
@@ -2073,7 +2075,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
   const handleDestroySubagent = async (subagent: SubagentRunSummary) => {
     if (!mainSessionId || !window.confirm(`确定销毁子代理「${subagent.name}」吗？历史记录会保留。`)) return;
     try {
-      await destroySubagent(mainSessionId, subagent.subagent_run_id);
+      await destroySubagent(mainSessionId, subagent.subagent_id);
       await refreshSubagents(mainSessionId);
       if (activeSubagentSessionId === subagent.child_session_id) {
         exitSubagentSession();
@@ -2456,6 +2458,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
             contentRef={historyContentRef}
             loading={loading}
             messages={messages}
+            subagents={subagents}
             actionsDisabled={displayedBusy || loading}
             onOpenSubagent={(childSessionId) => openSubagentSession(childSessionId)}
             onForkUserMessage={(messageId) => void handleForkFromMessage(messageId)}

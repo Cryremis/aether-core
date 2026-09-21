@@ -120,21 +120,22 @@ def test_subagent_result_is_injected_while_parent_is_waiting(tmp_path):
         session_id=parent.session_id,
         status="running",
     )
-    store_service.create_subagent_run(
-        child_run_id="run_waiting_child",
+    store_service.create_subagent(
+        subagent_id="subagent_waiting",
         workspace_id=parent.workspace_id,
         parent_run_id="run_waiting_parent",
         parent_session_id=parent.session_id,
         child_session_id="sess_waiting_child",
         name="researcher",
         task="research",
+        latest_run_id="run_waiting_child",
     )
 
     asyncio.run(
         subagent_service._inject_result(
             parent_run_id="run_waiting_parent",
             parent_session_id=parent.session_id,
-            subagent_run_id="run_waiting_child",
+            subagent_id="subagent_waiting",
             latest_run_id="run_waiting_child",
             name="researcher",
             status="completed",

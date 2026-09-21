@@ -166,15 +166,29 @@ def list_session_subagents(session_id: str, auth: AuthContext = Depends(get_auth
     return ApiResponse(message="子代理列表", data=subagent_service.list_subagents(session))
 
 
-@router.post("/{session_id}/subagents/{subagent_run_id}/destroy")
-async def destroy_subagent(
+@router.post("/{session_id}/subagents/{subagent_id}/cancel")
+async def cancel_subagent(
     session_id: str,
-    subagent_run_id: str,
+    subagent_id: str,
     auth: AuthContext = Depends(get_auth_context),
 ) -> ApiResponse:
     _, session = _ensure_session_access(session_id, auth)
     try:
-        destroyed = await subagent_service.destroy(session, subagent_run_id)
+        cancelled = await subagent_service.cancel(session, subagent_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ApiResponse(message="子代理停止流程已完成", data=cancelled)
+
+
+@router.post("/{session_id}/subagents/{subagent_id}/destroy")
+async def destroy_subagent(
+    session_id: str,
+    subagent_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+) -> ApiResponse:
+    _, session = _ensure_session_access(session_id, auth)
+    try:
+        destroyed = await subagent_service.destroy(session, subagent_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return ApiResponse(message="子代理已销毁", data=destroyed)

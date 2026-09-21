@@ -67,6 +67,7 @@ class StoreService:
                 wal_conn.close()
 
         with self._connect() as conn:
+            self._migrate_subagents_table(conn)
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -359,8 +360,8 @@ class StoreService:
                     FOREIGN KEY (run_id) REFERENCES agent_runs(run_id) ON DELETE CASCADE
                 );
 
-                CREATE TABLE IF NOT EXISTS subagent_runs (
-                    child_run_id TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS subagents (
+                    subagent_id TEXT PRIMARY KEY,
                     workspace_id TEXT,
                     parent_run_id TEXT NOT NULL,
                     parent_session_id TEXT NOT NULL,
@@ -371,6 +372,7 @@ class StoreService:
                     status TEXT NOT NULL,
                     result_text TEXT,
                     error_text TEXT,
+                    cancel_requested_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     finished_at TEXT,
@@ -379,8 +381,8 @@ class StoreService:
                     destroy_reason TEXT
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_subagent_runs_parent_session
-                ON subagent_runs(parent_session_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_subagents_parent_session
+                ON subagents(parent_session_id, created_at DESC);
                 """
             )
             self._ensure_column(conn, "conversations", "visibility", "TEXT NOT NULL DEFAULT 'normal'")
@@ -398,11 +400,12 @@ class StoreService:
                 WHERE idempotency_key IS NOT NULL
                 """
             )
-            self._ensure_column(conn, "subagent_runs", "latest_run_id", "TEXT")
-            self._ensure_column(conn, "subagent_runs", "workspace_id", "TEXT")
-            self._ensure_column(conn, "subagent_runs", "destroyed_at", "TEXT")
-            self._ensure_column(conn, "subagent_runs", "destroyed_by", "TEXT")
-            self._ensure_column(conn, "subagent_runs", "destroy_reason", "TEXT")
+            self._ensure_column(conn, "subagents", "latest_run_id", "TEXT")
+            self._ensure_column(conn, "subagents", "workspace_id", "TEXT")
+            self._ensure_column(conn, "subagents", "cancel_requested_at", "TEXT")
+            self._ensure_column(conn, "subagents", "destroyed_at", "TEXT")
+            self._ensure_column(conn, "subagents", "destroyed_by", "TEXT")
+            self._ensure_column(conn, "subagents", "destroy_reason", "TEXT")
             self._migrate_subagent_conversation_ownership(conn)
             self._ensure_column(conn, "users", "last_login_at", "TEXT")
             self._ensure_column(conn, "platform_admins", "assigned_by", "INTEGER")
@@ -443,6 +446,26 @@ class StoreService:
         if column_name in columns:
             return
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+    def _migrate_subagents_table(self, conn: sqlite3.Connection) -> None:
+        """将旧的 run 语义表迁移为稳定的 subagent 实体表。"""
+        tables = {
+            str(row["name"])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+        has_legacy = "subagent_runs" in tables
+        has_current = "subagents" in tables
+        if has_legacy and has_current:
+            raise RuntimeError("subagent_runs 与 subagents 同时存在，拒绝自动迁移")
+        if has_legacy:
+            conn.execute("ALTER TABLE subagent_runs RENAME TO subagents")
+            conn.execute("DROP INDEX IF EXISTS idx_subagent_runs_parent_session")
+
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(subagents)").fetchall()}
+        if "child_run_id" in columns:
+            if "subagent_id" in columns:
+                raise RuntimeError("subagents 同时存在 child_run_id 与 subagent_id，拒绝自动迁移")
+            conn.execute("ALTER TABLE subagents RENAME COLUMN child_run_id TO subagent_id")
 
     def _migrate_workspaces(self, conn: sqlite3.Connection) -> None:
         """一次性把会话归属迁移为共享 Workspace 归属。"""
@@ -550,10 +573,10 @@ class StoreService:
 
         conn.execute(
             """
-            UPDATE subagent_runs
+            UPDATE subagents
             SET workspace_id = (
                 SELECT c.workspace_id FROM conversations c
-                WHERE c.session_id = subagent_runs.parent_session_id
+                WHERE c.session_id = subagents.parent_session_id
             )
             WHERE workspace_id IS NULL OR workspace_id = ''
             """
@@ -569,7 +592,7 @@ class StoreService:
                 owner_user_id = COALESCE(child.owner_user_id, parent.owner_user_id),
                 external_user_id = COALESCE(child.external_user_id, parent.external_user_id),
                 external_org_id = COALESCE(child.external_org_id, parent.external_org_id)
-            FROM subagent_runs AS relation
+            FROM subagents AS relation
             JOIN conversations AS parent
               ON parent.session_id = relation.parent_session_id
             WHERE child.session_id = relation.child_session_id
@@ -579,7 +602,7 @@ class StoreService:
             """
             UPDATE conversations AS child
             SET title = 'Subagent: ' || relation.name
-            FROM subagent_runs AS relation
+            FROM subagents AS relation
             WHERE child.session_id = relation.child_session_id
               AND (
                 child.title IS NULL
@@ -1715,7 +1738,7 @@ class StoreService:
                 return True
             subagent = conn.execute(
                 """
-                SELECT 1 FROM subagent_runs
+                SELECT 1 FROM subagents
                 WHERE workspace_id = ? AND status = 'running'
                 LIMIT 1
                 """,
@@ -2132,6 +2155,23 @@ class StoreService:
                     continue
                 conn.execute(
                     """
+                    UPDATE subagents
+                    SET status = 'failed',
+                        error_text = ?,
+                        updated_at = ?,
+                        finished_at = ?
+                    WHERE latest_run_id = ?
+                      AND status IN ('queued', 'running', 'waiting_input')
+                    """,
+                    (
+                        json.dumps(error, ensure_ascii=False),
+                        now,
+                        now,
+                        str(row["run_id"]),
+                    ),
+                )
+                conn.execute(
+                    """
                     INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
                     VALUES (?, ?, 'error', ?, 'visible', ?)
                     """,
@@ -2181,6 +2221,56 @@ class StoreService:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
+
+    def cancel_orphan_agent_run(self, run_id: str) -> dict[str, Any] | None:
+        """取消已无内存 worker 的 active run，并原子写入终态事件。"""
+        now = utcnow_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT event_cursor FROM agent_runs
+                WHERE run_id = ? AND status IN ('queued', 'running', 'waiting_input')
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is not None:
+                seq = int(row["event_cursor"]) + 1
+                conn.execute(
+                    """
+                    UPDATE agent_runs
+                    SET status = 'cancelled', event_cursor = ?, finished_at = ?
+                    WHERE run_id = ? AND status IN ('queued', 'running', 'waiting_input')
+                    """,
+                    (seq + 1, now, run_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                    VALUES (?, ?, 'aborted', ?, 'visible', ?)
+                    """,
+                    (
+                        run_id,
+                        seq,
+                        json.dumps(
+                            {"interrupt_point": "orphan_run_cancelled"},
+                            ensure_ascii=False,
+                        ),
+                        now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                    VALUES (?, ?, 'completed', ?, 'visible', ?)
+                    """,
+                    (
+                        run_id,
+                        seq + 1,
+                        json.dumps({"subtype": "aborted", "elapsed_ms": 0}, ensure_ascii=False),
+                        now,
+                    ),
+                )
+        return self.get_agent_run(run_id)
 
     def get_agent_runs(self, run_ids: list[str]) -> list[dict[str, Any]]:
         normalized = [str(item) for item in dict.fromkeys(run_ids) if item]
@@ -2267,10 +2357,11 @@ class StoreService:
             result.append(item)
         return result
 
-    def create_subagent_run(
+    def create_subagent(
         self,
         *,
-        child_run_id: str,
+        subagent_id: str,
+        latest_run_id: str,
         workspace_id: str,
         parent_run_id: str,
         parent_session_id: str,
@@ -2282,37 +2373,37 @@ class StoreService:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO subagent_runs(
-                    child_run_id, workspace_id, parent_run_id, parent_session_id, child_session_id,
+                INSERT INTO subagents(
+                    subagent_id, workspace_id, parent_run_id, parent_session_id, child_session_id,
                     latest_run_id, name, task, status, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 (
-                    child_run_id,
+                    subagent_id,
                     workspace_id,
                     parent_run_id,
                     parent_session_id,
                     child_session_id,
-                    child_run_id,
+                    latest_run_id,
                     name,
                     task,
                     now,
                     now,
                 ),
             )
-        return self.get_subagent_run(child_run_id) or {}
+        return self.get_subagent(subagent_id) or {}
 
-    def get_subagent_run(self, child_run_id: str) -> dict[str, Any] | None:
+    def get_subagent(self, subagent_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM subagent_runs WHERE child_run_id = ?",
-                (child_run_id,),
+                "SELECT * FROM subagents WHERE subagent_id = ?",
+                (subagent_id,),
             ).fetchone()
         return dict(row) if row else None
 
-    def update_subagent_run(
+    def update_subagent(
         self,
-        child_run_id: str,
+        subagent_id: str,
         *,
         status: str,
         result_text: str | None = None,
@@ -2323,10 +2414,10 @@ class StoreService:
         with self._connect() as conn:
             conn.execute(
                 """
-                UPDATE subagent_runs
+                UPDATE subagents
                 SET status = ?, result_text = COALESCE(?, result_text), error_text = COALESCE(?, error_text),
                     updated_at = ?, finished_at = CASE WHEN ? THEN ? ELSE finished_at END
-                WHERE child_run_id = ?
+                WHERE subagent_id = ?
                 """,
                 (
                     status,
@@ -2335,25 +2426,37 @@ class StoreService:
                     now,
                     1 if terminal else 0,
                     now,
-                    child_run_id,
+                    subagent_id,
                 ),
             )
-        return self.get_subagent_run(child_run_id)
+        return self.get_subagent(subagent_id)
 
-    def set_subagent_latest_run(self, child_run_id: str, latest_run_id: str) -> None:
+    def set_subagent_latest_run(self, subagent_id: str, latest_run_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
-                UPDATE subagent_runs
-                SET latest_run_id = ?, status = 'running', updated_at = ?
-                WHERE child_run_id = ?
+                UPDATE subagents
+                SET latest_run_id = ?, status = 'running', cancel_requested_at = NULL, updated_at = ?
+                WHERE subagent_id = ?
                 """,
-                (latest_run_id, utcnow_iso(), child_run_id),
+                (latest_run_id, utcnow_iso(), subagent_id),
             )
+
+    def mark_subagent_cancel_requested(self, subagent_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE subagents
+                SET cancel_requested_at = COALESCE(cancel_requested_at, ?), updated_at = ?
+                WHERE subagent_id = ?
+                """,
+                (utcnow_iso(), utcnow_iso(), subagent_id),
+            )
+        return self.get_subagent(subagent_id)
 
     def mark_subagent_destroyed(
         self,
-        child_run_id: str,
+        subagent_id: str,
         *,
         destroyed_by: str = "user",
         destroy_reason: str = "",
@@ -2362,22 +2465,22 @@ class StoreService:
         with self._connect() as conn:
             conn.execute(
                 """
-                UPDATE subagent_runs
+                UPDATE subagents
                 SET destroyed_at = COALESCE(destroyed_at, ?),
                     destroyed_by = COALESCE(destroyed_by, ?),
                     destroy_reason = COALESCE(destroy_reason, ?),
                     updated_at = ?
-                WHERE child_run_id = ?
+                WHERE subagent_id = ?
                 """,
-                (now, destroyed_by, destroy_reason, now, child_run_id),
+                (now, destroyed_by, destroy_reason, now, subagent_id),
             )
-        return self.get_subagent_run(child_run_id)
+        return self.get_subagent(subagent_id)
 
-    def list_subagent_runs_for_session(self, session_id: str) -> list[dict[str, Any]]:
+    def list_subagents_for_session(self, session_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT * FROM subagent_runs
+                SELECT * FROM subagents
                 WHERE parent_session_id = ? AND destroyed_at IS NULL
                 ORDER BY created_at DESC
                 """,
@@ -2385,16 +2488,16 @@ class StoreService:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def list_destroyed_subagent_run_ids_for_session(self, session_id: str) -> set[str]:
+    def list_destroyed_subagent_ids_for_session(self, session_id: str) -> set[str]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT child_run_id FROM subagent_runs
+                SELECT subagent_id FROM subagents
                 WHERE parent_session_id = ? AND destroyed_at IS NOT NULL
                 """,
                 (session_id,),
             ).fetchall()
-        return {str(row["child_run_id"]) for row in rows}
+        return {str(row["subagent_id"]) for row in rows}
 
     def backfill_conversation_metadata(self, session_id: str, updates: dict[str, Any]) -> bool:
         """补全会话 metadata 中缺失的字段,已有非空值不会被覆盖。

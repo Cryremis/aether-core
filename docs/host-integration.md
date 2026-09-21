@@ -39,6 +39,7 @@ Runs and events are persisted in SQLite. SSE frames include `id: <seq>` so clien
 ## Subagent Model
 
 The main agent can use `subagent_create`, `subagent_send_message`, `subagent_wait`, `subagent_list`, `subagent_cancel`, and `subagent_get_result`. Subagents have isolated sessions, contexts, and runs, but share the parent workspace, files, cache, and runtime. They do not receive subagent tools, so the default depth is one layer. There are no low default concurrency/token caps; capacity is delegated to platform configuration and the scheduler.
+Subagent tools use the stable `subagent_id` handle. `latest_run_id` identifies only the current subagent conversation round and is never accepted as a tool handle. `subagent_cancel` waits for a terminal state and reports either `cancelled` or `already_*`.
 
 Subagents are user-visible as read-only cards in the workbench. Users cannot message them directly. When a subagent reaches a terminal state, AetherCore emits `subagent_result_ready`, stores its result, and appends the result to the parent agent context. If the parent is waiting, the wait resolves immediately.
 

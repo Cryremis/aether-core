@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs, formatTimestamp } from "../../pages/workbench/markdown";
 import type { ChatMessage } from "../../pages/workbench/types";
 import { useAppPreferences } from "../../i18n";
+import type { SubagentRunSummary } from "../../api/client";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type ChatTimelineProps = {
@@ -16,6 +17,7 @@ type ChatTimelineProps = {
   onRerunFromMessage?: (messageId: string) => void;
   onEditUserMessage?: (messageId: string, content: string) => void;
   onOpenSubagent?: (childSessionId: string) => void;
+  subagents?: SubagentRunSummary[];
   actionsDisabled?: boolean;
 };
 
@@ -815,8 +817,7 @@ function ToolResultPanel({ outputText, liveOutputText, status }: { outputText: s
 }
 
 type SubagentToolPayload = {
-  subagent_run_id?: string;
-  child_session_id?: string;
+  subagent_id?: string;
   name?: string;
   task?: string;
   status?: string;
@@ -827,11 +828,19 @@ function parseSubagentToolPayload(...sources: Array<string | null | undefined>):
     // 历史工具块可能没有 liveOutputText；该字段是可选数据，不能假设一定存在。
     if (typeof source !== "string" || !source.trim()) continue;
     const payload: SubagentToolPayload = {};
+    try {
+      const parsed = JSON.parse(source) as Record<string, unknown>;
+      if (typeof parsed.subagent_id === "string") payload.subagent_id = parsed.subagent_id;
+      if (typeof parsed.name === "string") payload.name = parsed.name;
+      if (typeof parsed.task === "string") payload.task = parsed.task;
+    } catch {
+      // 普通 CLI 文本输出不是 JSON，继续按行解析。
+    }
     for (const line of source.split(/\r\n|\r|\n/)) {
-      const match = /^(subagent_run_id|child_session_id|name|task|status): (.*)$/.exec(line);
+      const match = /^(subagent_id|name|task|status): (.*)$/.exec(line);
       if (match) payload[match[1] as keyof SubagentToolPayload] = match[2];
     }
-    if (payload.child_session_id || payload.subagent_run_id) return payload;
+    if (payload.subagent_id) return payload;
   }
   return null;
 }
@@ -842,6 +851,7 @@ function SubagentToolCard({
   outputText,
   liveOutputText,
   status,
+  subagent,
   onOpenSubagent,
 }: {
   title: string;
@@ -849,33 +859,32 @@ function SubagentToolCard({
   outputText: string;
   liveOutputText?: string;
   status: "running" | "done" | "aborted";
+  subagent: SubagentRunSummary;
   onOpenSubagent?: (childSessionId: string) => void;
 }) {
-  const payload = parseSubagentToolPayload(outputText, liveOutputText, argumentsText);
-  if (!payload?.child_session_id) return null;
-
   return (
     <button
       type="button"
       className={`subagent-tool-card ${status}`}
-      onClick={() => onOpenSubagent?.(payload.child_session_id as string)}
+      onClick={() => onOpenSubagent?.(subagent.child_session_id)}
     >
       <span className="subagent-tool-card__icon"><Icons.User /></span>
       <span className="subagent-tool-card__body">
-        <strong>{payload.name || "子代理"}</strong>
-        <span>{title === "subagent_send_message" ? "已发送跟进消息" : payload.task || "已创建子代理"}</span>
+        <strong>{subagent.name}</strong>
+        <span>{title === "subagent_send_message" ? "已发送跟进消息" : subagent.task || "已创建子代理"}</span>
       </span>
       <span className="subagent-tool-card__action">查看子代理</span>
     </button>
   );
 }
 
-function ToolCard({ title, argumentsText, outputText, liveOutputText, status, onOpenSubagent }: {
+function ToolCard({ title, argumentsText, outputText, liveOutputText, status, subagents, onOpenSubagent }: {
   title: string;
   argumentsText: string;
   outputText: string;
   liveOutputText?: string;
   status: "running" | "done" | "aborted";
+  subagents?: SubagentRunSummary[];
   onOpenSubagent?: (childSessionId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(status === "running");
@@ -890,7 +899,10 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status, on
 
   if (title === "subagent_create" || title === "subagent_send_message") {
     const payload = parseSubagentToolPayload(outputText, liveOutputText, argumentsText);
-    if (payload?.child_session_id) {
+    const subagent = payload?.subagent_id
+      ? subagents?.find((item) => item.subagent_id === payload.subagent_id)
+      : undefined;
+    if (subagent) {
       return (
         <SubagentToolCard
           title={title}
@@ -898,6 +910,7 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status, on
           outputText={outputText}
           liveOutputText={liveOutputText}
           status={status}
+          subagent={subagent}
           onOpenSubagent={onOpenSubagent}
         />
       );
@@ -1087,6 +1100,7 @@ export function ChatTimeline({
   onRerunFromMessage,
   onEditUserMessage,
   onOpenSubagent,
+  subagents,
   actionsDisabled = false,
 }: ChatTimelineProps) {
   const { hideReasoning } = useAppPreferences();
@@ -1163,6 +1177,7 @@ export function ChatTimeline({
                     outputText={segment.block.outputText}
                     liveOutputText={segment.block.liveOutputText}
                     status={segment.block.status}
+                    subagents={subagents}
                     onOpenSubagent={onOpenSubagent}
                   />
                 ) : (

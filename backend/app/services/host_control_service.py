@@ -209,7 +209,7 @@ class HostControlService:
             raise LookupError("运行不存在")
         conversation = self._conversation(platform, str(run.get("conversation_id") or ""))
         run["conversation_id"] = conversation["conversation_id"]
-        run["subagents"] = store_service.list_subagent_runs_for_session(str(conversation["session_id"]))
+        run["subagents"] = store_service.list_subagents_for_session(str(conversation["session_id"]))
         return run
 
     def list_run_events(
@@ -259,22 +259,22 @@ class HostControlService:
                     "message_id": str(message.get("message_id") or f"msg_{len(candidates)}"),
                     "run_id": str(message.get("run_id")) if message.get("run_id") else None,
                     "agent_id": None,
-                    "subagent_run_id": None,
+                    "subagent_id": None,
                     "content": str(message.get("content") or ""),
                     "created_at": str(message.get("timestamp") or conversation.get("updated_at") or ""),
                 }
             )
 
         if include_subagents:
-            for row in store_service.list_subagent_runs_for_session(str(conversation["session_id"])):
+            for row in store_service.list_subagents_for_session(str(conversation["session_id"])):
                 if not row.get("result_text") and not row.get("error_text"):
                     continue
                 candidates.append(
                     {
-                        "message_id": f"subagent_{row['child_run_id']}",
-                        "run_id": str(row["child_run_id"]),
+                        "message_id": f"subagent_{row['subagent_id']}",
+                        "run_id": str(row["latest_run_id"]),
                         "agent_id": str(row["name"]),
-                        "subagent_run_id": str(row["child_run_id"]),
+                        "subagent_id": str(row["subagent_id"]),
                         "content": str(row.get("result_text") or row.get("error_text") or ""),
                         "created_at": str(row.get("finished_at") or row.get("updated_at") or ""),
                     }

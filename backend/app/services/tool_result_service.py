@@ -176,7 +176,7 @@ class ToolResultRenderer:
             case "skill.loaded":
                 return self._render_skill(result.data)
             case "subagent.created":
-                return self._render_optional_value("subagent_run_id", result.data.get("subagent_run_id"))
+                return self._render_optional_value("subagent_id", result.data.get("subagent_id"))
             case "subagent.listed":
                 return self._render_subagents(result.data.get("subagents"))
             case "subagent.waited":
@@ -184,8 +184,13 @@ class ToolResultRenderer:
                     *self._render_optional_value("status", result.data.get("status")),
                     *self._render_subagents(result.data.get("subagents")),
                 ]
-            case "subagent.message_sent" | "subagent.cancel_requested":
+            case "subagent.message_sent":
                 return self._render_optional_value("status", result.data.get("status"))
+            case "subagent.cancelled":
+                return [
+                    *self._render_optional_value("status", result.data.get("status")),
+                    *self._render_optional_value("cancel_outcome", result.data.get("cancel_outcome")),
+                ]
             case "subagent.result":
                 return self._render_subagent_result(result.data)
             case "web.fetch" | "web.fetched":
@@ -321,13 +326,13 @@ class ToolResultRenderer:
         for row in rows[:30]:
             if not isinstance(row, dict):
                 continue
-            run_id = str(row.get("subagent_run_id") or row.get("child_run_id") or "-")
+            subagent_id = str(row.get("subagent_id") or "-")
             status = str(row.get("status") or "-")
             name = str(row.get("name") or "-")
             action = row.get("current_action")
             action_label = str(action.get("label") or "") if isinstance(action, dict) else ""
             suffix = f"  {action_label}" if action_label else ""
-            lines.append(self._clip_line(f"{run_id}  {status:<12}  {name}{suffix}", 240))
+            lines.append(self._clip_line(f"{subagent_id}  {status:<12}  {name}{suffix}", 240))
         if len(rows) > 30:
             lines.append(f"[truncated: {len(rows) - 30} more subagents]")
         return lines
