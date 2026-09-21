@@ -58,6 +58,9 @@ class AgentRunService:
             existing_run_id = self._session_runs.get(session.session_id)
             if existing_run_id and existing_run_id in self._runs:
                 raise RuntimeError("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
+            # 内存状态只覆盖当前进程；数据库状态是跨进程、跨重启的最终并发护栏。
+            if store_service.get_active_agent_run_for_session(session.session_id) is not None:
+                raise RuntimeError("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
 
             run_id = f"run_{uuid.uuid4().hex}"
             started_at = _utcnow_iso()

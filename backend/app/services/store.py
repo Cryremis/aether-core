@@ -36,6 +36,9 @@ class StoreUser:
 
 
 class StoreService:
+    ACTIVE_AGENT_RUN_STATUSES = frozenset({"queued", "running", "waiting_input"})
+    TERMINAL_AGENT_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "timed_out"})
+
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._db_path = settings.metadata_db_path
@@ -425,6 +428,9 @@ class StoreService:
             conn.execute("DROP TABLE IF EXISTS session_runtimes")
             self._migrate_roles(conn)
             self._backfill_platform_admin_metadata(conn)
+        # 服务进程重启后，内存中的执行任务已经不存在；数据库里的 active run
+        # 只能是崩溃/重启遗留的孤儿状态，必须在服务可用前统一收敛为 failed。
+        self.recover_interrupted_agent_runs()
         # 文件迁移放在 DB schema 迁移之后、服务可用之前；失败必须阻断启动，避免双轨读取。
         from app.services.workspace_service import workspace_service
 
@@ -2045,30 +2051,119 @@ class StoreService:
         trace_id: str | None = None,
     ) -> dict[str, Any]:
         now = utcnow_iso()
+        placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
+        active_statuses = tuple(self.ACTIVE_AGENT_RUN_STATUSES)
         with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO agent_runs(
-                    run_id, session_id, conversation_id, parent_run_id, root_run_id,
-                    agent_kind, status, request_json, idempotency_key, trace_id, created_at, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    session_id,
-                    conversation_id,
-                    parent_run_id,
-                    root_run_id or parent_run_id or run_id,
-                    agent_kind,
-                    status,
-                    json.dumps(request or {}, ensure_ascii=False),
-                    idempotency_key,
-                    trace_id,
-                    now,
-                    now if status in {"running", "waiting_input"} else None,
-                ),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO agent_runs(
+                        run_id, session_id, conversation_id, parent_run_id, root_run_id,
+                        agent_kind, status, request_json, idempotency_key, trace_id, created_at, started_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        session_id,
+                        conversation_id,
+                        parent_run_id,
+                        root_run_id or parent_run_id or run_id,
+                        agent_kind,
+                        status,
+                        json.dumps(request or {}, ensure_ascii=False),
+                        idempotency_key,
+                        trace_id,
+                        now,
+                        now if status in {"running", "waiting_input"} else None,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                conflict = conn.execute(
+                    f"""
+                    SELECT 1 FROM agent_runs
+                    WHERE session_id = ? AND status IN ({placeholders})
+                    LIMIT 1
+                    """,
+                    (session_id, *active_statuses),
+                ).fetchone()
+                if conflict is not None:
+                    raise RuntimeError("当前会话已有执行中的任务，请等待当前任务结束后再继续。") from exc
+                raise
         return self.get_agent_run(run_id) or {}
+
+    def recover_interrupted_agent_runs(self) -> int:
+        placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
+        active_statuses = tuple(self.ACTIVE_AGENT_RUN_STATUSES)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT run_id, event_cursor
+                FROM agent_runs
+                WHERE status IN ({placeholders})
+                ORDER BY created_at ASC
+                """,
+                active_statuses,
+            ).fetchall()
+            for row in rows:
+                now = utcnow_iso()
+                error = {
+                    "message": "服务重启导致任务中断",
+                    "recovered": True,
+                }
+                seq = int(row["event_cursor"]) + 1
+                update_result = conn.execute(
+                    f"""
+                    UPDATE agent_runs
+                    SET status = 'failed',
+                        error_json = ?,
+                        event_cursor = ?,
+                        finished_at = ?
+                    WHERE run_id = ? AND status IN ({placeholders})
+                    """,
+                    (
+                        json.dumps(error, ensure_ascii=False),
+                        seq + 1,
+                        now,
+                        row["run_id"],
+                        *active_statuses,
+                    ),
+                )
+                if update_result.rowcount == 0:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                    VALUES (?, ?, 'error', ?, 'visible', ?)
+                    """,
+                    (row["run_id"], seq, json.dumps(error, ensure_ascii=False), now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                    VALUES (?, ?, 'completed', ?, 'visible', ?)
+                    """,
+                    (
+                        row["run_id"],
+                        seq + 1,
+                        json.dumps({"subtype": "error", "elapsed_ms": 0}, ensure_ascii=False),
+                        now,
+                    ),
+                )
+        return len(rows)
+
+    def get_active_agent_run_for_session(self, session_id: str) -> dict[str, Any] | None:
+        placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT * FROM agent_runs
+                WHERE session_id = ? AND status IN ({placeholders})
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id, *self.ACTIVE_AGENT_RUN_STATUSES),
+            ).fetchone()
+        return dict(row) if row else None
 
     def find_agent_run_by_idempotency(self, conversation_id: str, idempotency_key: str) -> dict[str, Any] | None:
         with self._connect() as conn:
