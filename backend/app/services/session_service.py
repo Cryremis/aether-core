@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import shutil
 import time
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -30,6 +32,8 @@ class SessionService:
 
     def __init__(self) -> None:
         self._sessions: dict[str, AgentSession] = {}
+        self._metadata_locks: dict[str, threading.RLock] = {}
+        self._metadata_locks_guard = threading.Lock()
 
     def get_or_create(
         self,
@@ -49,6 +53,7 @@ class SessionService:
 
         new_id = session_id or f"sess_{uuid.uuid4().hex}"
         session = self._load_from_disk(new_id) or AgentSession(session_id=new_id)
+        self.reconcile_active_run_view(session)
         resolved_workspace_id = session.workspace_id or workspace_id or self._find_workspace_id(new_id)
         if resolved_workspace_id is None:
             workspace = workspace_service.create_workspace(
@@ -107,6 +112,10 @@ class SessionService:
 
     def _metadata_path(self, session_id: str) -> Path:
         return settings.sessions_root / "session-state" / session_id / "session.json"
+
+    def _metadata_lock(self, session_id: str) -> threading.RLock:
+        with self._metadata_locks_guard:
+            return self._metadata_locks.setdefault(session_id, threading.RLock())
 
     def attach_host(
         self,
@@ -253,6 +262,19 @@ class SessionService:
             active_run_view=payload.get("active_run_view"),
         )
 
+    def reconcile_active_run_view(self, session: AgentSession) -> None:
+        """把磁盘上的运行快照与数据库 run 状态对齐，避免重启后 UI 永远显示执行中。"""
+        active_view = session.active_run_view
+        if not active_view:
+            return
+        run_id = str(active_view.get("run_id") or "")
+        if not run_id:
+            session.active_run_view = None
+            return
+        run = store_service.get_agent_run(run_id)
+        if run is None or str(run.get("status")) in store_service.TERMINAL_AGENT_RUN_STATUSES:
+            session.active_run_view = None
+
     def _write_metadata(self, session: AgentSession) -> None:
         if not session.workspace_id:
             raise RuntimeError("会话尚未绑定 Workspace")
@@ -295,12 +317,26 @@ class SessionService:
         }
         metadata_path = self._metadata_path(session.session_id)
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = metadata_path.with_suffix(".json.tmp")
-        temporary_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        temporary_path = metadata_path.with_name(
+            f"{metadata_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         )
-        temporary_path.replace(metadata_path)
+
+        # Windows 下目标文件可能被短暂的杀毒/索引/读取占用；串行化同会话写入，
+        # 并用唯一临时文件避免两个写入方抢占同一个 .tmp。
+        with self._metadata_lock(session.session_id):
+            try:
+                temporary_path.write_text(serialized, encoding="utf-8")
+                for attempt in range(20):
+                    try:
+                        os.replace(temporary_path, metadata_path)
+                        return
+                    except PermissionError:
+                        if attempt == 19:
+                            raise
+                        time.sleep(0.05)
+            finally:
+                temporary_path.unlink(missing_ok=True)
 
     def delete_session(self, session_id: str) -> bool:
         session = self._sessions.get(session_id)
