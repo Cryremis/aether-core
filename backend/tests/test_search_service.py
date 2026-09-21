@@ -71,6 +71,7 @@ def test_grep_shell_quotes_pattern_and_glob(monkeypatch, tmp_path):
 
     command = recorded["command"]
     assert recorded["shell"] == "bash"
+    assert "--color never" in command
     assert "cd '/workspace/work/repo dir' &&" in command
     assert "'hello; touch /tmp/pwned'" in command
     assert "'*.py'" in command
@@ -109,6 +110,7 @@ def test_glob_uses_workspace_root_for_relative_path(monkeypatch, tmp_path):
 
     asyncio.run(execute())
     assert "cd /workspace/work/repo &&" in recorded["command"]
+    assert "--color never" in recorded["command"]
 
 
 def test_glob_defaults_to_workspace_root(monkeypatch, tmp_path):

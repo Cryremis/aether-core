@@ -65,7 +65,7 @@ class RipgrepService:
         """在沙箱内执行 glob 搜索。"""
         start = time.perf_counter()
 
-        args = ["rg", "--files", "--glob", pattern, "--sort=modified"]
+        args = ["rg", "--files", "--color", "never", "--glob", pattern, "--sort=modified"]
         if hidden:
             args.append("--hidden")
         if no_ignore:
@@ -124,7 +124,7 @@ class RipgrepService:
         """在沙箱内执行 grep 搜索。"""
         start = time.perf_counter()
 
-        args = ["rg", "--max-columns", str(MAX_COLUMNS)]
+        args = ["rg", "--color", "never", "--max-columns", str(MAX_COLUMNS)]
 
         if hidden:
             args.append("--hidden")
