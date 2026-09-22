@@ -33,8 +33,8 @@ class HostRegistry:
                 conversation_id=request.conversation_id,
             )
 
-        # Explicit identifiers select an existing resource; authorization failure
-        # must never fall through to session creation or host-state mutation.
+        # 显式 ID 只能选择已有会话；归属校验失败时必须拒绝，
+        # 不得继续创建会话或修改宿主状态。
         if request.session_id or request.conversation_id:
             if (conversation is None
                 or conversation.get("deleted_at") is not None
