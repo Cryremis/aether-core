@@ -21,21 +21,31 @@ class HostRegistry:
             raise ValueError("context.user.id 或 context.user.account_id 不能为空")
         external_user_name = request.context.user.get("name", "Host User")
 
-        conversation = store_service.find_host_conversation(
-            platform_id=int(platform["platform_id"]),
-            external_user_id=str(external_user_id),
-            conversation_key=request.conversation_key,
-            conversation_id=request.conversation_id,
-        )
-
-        # 幂等保护: find_host_conversation 按 conversation_key/conversation_id 查询,
-        # 当同一 session_id 换了 conversation_key 再绑定时会查不到。此时按 session_id 兜底,
-        # 命中已有对话则复用,避免对同一 session_id 重复 INSERT 撞 UNIQUE 约束。
-        if conversation is None and request.session_id:
+        if request.session_id:
             conversation = store_service.get_conversation_by_session(request.session_id)
+        elif request.conversation_id:
+            conversation = store_service.get_conversation(request.conversation_id)
+        else:
+            conversation = store_service.find_host_conversation(
+                platform_id=int(platform["platform_id"]),
+                external_user_id=str(external_user_id),
+                conversation_key=request.conversation_key,
+                conversation_id=request.conversation_id,
+            )
+
+        # 显式 ID 只能选择已有会话；归属校验失败时必须拒绝，
+        # 不得继续创建会话或修改宿主状态。
+        if request.session_id or request.conversation_id:
+            if (conversation is None
+                or conversation.get("deleted_at") is not None
+                or conversation.get("platform_id") != platform["platform_id"]
+                or conversation.get("external_user_id") != str(external_user_id)
+                or (request.conversation_id and conversation.get("conversation_id") != request.conversation_id)
+            ):
+                raise ValueError("目标会话不存在、已删除或与当前平台、用户、对话不匹配")
 
         if conversation is None:
-            session = session_service.get_or_create(request.session_id)
+            session = session_service.get_or_create()
             conversation = store_service.create_conversation(
                 session_id=session.session_id,
                 title="新对话",
