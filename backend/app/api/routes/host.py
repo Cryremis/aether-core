@@ -391,28 +391,6 @@ def get_host_tools(
     )
 
 
-@router.get("/sessions/{session_id}/binding")
-def get_host_session_binding(
-    session_id: str,
-    external_user_id: str = Query(min_length=1, max_length=256),
-    platform: dict = Depends(require_platform_secret),
-) -> ApiResponse:
-    """Verify ownership using persisted conversation metadata, never callback context."""
-    conversation = store_service.get_conversation_by_session(session_id)
-    if (conversation is None
-        or conversation.get("platform_id") != platform["platform_id"]
-        or conversation.get("external_user_id") != external_user_id):
-        raise HTTPException(status_code=404, detail="目标宿主会话不存在")
-    session = session_service.get_or_create(session_id)
-    return ApiResponse(data={
-        "session_id": session_id,
-        "conversation_id": conversation["conversation_id"],
-        "platform_key": platform["platform_key"],
-        "external_user_id": external_user_id,
-        "page_context": session.host_context.get("page", {}),
-    })
-
-
 @router.put("/sessions/{session_id}/tools")
 def replace_host_tools(
     session_id: str,

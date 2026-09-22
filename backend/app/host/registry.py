@@ -23,12 +23,8 @@ class HostRegistry:
 
         if request.session_id:
             conversation = store_service.get_conversation_by_session(request.session_id)
-            if conversation is not None and (
-                conversation.get("platform_id") != platform["platform_id"]
-                or conversation.get("external_user_id") != str(external_user_id)
-                or (request.conversation_id and conversation.get("conversation_id") != request.conversation_id)
-            ):
-                raise ValueError("会话与当前平台、用户或对话不匹配")
+        elif request.conversation_id:
+            conversation = store_service.get_conversation(request.conversation_id)
         else:
             conversation = store_service.find_host_conversation(
                 platform_id=int(platform["platform_id"]),
@@ -37,8 +33,19 @@ class HostRegistry:
                 conversation_id=request.conversation_id,
             )
 
+        # Explicit identifiers select an existing resource; authorization failure
+        # must never fall through to session creation or host-state mutation.
+        if request.session_id or request.conversation_id:
+            if (conversation is None
+                or conversation.get("deleted_at") is not None
+                or conversation.get("platform_id") != platform["platform_id"]
+                or conversation.get("external_user_id") != str(external_user_id)
+                or (request.conversation_id and conversation.get("conversation_id") != request.conversation_id)
+            ):
+                raise ValueError("目标会话不存在、已删除或与当前平台、用户、对话不匹配")
+
         if conversation is None:
-            session = session_service.get_or_create(request.session_id)
+            session = session_service.get_or_create()
             conversation = store_service.create_conversation(
                 session_id=session.session_id,
                 title="新对话",
