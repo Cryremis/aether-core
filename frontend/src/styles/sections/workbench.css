@@ -3783,6 +3783,7 @@ details[open]::details-content {
 .schedule-ghost-btn {
   display: inline-flex;
   min-height: 34px;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 5px;
@@ -3790,6 +3791,7 @@ details[open]::details-content {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 650;
+  white-space: nowrap;
   cursor: pointer;
   transition: transform .16s ease, box-shadow .16s ease, background .16s ease, color .16s ease;
 }
@@ -3865,12 +3867,9 @@ details[open]::details-content {
 .schedule-filter {
   display: flex;
   gap: 6px;
-  overflow-x: auto;
+  flex-wrap: wrap;
   padding-bottom: 2px;
-  scrollbar-width: none;
 }
-
-.schedule-filter::-webkit-scrollbar { display: none; }
 
 .schedule-filter__chip {
   min-height: 30px;
