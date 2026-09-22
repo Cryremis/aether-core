@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 
 import {
   createSchedule,
@@ -12,6 +13,7 @@ import {
   type ScheduleTask,
 } from "../../api/client";
 import type { WorkbenchConversation } from "../../pages/workbench/types";
+import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type SchedulePanelProps = {
   conversations: WorkbenchConversation[];
@@ -136,8 +138,7 @@ function localInputToIso(value: string) {
 }
 
 function taskToForm(task: ScheduleTask): ScheduleForm {
-  const timedSchedule =
-    task.schedule.type === "daily" || task.schedule.type === "workday" || task.schedule.type === "weekly";
+  const timedSchedule = task.schedule.type !== "interval" && task.schedule.type !== "cron";
   return {
     ...emptyForm,
     title: task.title,
@@ -147,7 +148,7 @@ function taskToForm(task: ScheduleTask): ScheduleForm {
     newSessionTitlePrefix: task.new_session_title_prefix ?? "",
     workspacePolicy: task.workspace_policy,
     frequency: task.schedule.type,
-    time: timedSchedule ? task.schedule.time : "09:00",
+    time: timedSchedule && "time" in task.schedule ? task.schedule.time : "09:00",
     weekdays: task.schedule.type === "weekly" ? task.schedule.weekdays : [1],
     intervalMinutes:
       task.schedule.type === "interval" ? Math.round(task.schedule.every_seconds / 60) : 15,
@@ -348,30 +349,34 @@ export function SchedulePanel({ conversations, sessionId, onSessionSelect }: Sch
 
   return (
     <section className="schedule-panel">
-      <header className="schedule-panel__header">
-        <div>
-          <h3>定时任务</h3>
-          <p>{total} 个任务 · 支持固定会话与每次新会话</p>
-        </div>
-        <button type="button" className="schedule-primary-btn" onClick={openCreate}>
-          <span aria-hidden>+</span> 新建
+      <div className="capability-section-title">
+        <h3 className="sub-title">
+          定时任务
+          <span className="capability-count">{total}</span>
+        </h3>
+        <button
+          type="button"
+          className="capability-add-icon"
+          aria-label="新建定时任务"
+          title="新建定时任务"
+          onClick={openCreate}
+        >
+          <Icons.Plus />
         </button>
-      </header>
-
-      <div className="schedule-filter" role="tablist" aria-label="任务状态筛选">
-        {filters.map((filter) => (
-          <button
-            key={filter.value}
-            type="button"
-            className={`schedule-filter__chip${statusFilter === filter.value ? " is-active" : ""}`}
-            role="tab"
-            aria-selected={statusFilter === filter.value}
-            onClick={() => setStatusFilter(filter.value)}
-          >
-            {filter.label}
-          </button>
-        ))}
       </div>
+
+      <select
+        className="schedule-filter-select"
+        value={statusFilter}
+        aria-label="筛选任务状态"
+        onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
+      >
+        {filters.map((filter) => (
+          <option key={filter.value} value={filter.value}>
+            {filter.label}
+          </option>
+        ))}
+      </select>
 
       {error ? (
         <div className="schedule-alert" role="alert">
@@ -555,7 +560,7 @@ export function SchedulePanel({ conversations, sessionId, onSessionSelect }: Sch
         })}
       </div>
 
-      {editorOpen ? (
+      {editorOpen ? createPortal(
         <div className="schedule-editor-overlay" role="dialog" aria-modal="true" aria-labelledby="schedule-editor-title">
           <form className="schedule-editor" onSubmit={submit}>
             <header className="schedule-editor__header">
@@ -829,7 +834,8 @@ export function SchedulePanel({ conversations, sessionId, onSessionSelect }: Sch
               </div>
             </footer>
           </form>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </section>
   );
