@@ -22,6 +22,9 @@ from app.services.file_service import file_service
 from app.services.llm_config_service import RuntimeLlmConfig, llm_config_service
 from app.services.network_service import network_service
 from app.services.runtime_state import runtime_state_service
+from app.schemas.schedule import ScheduleCreateRequest, ScheduleTargetRequest, ScheduleUpdateRequest
+from app.services.scheduling.errors import ScheduleError, SchedulePermissionError
+from app.services.scheduling.service import schedule_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.tool_execution_service import ToolOutputEvent, tool_execution_service
@@ -404,6 +407,118 @@ class ToolService:
             self._handle_rebuild_runtime,
         )
 
+        self._registry.register(
+            "schedule_create",
+            "创建定时任务。目标默认是当前会话；如需每次独立上下文，显式设置 target_mode 为 new_session_per_run。",
+            {
+                "properties": {
+                    "title": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "prompt": {"type": "string", "minLength": 1},
+                    "target_mode": {
+                        "type": "string",
+                        "enum": ["existing_session", "new_session_per_run"],
+                    },
+                    "session_id": {"type": "string"},
+                    "new_session_title_prefix": {"type": "string", "maxLength": 80},
+                    "workspace_policy": {
+                        "type": "string",
+                        "enum": ["isolated", "shared_with_parent"],
+                    },
+                    "schedule": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["interval", "daily", "workday", "weekly", "cron"],
+                            },
+                            "every_seconds": {"type": "integer", "minimum": 60},
+                            "time": {"type": "string"},
+                            "weekdays": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 7}},
+                            "expression": {"type": "string"},
+                        },
+                        "required": ["type"],
+                        "additionalProperties": False,
+                    },
+                    "timezone": {"type": "string"},
+                    "starts_at": {"type": "string", "format": "date-time"},
+                    "ends_at": {"type": "string", "format": "date-time"},
+                    "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 7200},
+                    "max_runs": {"type": "integer", "minimum": 1},
+                },
+                "required": ["title", "prompt", "schedule"],
+                "additionalProperties": False,
+            },
+            self._handle_schedule_create,
+        )
+        self._registry.register(
+            "schedule_list",
+            "列出当前用户或平台身份可见的定时任务。",
+            {
+                "properties": {
+                    "status": {"type": "string"},
+                    "search": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+                "additionalProperties": False,
+            },
+            self._handle_schedule_list,
+        )
+        self._registry.register(
+            "schedule_update",
+            "更新当前身份有权限管理的定时任务，必须携带 expected_revision 防止覆盖并发修改。",
+            {
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "expected_revision": {"type": "integer", "minimum": 1},
+                    "title": {"type": "string"},
+                    "prompt": {"type": "string"},
+                    "schedule": {"type": "object"},
+                    "timezone": {"type": "string"},
+                    "starts_at": {"type": "string", "format": "date-time"},
+                    "ends_at": {"type": "string", "format": "date-time"},
+                },
+                "required": ["task_id", "expected_revision"],
+                "additionalProperties": False,
+            },
+            self._handle_schedule_update,
+        )
+        self._registry.register(
+            "schedule_pause",
+            "暂停一个定时任务。",
+            {
+                "properties": {
+                    "task_id": {"type": "string"},
+                },
+                "required": ["task_id"],
+                "additionalProperties": False,
+            },
+            self._handle_schedule_pause,
+        )
+        self._registry.register(
+            "schedule_resume",
+            "恢复一个已暂停的定时任务。",
+            {
+                "properties": {
+                    "task_id": {"type": "string"},
+                },
+                "required": ["task_id"],
+                "additionalProperties": False,
+            },
+            self._handle_schedule_resume,
+        )
+        self._registry.register(
+            "schedule_delete",
+            "归档一个定时任务并停止后续触发，保留执行历史。",
+            {
+                "properties": {
+                    "task_id": {"type": "string"},
+                },
+                "required": ["task_id"],
+                "additionalProperties": False,
+            },
+            self._handle_schedule_delete,
+        )
+
         # 注册搜索工具（来自 search_service）
         for schema_info in search_service.get_schemas():
             self._registry.register(
@@ -412,6 +527,153 @@ class ToolService:
                 schema_info["parameters"],
                 self._handle_glob if schema_info["name"] == "glob" else self._handle_grep,
                 required=["pattern"],
+            )
+
+    async def _handle_schedule_create(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        return await self._handle_schedule_tool(
+            session, {**arguments, "action": "schedule_create"}
+        )
+
+    async def _handle_schedule_list(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        return await self._handle_schedule_tool(
+            session, {**arguments, "action": "schedule_list"}
+        )
+
+    async def _handle_schedule_update(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        return await self._handle_schedule_tool(
+            session, {**arguments, "action": "schedule_update"}
+        )
+
+    async def _handle_schedule_pause(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        return await self._handle_schedule_tool(
+            session, {**arguments, "action": "schedule_pause"}
+        )
+
+    async def _handle_schedule_resume(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        return await self._handle_schedule_tool(
+            session, {**arguments, "action": "schedule_resume"}
+        )
+
+    async def _handle_schedule_delete(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        return await self._handle_schedule_tool(
+            session, {**arguments, "action": "schedule_delete"}
+        )
+
+    async def _handle_schedule_tool(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        """Agent 定时任务工具入口；身份来自当前会话，不接受调用方伪造归属。"""
+        identity = schedule_service.identity_from_session(session)
+        action = arguments.get("action")
+        try:
+            if action == "schedule_create":
+                target_mode = str(arguments.get("target_mode") or "existing_session")
+                target_session_id = arguments.get("session_id") or (
+                    session.session_id if target_mode == "existing_session" else None
+                )
+                request = ScheduleCreateRequest(
+                    title=str(arguments["title"]),
+                    prompt=str(arguments["prompt"]),
+                    target=ScheduleTargetRequest(
+                        mode=target_mode,
+                        session_id=target_session_id,
+                        new_session_title_prefix=arguments.get("new_session_title_prefix"),
+                        workspace_policy=str(arguments.get("workspace_policy") or "isolated"),
+                    ),
+                    schedule=arguments["schedule"],
+                    timezone=str(arguments.get("timezone") or "UTC"),
+                    starts_at=arguments.get("starts_at"),
+                    ends_at=arguments.get("ends_at"),
+                )
+                task = schedule_service.create(
+                    request,
+                    identity=identity,
+                    created_via="agent",
+                    created_session_id=session.session_id,
+                )
+                return ToolExecutionResult.success(
+                    "schedule.created",
+                    "定时任务已创建，等待用户确认" if task.status.value == "pending_approval" else "定时任务已创建",
+                    task.model_dump(mode="json"),
+                )
+
+            if action == "schedule_list":
+                items, total = schedule_service.list(
+                    identity=identity,
+                    status=arguments.get("status"),
+                    search=arguments.get("search"),
+                    limit=int(arguments.get("limit", 20)),
+                )
+                return ToolExecutionResult.success(
+                    "schedule.listed",
+                    f"找到 {total} 个定时任务",
+                    {"total": total, "items": [item.model_dump(mode="json") for item in items]},
+                )
+
+            task_id = str(arguments["task_id"])
+            if action == "schedule_update":
+                task = schedule_service.update(
+                    task_id,
+                    ScheduleUpdateRequest.model_validate(arguments),
+                    identity=identity,
+                )
+            elif action == "schedule_pause":
+                task = schedule_service.pause(task_id, identity=identity)
+            elif action == "schedule_resume":
+                task = schedule_service.resume(task_id, identity=identity)
+            elif action == "schedule_delete":
+                task = schedule_service.archive(task_id, identity=identity)
+            else:
+                return ToolExecutionResult.failure(
+                    "schedule.error",
+                    "未知定时任务操作",
+                    code="SCHEDULE_ACTION_NOT_FOUND",
+                    message=f"不支持的定时任务操作: {action}",
+                )
+            return ToolExecutionResult.success(
+                "schedule.updated",
+                "定时任务已更新",
+                task.model_dump(mode="json"),
+            )
+        except SchedulePermissionError as exc:
+            return ToolExecutionResult.failure(
+                "schedule.error",
+                "无权操作目标定时任务",
+                code="SCHEDULE_PERMISSION_DENIED",
+                message=str(exc),
+            )
+        except ScheduleError as exc:
+            return ToolExecutionResult.failure(
+                "schedule.error",
+                "定时任务配置无效",
+                code="SCHEDULE_INVALID",
+                message=str(exc),
             )
 
     async def _handle_glob(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:

@@ -27,6 +27,7 @@ AetherCore 是一个 Agent-as-a-Service 平台，把共享 Agent Runtime、嵌�
 - 用户级和平台级 LLM 覆盖配置
 - 按平台注入文件、技能、工作区内容的基线能力
 - 平台运行镜像管理与审计视图
+- 带审批、执行历史和租约恢复的持久化定时 Agent 任务
 
 ## Agent 能力清单
 
@@ -39,6 +40,7 @@ AetherCore 是一个 Agent-as-a-Service 平台，把共享 Agent Runtime、嵌�
 - 联网搜索与获取
 - 长上下文自动压缩
 - 会话分支、编辑消息、重跑对话
+- 通过内置工具创建和管理定时任务
 
 ## 产品预览
 
@@ -88,6 +90,14 @@ flowchart LR
 - 运行带工具调用的 Agent，并把命令执行隔离在沙箱中。
 - 支持“聊天 + 文件 + 技能 + 产物输出”的复合型工作流。
 - 按平台注入不同的默认工作区内容和配置。
+
+## 定时 Agent 任务
+
+AetherCore 支持间隔、每天、工作日、每周和标准 5 字段 Cron 频率。任务可以固定在某个会话中执行，也可以每次触发创建独立会话。调度状态持久化在 SQLite 中，触发推进与执行记录生成在同一事务内完成，Worker 使用租约机制在进程重启后恢复异常执行。
+
+工作台侧栏提供“定时”视图，支持创建、审批、暂停、恢复、编辑、立即执行、查看历史和归档任务。Agent 也可以调用 `schedule_create`、`schedule_list`、`schedule_update`、`schedule_pause`、`schedule_resume` 和 `schedule_delete`；默认情况下，Agent 创建的任务需要用户确认后才会开始触发。
+
+API 前缀为 `/api/v1/agent/schedules`。调度器默认启用；设置 `SCHEDULER_ENABLED=false` 可以停止后台触发，但任务管理 API 和历史仍可访问。其他默认值为 `SCHEDULER_TICK_SECONDS=5`、`SCHEDULER_WORKERS=4`、`SCHEDULER_LEASE_SECONDS=120`、`SCHEDULE_MAX_PER_OWNER=50`、`SCHEDULE_MIN_INTERVAL_SECONDS=60`、`AGENT_SCHEDULES_REQUIRE_APPROVAL=true`。
 
 ## 快速开始
 

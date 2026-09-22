@@ -3751,6 +3751,196 @@ details[open]::details-content {
   margin: 2px 0 0;
 }
 
+/* ================= 定时任务 ================= */
+.schedule-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.schedule-panel__toolbar,
+.schedule-card__actions,
+.schedule-form__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.schedule-panel__toolbar {
+  justify-content: space-between;
+}
+
+.schedule-panel__select,
+.schedule-form input,
+.schedule-form select,
+.schedule-form textarea {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(203, 213, 225, 0.9);
+  background: var(--surface-0);
+  color: var(--text-primary);
+  padding: 9px 10px;
+  font-size: 13px;
+}
+
+.schedule-panel__error {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  color: var(--error);
+  font-size: 12px;
+}
+
+.schedule-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.schedule-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: var(--surface-0);
+  box-shadow: 0 18px 40px -34px rgba(15, 23, 42, 0.28);
+}
+
+.schedule-card__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.schedule-card__header strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedule-card__header p,
+.schedule-card__meta,
+.schedule-card__failure,
+.schedule-panel__total {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.schedule-card__meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.schedule-card__failure {
+  color: var(--error);
+  overflow-wrap: anywhere;
+}
+
+.schedule-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.schedule-status--paused,
+.schedule-status--skipped,
+.schedule-status--cancelled {
+  background: color-mix(in srgb, var(--brand-amber) 14%, transparent);
+  color: var(--brand-amber);
+}
+
+.schedule-status--failed,
+.schedule-status--timed_out,
+.schedule-status--expired,
+.schedule-status--archived {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error);
+}
+
+.schedule-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.schedule-run {
+  display: grid;
+  grid-template-columns: 64px auto 42px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.schedule-run > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedule-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  background: var(--surface-0);
+}
+
+.schedule-form h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.schedule-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.schedule-form__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.schedule-form__weekdays {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.schedule-form__weekdays label {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
 @media (max-width: 720px) {
   .market-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -3767,6 +3957,11 @@ details[open]::details-content {
 
 @media (max-width: 640px) {
   .capability-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .schedule-form__grid,
+  .schedule-run {
     grid-template-columns: minmax(0, 1fr);
   }
 

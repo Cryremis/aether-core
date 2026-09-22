@@ -20,6 +20,7 @@ from app.api.routes.platform_runtime_images import router as platform_runtime_im
 from app.api.routes.platform_sandbox_proxy import router as platform_sandbox_proxy_router
 from app.api.routes.prompts import router as prompts_router
 from app.api.routes.runtimes import router as runtimes_router
+from app.api.routes.schedules import router as schedules_router
 from app.api.routes.sessions import router as sessions_router
 from app.api.routes.skills import router as skills_router
 from app.api.routes.capabilities import router as capabilities_router
@@ -28,6 +29,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.workspace_runtime_service import workspace_runtime_service
 from app.services.skill_service import skill_service
+from app.services.scheduling.scheduler import schedule_scheduler
 from app.services.store import store_service
 
 faulthandler.enable()
@@ -39,9 +41,13 @@ store_service.initialize()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     await workspace_runtime_service.start_background_tasks()
+    if settings.scheduler_enabled:
+        await schedule_scheduler.start()
     try:
         yield
     finally:
+        if settings.scheduler_enabled:
+            await schedule_scheduler.stop()
         await workspace_runtime_service.stop_background_tasks()
 
 
@@ -72,6 +78,7 @@ app.include_router(skills_router)
 app.include_router(capabilities_router)
 app.include_router(extensions_router)
 app.include_router(sessions_router)
+app.include_router(schedules_router)
 
 
 @app.get("/")

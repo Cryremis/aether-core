@@ -101,7 +101,7 @@ export type ContextStatus = {
   detail: string;
 };
 
-export type SidebarView = "sessions" | "files" | "skills";
+export type SidebarView = "sessions" | "files" | "skills" | "schedules";
 
 export type LlmDialogState = {
   enabled: boolean;

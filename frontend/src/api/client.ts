@@ -1697,6 +1697,159 @@ export async function destroySubagent(sessionId: string, subagentId: string) {
   return response.json();
 }
 
+export type ScheduleSpec =
+  | { type: "interval"; every_seconds: number; anchor_at?: string | null }
+  | { type: "daily"; time: string }
+  | { type: "workday"; time: string }
+  | { type: "weekly"; weekdays: number[]; time: string }
+  | { type: "cron"; expression: string };
+
+export type ScheduleTask = {
+  task_id: string;
+  title: string;
+  prompt: string;
+  status: "pending_approval" | "active" | "paused" | "completed" | "expired" | "archived";
+  target_mode: "existing_session" | "new_session_per_run";
+  target_session_id?: string | null;
+  target_conversation_id?: string | null;
+  new_session_title_prefix?: string | null;
+  workspace_policy: "isolated" | "shared_with_parent";
+  schedule: ScheduleSpec;
+  timezone: string;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  next_run_at?: string | null;
+  execution: {
+    timeout_seconds: number;
+    concurrency_policy: "skip" | "queue";
+    missed_run_policy: "skip" | "run_once" | "catch_up";
+    max_runs?: number | null;
+  };
+  run_count: number;
+  max_runs?: number | null;
+  last_run_at?: string | null;
+  last_successful_run_at?: string | null;
+  last_failure_reason?: string | null;
+  consecutive_failure_count: number;
+  created_via: "ui" | "api" | "agent";
+  created_session_id?: string | null;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+  next_runs: string[];
+};
+
+export type ScheduleRun = {
+  run_id: string;
+  task_id: string;
+  trigger_at: string;
+  scheduled_for: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "skipped" | "timed_out" | "cancelled";
+  session_id?: string | null;
+  conversation_id?: string | null;
+  agent_run_id?: string | null;
+  attempt: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration_ms?: number | null;
+  error?: string | null;
+  result_summary?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ScheduleListResult = {
+  items: ScheduleTask[];
+  total: number;
+};
+
+export type ScheduleCreatePayload = {
+  title: string;
+  prompt: string;
+  target: {
+    mode: "existing_session" | "new_session_per_run";
+    session_id?: string | null;
+    new_session_title_prefix?: string | null;
+    workspace_policy: "isolated" | "shared_with_parent";
+  };
+  schedule: ScheduleSpec;
+  timezone: string;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  execution: ScheduleTask["execution"];
+};
+
+async function readScheduleError(response: Response, fallback: string) {
+  return readErrorMessage(response, fallback);
+}
+
+export async function listSchedules(status?: string, search?: string) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (search) params.set("search", search);
+  const query = params.size ? `?${params.toString()}` : "";
+  const response = await apiFetch(`/agent/schedules${query}`);
+  if (!response.ok) {
+    throw new Error(await readScheduleError(response, "获取定时任务失败"));
+  }
+  return response.json() as Promise<ScheduleListResult>;
+}
+
+export async function createSchedule(payload: ScheduleCreatePayload) {
+  const response = await apiFetch("/agent/schedules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await readScheduleError(response, "创建定时任务失败"));
+  }
+  const result = await response.json();
+  return result.data as ScheduleTask;
+}
+
+export async function updateSchedule(taskId: string, payload: Record<string, unknown>) {
+  const response = await apiFetch(`/agent/schedules/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(await readScheduleError(response, "更新定时任务失败"));
+  }
+  return response.json() as Promise<ScheduleTask>;
+}
+
+export async function scheduleAction(taskId: string, action: "pause" | "resume" | "approve" | "reject" | "run") {
+  const response = await apiFetch(
+    `/agent/schedules/${encodeURIComponent(taskId)}/${action}`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(await readScheduleError(response, "操作定时任务失败"));
+  }
+  return response.json();
+}
+
+export async function deleteSchedule(taskId: string) {
+  const response = await apiFetch(`/agent/schedules/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(await readScheduleError(response, "归档定时任务失败"));
+  }
+  return response.json() as Promise<ScheduleTask>;
+}
+
+export async function listScheduleRuns(taskId: string) {
+  const response = await apiFetch(`/agent/schedules/${encodeURIComponent(taskId)}/runs`);
+  if (!response.ok) {
+    throw new Error(await readScheduleError(response, "获取执行历史失败"));
+  }
+  const result = await response.json();
+  return (result.data ?? []) as ScheduleRun[];
+}
+
 export async function forkSessionTimeline(sessionId: string, messageId: string) {
   const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/timeline/fork`, {
     method: "POST",
