@@ -369,6 +369,7 @@ class StoreService:
                     max_runs INTEGER,
                     run_count INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'active',
+                    approved_at TEXT,
                     paused_at TEXT,
                     completed_at TEXT,
                     last_run_at TEXT,
@@ -475,6 +476,7 @@ class StoreService:
             self._ensure_column(conn, "conversations", "revision", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "conversations", "last_run_id", "TEXT")
             self._ensure_column(conn, "agent_runs", "idempotency_key", "TEXT")
+            self._ensure_column(conn, "scheduled_tasks", "approved_at", "TEXT")
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_conversation_idempotency
@@ -2590,7 +2592,7 @@ class StoreService:
             "schedule_json", "timezone", "starts_at", "ends_at", "next_run_at",
             "timeout_seconds", "concurrency_policy", "missed_run_policy", "max_runs",
             "run_count", "status", "created_via", "created_session_id",
-            "created_by_user_id", "revision", "created_at", "updated_at",
+            "created_by_user_id", "approved_at", "revision", "created_at", "updated_at",
         ]
         values = [task.get(column) for column in columns]
         placeholders = ", ".join("?" for _ in columns)

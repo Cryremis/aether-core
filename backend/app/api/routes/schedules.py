@@ -143,6 +143,17 @@ def resume_schedule(
         raise _error(exc) from exc
 
 
+@router.post("/{task_id}/restore")
+def restore_schedule(
+    task_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+) -> ScheduleTaskView:
+    try:
+        return schedule_service.restore(task_id, identity=_identity(auth))
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
 @router.post("/{task_id}/approve")
 def approve_schedule(
     task_id: str,

@@ -1820,7 +1820,10 @@ export async function updateSchedule(taskId: string, payload: Record<string, unk
   return response.json() as Promise<ScheduleTask>;
 }
 
-export async function scheduleAction(taskId: string, action: "pause" | "resume" | "approve" | "reject" | "run") {
+export async function scheduleAction(
+  taskId: string,
+  action: "pause" | "resume" | "approve" | "reject" | "run" | "restore",
+) {
   const response = await apiFetch(
     `/agent/schedules/${encodeURIComponent(taskId)}/${action}`,
     { method: "POST" },

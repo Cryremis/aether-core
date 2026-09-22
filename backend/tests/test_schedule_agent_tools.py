@@ -24,6 +24,7 @@ def test_schedule_tools_are_registered() -> None:
         "schedule_update",
         "schedule_pause",
         "schedule_resume",
+        "schedule_restore",
         "schedule_delete",
     ):
         assert tool_service._registry.get_handler(name) is not None  # noqa: SLF001

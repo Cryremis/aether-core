@@ -507,6 +507,18 @@ class ToolService:
             self._handle_schedule_resume,
         )
         self._registry.register(
+            "schedule_restore",
+            "恢复一个已归档、已完成或已过期的定时任务；达到次数上限或结束时间已过时需先调整配置。",
+            {
+                "properties": {
+                    "task_id": {"type": "string"},
+                },
+                "required": ["task_id"],
+                "additionalProperties": False,
+            },
+            self._handle_schedule_restore,
+        )
+        self._registry.register(
             "schedule_delete",
             "归档一个定时任务并停止后续触发，保留执行历史。",
             {
@@ -572,6 +584,15 @@ class ToolService:
     ) -> ToolExecutionResult:
         return await self._handle_schedule_tool(
             session, {**arguments, "action": "schedule_resume"}
+        )
+
+    async def _handle_schedule_restore(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        return await self._handle_schedule_tool(
+            session, {**arguments, "action": "schedule_restore"}
         )
 
     async def _handle_schedule_delete(
@@ -647,6 +668,8 @@ class ToolService:
                 task = schedule_service.pause(task_id, identity=identity)
             elif action == "schedule_resume":
                 task = schedule_service.resume(task_id, identity=identity)
+            elif action == "schedule_restore":
+                task = schedule_service.restore(task_id, identity=identity)
             elif action == "schedule_delete":
                 task = schedule_service.archive(task_id, identity=identity)
             else:

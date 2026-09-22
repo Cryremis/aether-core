@@ -114,6 +114,8 @@ class ScheduleService:
                 "max_runs": request.execution.max_runs,
                 "run_count": 0,
                 "status": status.value,
+                # Agent 创建且需要审批的任务在审批前不落 approved_at，恢复时仍需用户确认。
+                "approved_at": now_iso if status == ScheduleStatus.ACTIVE else None,
                 "created_via": created_via,
                 "created_session_id": created_session_id,
                 "created_by_user_id": created_by_user_id,
@@ -164,8 +166,6 @@ class ScheduleService:
         identity: ScheduleIdentity,
     ) -> ScheduleTaskView:
         current = self._authorized_row(task_id, identity)
-        if str(current["status"]) == ScheduleStatus.ARCHIVED.value:
-            raise ScheduleError("已归档任务不能修改")
 
         updates: dict[str, Any] = {}
         if request.title is not None:
@@ -196,10 +196,13 @@ class ScheduleService:
                 raise ScheduleError(
                     f"最小间隔为 {settings.schedule_min_interval_seconds} 秒"
                 )
-        if request.starts_at is not None:
-            updates["starts_at"] = self._to_utc_datetime(request.starts_at).isoformat()
-        if request.ends_at is not None:
-            updates["ends_at"] = self._to_utc_datetime(request.ends_at).isoformat()
+        # Pydantic v2 需要区分“未传”和“显式传 null”，否则用户无法清空开始/结束时间。
+        if "starts_at" in request.model_fields_set:
+            starts_at_value = self._to_utc_datetime(request.starts_at)
+            updates["starts_at"] = starts_at_value.isoformat() if starts_at_value else None
+        if "ends_at" in request.model_fields_set:
+            ends_at_value = self._to_utc_datetime(request.ends_at)
+            updates["ends_at"] = ends_at_value.isoformat() if ends_at_value else None
 
         now = datetime.now(timezone.utc)
         starts_at = self._parse_datetime(
@@ -209,7 +212,9 @@ class ScheduleService:
         if ends_at is not None and ends_at <= max(now, starts_at):
             raise ScheduleError("结束时间必须晚于开始时间和当前时间")
 
-        if schedule_changed or request.starts_at is not None or request.ends_at is not None:
+        starts_at_changed = "starts_at" in request.model_fields_set
+        ends_at_changed = "ends_at" in request.model_fields_set
+        if schedule_changed or starts_at_changed or ends_at_changed:
             next_run_at = next_occurrence(
                 schedule,
                 after=max(now, starts_at),
@@ -241,8 +246,8 @@ class ScheduleService:
 
     def pause(self, task_id: str, *, identity: ScheduleIdentity) -> ScheduleTaskView:
         row = self._authorized_row(task_id, identity)
-        if str(row["status"]) not in {ScheduleStatus.ACTIVE.value, ScheduleStatus.PENDING_APPROVAL.value}:
-            raise ScheduleError("只有待确认或运行中的任务可以暂停")
+        if str(row["status"]) != ScheduleStatus.ACTIVE.value:
+            raise ScheduleError("只有运行中的任务可以暂停")
         updated = store_service.set_schedule_task_status(
             task_id, ScheduleStatus.PAUSED.value
         )
@@ -291,7 +296,11 @@ class ScheduleService:
             raise ScheduleError("审批后首次运行时间晚于结束时间")
         updated = store_service.update_schedule_task(
             task_id,
-            {"status": ScheduleStatus.ACTIVE.value, "next_run_at": next_run_at.isoformat()},
+            {
+                "status": ScheduleStatus.ACTIVE.value,
+                "next_run_at": next_run_at.isoformat(),
+                "approved_at": now.isoformat(),
+            },
             expected_revision=int(row["revision"]),
         )
         if updated is None:
@@ -318,6 +327,53 @@ class ScheduleService:
             raise ScheduleError("任务不存在")
         return self.to_view(updated)
 
+    def restore(self, task_id: str, *, identity: ScheduleIdentity) -> ScheduleTaskView:
+        """从归档、完成或过期状态恢复；已达次数上限或结束时间的任务不能恢复。"""
+        row = self._authorized_row(task_id, identity)
+        terminal_statuses = {
+            ScheduleStatus.ARCHIVED.value,
+            ScheduleStatus.COMPLETED.value,
+            ScheduleStatus.EXPIRED.value,
+        }
+        if str(row["status"]) not in terminal_statuses:
+            raise ScheduleError("只有已归档、已完成或已过期的任务可以恢复")
+        if row.get("max_runs") is not None and int(row["run_count"]) >= int(row["max_runs"]):
+            raise ScheduleError("任务已达到最大运行次数，请先调大最大次数后恢复")
+
+        now = datetime.now(timezone.utc)
+        starts_at = self._parse_datetime(row.get("starts_at"), now)
+        ends_at = self._parse_datetime(row.get("ends_at"))
+        if ends_at is not None and ends_at <= now:
+            raise ScheduleError("任务结束时间已过期，请先调整结束时间后恢复")
+        next_run_at = next_occurrence(
+            row["schedule"],
+            after=max(now, starts_at),
+            timezone_name=str(row["timezone"]),
+        )
+        if ends_at is not None and next_run_at > ends_at:
+            raise ScheduleError("恢复后的首次运行时间晚于结束时间")
+
+        # Agent 创建但从未审批过的任务，即使用户取消归档，也必须重新确认。
+        restored_status = (
+            ScheduleStatus.ACTIVE.value
+            if row.get("approved_at") or str(row.get("created_via")) != "agent"
+            else ScheduleStatus.PENDING_APPROVAL.value
+        )
+
+        updated = store_service.update_schedule_task(
+            task_id,
+            {
+                "status": restored_status,
+                "next_run_at": next_run_at.isoformat(),
+                "paused_at": None,
+                "completed_at": None,
+            },
+            expected_revision=int(row["revision"]),
+        )
+        if updated is None:
+            raise ScheduleConflictError("任务已被其他操作修改，请刷新后重试")
+        return self.to_view(updated)
+
     def create_manual_run(
         self,
         task_id: str,
@@ -325,8 +381,14 @@ class ScheduleService:
         identity: ScheduleIdentity,
     ) -> dict[str, Any]:
         row = self._authorized_row(task_id, identity)
-        if str(row["status"]) in {ScheduleStatus.ARCHIVED.value, ScheduleStatus.COMPLETED.value, ScheduleStatus.EXPIRED.value}:
-            raise ScheduleError("任务已结束，不能手动运行")
+        blocked_statuses = {
+            ScheduleStatus.PENDING_APPROVAL.value,
+            ScheduleStatus.ARCHIVED.value,
+            ScheduleStatus.COMPLETED.value,
+            ScheduleStatus.EXPIRED.value,
+        }
+        if str(row["status"]) in blocked_statuses:
+            raise ScheduleError("任务尚未确认或已结束，不能手动运行")
         now = datetime.now(timezone.utc)
         run = store_service.create_schedule_run(
             task_id=task_id,

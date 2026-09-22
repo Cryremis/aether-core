@@ -303,7 +303,11 @@ export function WorkbenchPage({
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [sidebarView, setSidebarView] = useState<SidebarView>("sessions");
+    // 支持通过 ?sidebar=schedules 深链到指定工作台侧栏，便于用户和测试直达定时任务。
+    const [sidebarView, setSidebarView] = useState<SidebarView>(() => {
+      const view = new URLSearchParams(window.location.search).get("sidebar");
+      return view === "schedules" ? "schedules" : "sessions";
+    });
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 1024);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);

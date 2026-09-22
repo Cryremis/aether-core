@@ -53,6 +53,22 @@ def test_agent_created_schedule_requires_approval(tmp_path) -> None:
     assert approved.next_run_at is not None
 
 
+def test_pending_approval_cannot_be_paused_or_run_manually(tmp_path) -> None:
+    initialize_store(tmp_path)
+    settings.agent_schedules_require_approval = True
+    identity = ScheduleIdentity(owner_user_id=1)
+    task = schedule_service.create(
+        create_request(),
+        identity=identity,
+        created_via="agent",
+    )
+
+    with pytest.raises(Exception, match="只有运行中的任务可以暂停"):
+        schedule_service.pause(task.task_id, identity=identity)
+    with pytest.raises(Exception, match="不能手动运行"):
+        schedule_service.create_manual_run(task.task_id, identity=identity)
+
+
 def test_ui_created_schedule_starts_active(tmp_path) -> None:
     initialize_store(tmp_path)
     settings.agent_schedules_require_approval = True
@@ -170,3 +186,61 @@ def test_pause_resume_and_archive_lifecycle(tmp_path) -> None:
         task.task_id, identity=ScheduleIdentity(owner_user_id=1)
     )
     assert archived.status.value == "archived"
+
+
+def test_archived_schedule_can_be_restored(tmp_path) -> None:
+    initialize_store(tmp_path)
+    task = schedule_service.create(
+        create_request(),
+        identity=ScheduleIdentity(owner_user_id=1),
+        created_via="ui",
+    )
+    archived = schedule_service.archive(
+        task.task_id, identity=ScheduleIdentity(owner_user_id=1)
+    )
+
+    assert archived.status.value == "archived"
+
+    restored = schedule_service.restore(
+        task.task_id, identity=ScheduleIdentity(owner_user_id=1)
+    )
+
+    assert restored.status.value == "active"
+    assert restored.next_run_at is not None
+
+
+def test_rejected_agent_schedule_restores_to_pending_approval(tmp_path) -> None:
+    initialize_store(tmp_path)
+    settings.agent_schedules_require_approval = True
+    identity = ScheduleIdentity(owner_user_id=1)
+    task = schedule_service.create(
+        create_request(),
+        identity=identity,
+        created_via="agent",
+    )
+    schedule_service.reject(task.task_id, identity=identity)
+
+    restored = schedule_service.restore(task.task_id, identity=identity)
+
+    assert restored.status.value == "pending_approval"
+
+
+def test_completed_schedule_at_run_limit_cannot_be_restored(tmp_path) -> None:
+    initialize_store(tmp_path)
+    task = schedule_service.create(
+        create_request(),
+        identity=ScheduleIdentity(owner_user_id=1),
+        created_via="ui",
+    )
+    row = store_service.get_schedule_task(task.task_id)
+    assert row is not None
+    store_service.update_schedule_task(
+        task.task_id,
+        {"run_count": 3, "max_runs": 3, "status": "completed"},
+        expected_revision=int(row["revision"]),
+    )
+
+    with pytest.raises(Exception, match="最大运行次数"):
+        schedule_service.restore(
+            task.task_id, identity=ScheduleIdentity(owner_user_id=1)
+        )
