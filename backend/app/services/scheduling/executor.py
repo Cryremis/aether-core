@@ -83,12 +83,8 @@ class ScheduleExecutor:
                 return None if str(task["concurrency_policy"]) == "skip" else session
             return session
 
-        # 每次执行创建独立会话，避免长期上下文污染；显式共享 workspace 时保留父级工作区。
-        parent_workspace_id = None
-        if str(task["workspace_policy"]) == "shared_with_parent" and task.get("created_session_id"):
-            parent = store_service.get_conversation_by_session(str(task["created_session_id"]))
-            parent_workspace_id = parent.get("workspace_id") if parent else None
-        session = session_service.get_or_create(workspace_id=parent_workspace_id)
+        # 每次执行创建独立会话和工作区，避免上下文与文件互相污染。
+        session = session_service.get_or_create()
 
         owner_user_id = task.get("owner_user_id")
         platform_id = task.get("platform_id")

@@ -31,7 +31,6 @@ type ScheduleForm = {
   targetMode: "existing_session" | "new_session_per_run";
   targetSessionId: string;
   newSessionTitlePrefix: string;
-  workspacePolicy: "isolated" | "shared_with_parent";
   frequency: Frequency;
   time: string;
   weekdays: number[];
@@ -52,7 +51,6 @@ const emptyForm: ScheduleForm = {
   targetMode: "existing_session",
   targetSessionId: "",
   newSessionTitlePrefix: "",
-  workspacePolicy: "isolated",
   frequency: "daily",
   time: "09:00",
   weekdays: [1],
@@ -146,7 +144,6 @@ function taskToForm(task: ScheduleTask): ScheduleForm {
     targetMode: task.target_mode,
     targetSessionId: task.target_session_id ?? "",
     newSessionTitlePrefix: task.new_session_title_prefix ?? "",
-    workspacePolicy: task.workspace_policy,
     frequency: task.schedule.type,
     time: timedSchedule && "time" in task.schedule ? task.schedule.time : "09:00",
     weekdays: task.schedule.type === "weekly" ? task.schedule.weekdays : [1],
@@ -210,7 +207,10 @@ export function SchedulePanel({ conversations, sessionId, onSessionSelect }: Sch
 
   useEffect(() => {
     if (editorOpen) return;
-    setForm((current) => ({ ...current, targetSessionId: current.targetSessionId || sessionId }));
+    setForm((current) => ({
+      ...current,
+      targetSessionId: current.targetSessionId || sessionId,
+    }));
   }, [editorOpen, sessionId]);
 
   useEffect(() => {
@@ -282,7 +282,6 @@ export function SchedulePanel({ conversations, sessionId, onSessionSelect }: Sch
         mode: form.targetMode,
         session_id: form.targetMode === "existing_session" ? form.targetSessionId : null,
         new_session_title_prefix: form.targetMode === "new_session_per_run" ? form.newSessionTitlePrefix : null,
-        workspace_policy: form.workspacePolicy,
       };
       const payload = {
         title: form.title,
@@ -638,29 +637,15 @@ export function SchedulePanel({ conversations, sessionId, onSessionSelect }: Sch
                     </select>
                   </label>
                 ) : (
-                  <div className="schedule-editor__grid">
-                    <label>
-                      新会话标题前缀
-                      <input
-                        value={form.newSessionTitlePrefix}
-                        onChange={(event) => setForm({ ...form, newSessionTitlePrefix: event.target.value })}
-                        maxLength={80}
-                        placeholder="默认使用任务标题"
-                      />
-                    </label>
-                    <label>
-                      Workspace
-                      <select
-                        value={form.workspacePolicy}
-                        onChange={(event) =>
-                          setForm({ ...form, workspacePolicy: event.target.value as ScheduleForm["workspacePolicy"] })
-                        }
-                      >
-                        <option value="isolated">独立 Workspace</option>
-                        <option value="shared_with_parent">共享父会话</option>
-                      </select>
-                    </label>
-                  </div>
+                  <label>
+                    新会话标题前缀
+                    <input
+                      value={form.newSessionTitlePrefix}
+                      onChange={(event) => setForm({ ...form, newSessionTitlePrefix: event.target.value })}
+                      maxLength={80}
+                      placeholder="默认使用任务标题"
+                    />
+                  </label>
                 )}
               </section>
 

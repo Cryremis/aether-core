@@ -101,7 +101,8 @@ class ScheduleService:
                 "target_session_id": request.target.session_id,
                 "target_conversation_id": None,
                 "new_session_title_prefix": request.target.new_session_title_prefix,
-                "workspace_policy": request.target.workspace_policy,
+                # 兼容旧表结构；新会话模式一律使用独立工作区。
+                "workspace_policy": "isolated",
                 "schedule_json": self._schedule_json(schedule),
                 "schedule": schedule,
                 "timezone": request.timezone,
@@ -180,7 +181,7 @@ class ScheduleService:
                     "target_session_id": request.target.session_id,
                     "target_conversation_id": None,
                     "new_session_title_prefix": request.target.new_session_title_prefix,
-                    "workspace_policy": request.target.workspace_policy,
+                    "workspace_policy": "isolated",
                 }
             )
 
@@ -448,16 +449,22 @@ class ScheduleService:
             raise SchedulePermissionError("定时任务不存在或无权访问")
         return row
 
-    def _validate_target(self, target: Any, identity: ScheduleIdentity) -> None:
+    def _validate_target(
+        self,
+        target: Any,
+        identity: ScheduleIdentity,
+    ) -> None:
         if target.mode == ScheduleTargetMode.NEW_SESSION_PER_RUN:
-            if not target.new_session_title_prefix:
-                return
-            if len(target.new_session_title_prefix.strip()) < 1:
+            if target.new_session_title_prefix and len(target.new_session_title_prefix.strip()) < 1:
                 raise ScheduleError("新会话标题前缀不能为空白")
             return
         session_id = str(target.session_id or "").strip()
         if not session_id:
             raise ScheduleError("固定会话任务必须提供 session_id")
+        self._validate_session_access(session_id, identity)
+
+    @staticmethod
+    def _validate_session_access(session_id: str, identity: ScheduleIdentity) -> None:
         conversation = store_service.get_conversation_by_session(session_id)
         if conversation is None or conversation.get("deleted_at") is not None:
             raise ScheduleError("目标会话不存在")

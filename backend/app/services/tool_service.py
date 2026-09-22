@@ -409,7 +409,7 @@ class ToolService:
 
         self._registry.register(
             "schedule_create",
-            "创建定时任务。目标默认是当前会话；如需每次独立上下文，显式设置 target_mode 为 new_session_per_run。",
+            "创建定时任务。目标默认是当前会话；new_session_per_run 每次使用独立会话和工作区。",
             {
                 "properties": {
                     "title": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -420,10 +420,6 @@ class ToolService:
                     },
                     "session_id": {"type": "string"},
                     "new_session_title_prefix": {"type": "string", "maxLength": 80},
-                    "workspace_policy": {
-                        "type": "string",
-                        "enum": ["isolated", "shared_with_parent"],
-                    },
                     "schedule": {
                         "type": "object",
                         "properties": {
@@ -625,7 +621,6 @@ class ToolService:
                         mode=target_mode,
                         session_id=target_session_id,
                         new_session_title_prefix=arguments.get("new_session_title_prefix"),
-                        workspace_policy=str(arguments.get("workspace_policy") or "isolated"),
                     ),
                     schedule=arguments["schedule"],
                     timezone=str(arguments.get("timezone") or "UTC"),

@@ -83,7 +83,6 @@ class ScheduleTargetRequest(BaseModel):
     mode: ScheduleTargetMode = ScheduleTargetMode.EXISTING_SESSION
     session_id: str | None = None
     new_session_title_prefix: str | None = Field(default=None, max_length=80)
-    workspace_policy: Literal["isolated", "shared_with_parent"] = "isolated"
 
 
 class ScheduleExecutionPolicy(BaseModel):
@@ -125,7 +124,6 @@ class ScheduleTaskView(BaseModel):
     target_session_id: str | None
     target_conversation_id: str | None
     new_session_title_prefix: str | None
-    workspace_policy: str
     schedule: ScheduleSpec
     timezone: str
     starts_at: datetime | None

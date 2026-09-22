@@ -1713,7 +1713,6 @@ export type ScheduleTask = {
   target_session_id?: string | null;
   target_conversation_id?: string | null;
   new_session_title_prefix?: string | null;
-  workspace_policy: "isolated" | "shared_with_parent";
   schedule: ScheduleSpec;
   timezone: string;
   starts_at?: string | null;
@@ -1770,7 +1769,6 @@ export type ScheduleCreatePayload = {
     mode: "existing_session" | "new_session_per_run";
     session_id?: string | null;
     new_session_title_prefix?: string | null;
-    workspace_policy: "isolated" | "shared_with_parent";
   };
   schedule: ScheduleSpec;
   timezone: string;

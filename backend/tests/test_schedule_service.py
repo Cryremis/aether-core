@@ -82,6 +82,25 @@ def test_ui_created_schedule_starts_active(tmp_path) -> None:
     assert task.status.value == "active"
 
 
+def test_new_session_always_uses_isolated_workspace(tmp_path) -> None:
+    initialize_store(tmp_path)
+
+    task = schedule_service.create(
+        create_request(
+            target={
+                "mode": "new_session_per_run",
+                "workspace_policy": "shared_with_parent",
+            }
+        ),
+        identity=ScheduleIdentity(owner_user_id=1),
+        created_via="ui",
+    )
+
+    row = store_service.get_schedule_task(task.task_id)
+    assert row is not None
+    assert row["workspace_policy"] == "isolated"
+
+
 def test_other_identity_cannot_access_schedule(tmp_path) -> None:
     initialize_store(tmp_path)
     task = schedule_service.create(
