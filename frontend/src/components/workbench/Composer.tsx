@@ -7,6 +7,8 @@ import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type ComposerProps = {
   busy: boolean;
+  canStop: boolean;
+  stopping: boolean;
   disabled: boolean;
   allowNetwork: boolean;
   queuedMessages: QueuedMessage[];
@@ -52,6 +54,8 @@ function QueuedMessagesDock({ messages, onRemove }: { messages: QueuedMessage[];
 
 export function Composer({
   busy,
+  canStop,
+  stopping,
   disabled,
   allowNetwork,
   queuedMessages,
@@ -235,8 +239,8 @@ export function Composer({
                 </button>
               </>
             ) : null}
-            {busy ? (
-              <button className="icon-button stop-btn" onClick={onStop} title="停止">
+            {canStop || stopping ? (
+              <button className="icon-button stop-btn" onClick={onStop} disabled={stopping} title={stopping ? "正在停止" : "停止"}>
                 <Icons.Stop />
               </button>
             ) : null}

@@ -108,6 +108,18 @@ class RuntimeStateService:
             apply_update,
         )
 
+    def settle_aborted_run(self, session: AgentSession) -> tuple[WorkboardState, ElicitationState]:
+        # 清单是会话级计划：只取消正在执行的项目，保留待办和已完成的历史。
+        board = self.get_workboard(session)
+        operations = [{"op": "update_item", "id": item.id, "status": "cancelled"}
+                      for item in board.items if item.status == "in_progress"]
+        if operations:
+            board = self.update_workboard(session, {"ops": operations, "status": "idle"})
+        elicitation = self.get_elicitation(session)
+        if elicitation.pending is not None:
+            elicitation = self.cancel_pending_elicitation(session, elicitation.pending.id)
+        return board, elicitation
+
     def _replace_workboard_items(self, current_items: list[WorkItem], raw_items: list[dict[str, Any]], now: str) -> list[WorkItem]:
         existing_by_id = {item.id: item for item in current_items}
         next_items: list[WorkItem] = []

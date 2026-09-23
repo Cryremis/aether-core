@@ -175,6 +175,37 @@ class AgentEngine:
             subtype="aborted",
         )
 
+    async def _interruptible_model_stream(self, session: AgentSession, run_id: str, stream):
+        # 模型可能长时间只发心跳或没有首段输出，取消不能依赖下一段模型数据。
+        run = session.get_run(run_id)
+        if run is None:
+            yield {}
+            return
+        abort_wait = asyncio.create_task(run.abort_event.wait())
+        next_chunk = None
+        try:
+            while True:
+                next_chunk = asyncio.create_task(anext(stream))
+                done, _ = await asyncio.wait({next_chunk, abort_wait}, return_when=asyncio.FIRST_COMPLETED)
+                if abort_wait in done:
+                    # 先关闭模型请求，再交回中断分支保存部分输出并发送结束事件。
+                    next_chunk.cancel()
+                    await asyncio.gather(next_chunk, return_exceptions=True)
+                    await stream.aclose()
+                    yield {}
+                    return
+                try:
+                    chunk = next_chunk.result()
+                except StopAsyncIteration:
+                    return
+                yield chunk
+        finally:
+            for task in (next_chunk, abort_wait):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(*(task for task in (next_chunk, abort_wait) if task is not None), return_exceptions=True)
+            await stream.aclose()
+
     async def _cancel_tool_execution(self, execution_task: asyncio.Task[ToolExecutionResult]) -> ToolExecutionResult:
         execution_task.cancel()
         try:
@@ -533,7 +564,9 @@ class AgentEngine:
             last_usage_payload: dict[str, int] | None = None
 
             try:
-                async for chunk in llm_client.stream_chat_completion(llm_runtime, messages, tools, reasoning_effort=reasoning_effort):
+                async for chunk in self._interruptible_model_stream(
+                    session, run_id, llm_client.stream_chat_completion(llm_runtime, messages, tools, reasoning_effort=reasoning_effort),
+                ):
                     if self._run_is_aborted(session, run_id):
                         if persisted_assistant_blocks or session.get_partial_content(run_id):
                             partial_text = session.get_partial_content(run_id).strip() or None

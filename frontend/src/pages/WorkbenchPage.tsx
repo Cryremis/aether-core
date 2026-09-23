@@ -300,6 +300,7 @@ export function WorkbenchPage({
   const [filePreviewSaving, setFilePreviewSaving] = useState(false);
   const [filePreviewError, setFilePreviewError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [sidebarView, setSidebarView] = useState<SidebarView>("sessions");
@@ -380,6 +381,8 @@ export function WorkbenchPage({
   const mainSessionId = sessionId || localSessionId || "";
   const isSubagentView = Boolean(activeSubagentSessionId);
   const activeSessionId = activeSubagentSessionId || mainSessionId;
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
   const displayedBusy = isSubagentView ? childBusy : busy;
   const displayedWorkboard = !isSubagentView && workboard?.session_id === mainSessionId ? workboard : null;
   const pendingElicitationRequest = !isSubagentView && elicitation?.session_id === mainSessionId ? elicitation.pending : null;
@@ -2036,27 +2039,19 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
   };
 
   const handleStop = async () => {
-    if (isSubagentView && activeSessionId) {
-      try {
-        await abortSession(activeSessionId);
-      } catch (err) {
-        console.error("中断子代理失败:", err);
-      } finally {
-        childAbortControllerRef.current?.abort();
-      }
-      return;
-    }
-
-    const effectiveSessionId = sessionId || localSessionId;
-    if (!effectiveSessionId) return;
+    const effectiveSessionId = isSubagentView && activeSessionId ? activeSessionId : sessionId || localSessionId;
+    if (!effectiveSessionId || stoppingSessionId === effectiveSessionId) return;
+    setStoppingSessionId(effectiveSessionId);
     try {
-      await abortSession(effectiveSessionId);
+      const stopped = await abortSession(effectiveSessionId);
+      if (activeSessionIdRef.current !== effectiveSessionId) return;
+      if (!isSubagentView && stopped.workboard) setWorkboard(stopped.workboard);
+      if (!isSubagentView && stopped.elicitation) setElicitation(stopped.elicitation);
+      // 保持事件流，接收清单收尾和 completed；不把断开连接当成后台已停止。
     } catch (err) {
-      console.error("中断请求失败:", err);
+      if (activeSessionIdRef.current === effectiveSessionId) setError(err instanceof Error ? err.message : "停止失败，请重试");
     } finally {
-      if (isStreamingRef.current) {
-        abortControllerRef.current?.abort();
-      }
+      setStoppingSessionId((current) => current === effectiveSessionId ? null : current);
     }
   };
 
@@ -2487,6 +2482,8 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
 
         <Composer
           busy={displayedBusy}
+          canStop={displayedBusy || Boolean(pendingElicitationRequest?.blocking)}
+          stopping={stoppingSessionId === activeSessionId}
           disabled={composerDisabled}
           allowNetwork={allowNetwork}
           reasoningEffort={reasoningEffort}
