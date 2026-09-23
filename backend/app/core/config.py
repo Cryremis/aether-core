@@ -52,9 +52,10 @@ class Settings(BaseSettings):
     auth_oauth_config_json: str = ""
     capability_secret_encryption_key: str = ""
 
-    agent_max_turns: int = 0
-    agent_max_runtime_seconds: int = 0
-    agent_max_stall_rounds: int = 0
+    agent_max_turns: int = 32
+    agent_max_runtime_seconds: int = 3600
+    agent_max_stall_rounds: int = 5
+    host_tool_timeout_seconds: int = 120
 
     storage_root: Path = Path("storage")
     sessions_dir_name: str = "sessions"

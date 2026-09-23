@@ -901,6 +901,67 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
     assert all(item["type"] != "aborted" for item in second_events)
 
 
+def test_agent_engine_cleans_pending_wait_tasks_when_cancelled(monkeypatch, tmp_path):
+    """回归: 外部取消工具循环时必须回收等待任务和工具任务，避免僵尸 Task。"""
+    initialize_store(tmp_path)
+
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
+        yield {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_cancel",
+                                "function": {
+                                    "name": "sandbox_shell",
+                                    "arguments": '{"command":"sleep 30","shell":"bash"}',
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        }
+
+    tool_started = asyncio.Event()
+
+    async def fake_execute(session, tool_name, arguments):
+        tool_started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
+    monkeypatch.setattr(agent_engine, "_TOOL_PROGRESS_INTERVAL_SECONDS", 0.05)
+
+    session = build_session("sess_engine_cancel_cleanup")
+
+    async def run_flow():
+        async def consume():
+            async for _event in agent_engine.stream_chat(session, "cancel me"):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0)
+        return [task for task in asyncio.all_tasks() if task.get_coro().__qualname__ in {"Queue.get", "Event.wait"}]
+
+    leaked_tasks = asyncio.run(run_flow())
+
+    assert leaked_tasks == []
+
+
 def test_agent_engine_persists_transcript_when_tool_requests_user_input(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     rounds = {"value": 0}

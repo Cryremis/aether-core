@@ -2049,7 +2049,6 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         await abortSession(activeSessionId);
       } catch (err) {
         console.error("中断子代理失败:", err);
-      } finally {
         childAbortControllerRef.current?.abort();
       }
       return;
@@ -2059,9 +2058,9 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     if (!effectiveSessionId) return;
     try {
       await abortSession(effectiveSessionId);
+      return;
     } catch (err) {
       console.error("中断请求失败:", err);
-    } finally {
       if (isStreamingRef.current) {
         abortControllerRef.current?.abort();
       }

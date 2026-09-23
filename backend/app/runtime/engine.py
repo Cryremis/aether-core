@@ -190,6 +190,16 @@ class AgentEngine:
         except Exception:
             pass
 
+    async def _cancel_wait_task(self, wait_task: asyncio.Task[Any] | None) -> None:
+        """回收工具循环中的临时等待任务，避免取消路径留下 pending task。"""
+        if wait_task is None or wait_task.done():
+            return
+        wait_task.cancel()
+        try:
+            await wait_task
+        except asyncio.CancelledError:
+            pass
+
     def _start_tool_execution(
         self,
         session: AgentSession,
@@ -966,20 +976,37 @@ class AgentEngine:
                                 session.finish_run(run_id)
                                 return
                             try:
-                                wait_task = asyncio.create_task(asyncio.sleep(self._TOOL_PROGRESS_INTERVAL_SECONDS))
-                                abort_wait_task = asyncio.create_task(session.get_run(run_id).abort_event.wait()) if session.get_run(run_id) else None
-                                output_wait_task = asyncio.create_task(tool_output_queue.get())
-                                wait_set = {execution_task, wait_task, output_wait_task}
-                                if abort_wait_task is not None:
-                                    wait_set.add(abort_wait_task)
-                                done, pending = await asyncio.wait(
-                                    wait_set,
-                                    return_when=asyncio.FIRST_COMPLETED,
-                                )
-                                if execution_task in done:
-                                    result = execution_task.result()
-                                    while not output_wait_task.done() and not tool_output_queue.empty():
-                                        output_event = await tool_output_queue.get()
+                                wait_task: asyncio.Task[None] | None = None
+                                abort_wait_task: asyncio.Task[None] | None = None
+                                output_wait_task: asyncio.Task[dict[str, Any]] | None = None
+                                try:
+                                    wait_task = asyncio.create_task(asyncio.sleep(self._TOOL_PROGRESS_INTERVAL_SECONDS))
+                                    abort_wait_task = asyncio.create_task(session.get_run(run_id).abort_event.wait()) if session.get_run(run_id) else None
+                                    output_wait_task = asyncio.create_task(tool_output_queue.get())
+                                    wait_set = {execution_task, wait_task, output_wait_task}
+                                    if abort_wait_task is not None:
+                                        wait_set.add(abort_wait_task)
+                                    done, _pending = await asyncio.wait(
+                                        wait_set,
+                                        return_when=asyncio.FIRST_COMPLETED,
+                                    )
+                                    if execution_task in done:
+                                        result = execution_task.result()
+                                        while not tool_output_queue.empty():
+                                            output_event = tool_output_queue.get_nowait()
+                                            yield make_event(
+                                                session,
+                                                "tool_output_delta",
+                                                id=output_event["id"],
+                                                tool_name=output_event["tool_name"],
+                                                stream=output_event["stream"],
+                                                text=output_event["text"],
+                                                seq=output_event["seq"],
+                                                timestamp=output_event["timestamp"],
+                                            )
+                                        break
+                                    if output_wait_task in done:
+                                        output_event = output_wait_task.result()
                                         yield make_event(
                                             session,
                                             "tool_output_delta",
@@ -990,64 +1017,23 @@ class AgentEngine:
                                             seq=output_event["seq"],
                                             timestamp=output_event["timestamp"],
                                         )
-                                    if not wait_task.done():
-                                        wait_task.cancel()
-                                        try:
-                                            await wait_task
-                                        except asyncio.CancelledError:
-                                            pass
-                                    if abort_wait_task is not None and not abort_wait_task.done():
-                                        abort_wait_task.cancel()
-                                        try:
-                                            await abort_wait_task
-                                        except asyncio.CancelledError:
-                                            pass
-                                    if not output_wait_task.done():
-                                        output_wait_task.cancel()
-                                        try:
-                                            await output_wait_task
-                                        except asyncio.CancelledError:
-                                            pass
-                                    break
-                                if output_wait_task in done:
-                                    output_event = output_wait_task.result()
+                                        continue
+                                    if abort_wait_task is not None and abort_wait_task in done:
+                                        continue
                                     yield make_event(
                                         session,
-                                        "tool_output_delta",
-                                        id=output_event["id"],
-                                        tool_name=output_event["tool_name"],
-                                        stream=output_event["stream"],
-                                        text=output_event["text"],
-                                        seq=output_event["seq"],
-                                        timestamp=output_event["timestamp"],
+                                        "tool_progress",
+                                        id=tool_call["id"],
+                                        tool_name=tool_name,
+                                        elapsed_ms=int((time.perf_counter() - tool_started_at) * 1000),
                                     )
-                                    for pending_task in pending:
-                                        if pending_task not in {execution_task, output_wait_task}:
-                                            pending_task.cancel()
-                                            try:
-                                                await pending_task
-                                            except asyncio.CancelledError:
-                                                pass
-                                    continue
-                                if abort_wait_task is not None and abort_wait_task in done:
-                                    continue
-                                yield make_event(
-                                    session,
-                                    "tool_progress",
-                                    id=tool_call["id"],
-                                    tool_name=tool_name,
-                                    elapsed_ms=int((time.perf_counter() - tool_started_at) * 1000),
-                                )
-                                for pending_task in pending:
-                                    if pending_task is not execution_task:
-                                        pending_task.cancel()
-                                        try:
-                                            await pending_task
-                                        except asyncio.CancelledError:
-                                            pass
+                                finally:
+                                    await self._cancel_wait_task(wait_task)
+                                    await self._cancel_wait_task(abort_wait_task)
+                                    await self._cancel_wait_task(output_wait_task)
                             except asyncio.CancelledError:
                                 result = ToolExecutionResult.aborted()
-                                break
+                                raise
                     except Exception as exc:  # noqa: BLE001
                         result = ToolExecutionResult.failure(
                             "tool.execution",
@@ -1058,6 +1044,8 @@ class AgentEngine:
                             next_action="阅读错误信息，修正请求或先检查当前状态后再重试。",
                         )
                     finally:
+                        if not execution_task.done():
+                            await self._cleanup_tool_execution(execution_task)
                         session.clear_tool_running(run_id)
                         session.set_tool_task(run_id, None)
                     tool_result_text = tool_result_renderer.render(result)

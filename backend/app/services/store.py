@@ -2356,6 +2356,52 @@ class StoreService:
                 )
         return self.get_agent_run(run_id)
 
+    def fail_agent_run(self, run_id: str, *, message: str, interrupt_point: str = "run_finalize_failed") -> dict[str, Any] | None:
+        """兜底收敛 active run，用于正常事件发布失败时的终态保障。"""
+        placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
+        active_statuses = tuple(self.ACTIVE_AGENT_RUN_STATUSES)
+        now = utcnow_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT event_cursor FROM agent_runs
+                WHERE run_id = ? AND status IN ({placeholders})
+                """,
+                (run_id, *active_statuses),
+            ).fetchone()
+            if row is None:
+                return self.get_agent_run(run_id)
+            seq = int(row["event_cursor"]) + 1
+            error = {"message": message, "interrupt_point": interrupt_point}
+            conn.execute(
+                f"""
+                UPDATE agent_runs
+                SET status = 'failed', error_json = ?, event_cursor = ?, finished_at = ?
+                WHERE run_id = ? AND status IN ({placeholders})
+                """,
+                (json.dumps(error, ensure_ascii=False), seq + 1, now, run_id, *active_statuses),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                VALUES (?, ?, 'error', ?, 'visible', ?)
+                """,
+                (run_id, seq, json.dumps(error, ensure_ascii=False), now),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                VALUES (?, ?, 'completed', ?, 'visible', ?)
+                """,
+                (
+                    run_id,
+                    seq + 1,
+                    json.dumps({"subtype": "error", "elapsed_ms": 0}, ensure_ascii=False),
+                    now,
+                ),
+            )
+        return self.get_agent_run(run_id)
+
     def get_agent_runs(self, run_ids: list[str]) -> list[dict[str, Any]]:
         normalized = [str(item) for item in dict.fromkeys(run_ids) if item]
         if not normalized:

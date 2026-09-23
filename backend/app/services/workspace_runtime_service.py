@@ -1020,8 +1020,6 @@ class WorkspaceRuntimeService:
         process: asyncio.subprocess.Process | None = None
         try:
             process = await self._create_exec_process(container_name, shell, command)
-            if session is not None and run_id is not None:
-                session.set_tool_task(run_id, process)
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 self._collect_stream_output(process, output_callback=output_callback),
                 timeout=effective_timeout,
@@ -1063,10 +1061,6 @@ class WorkspaceRuntimeService:
                     "destroy_reason": "command_timeout",
                 },
             ) from None
-        finally:
-            if session is not None and run_id is not None:
-                session.set_tool_task(run_id, None)
-
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         stdout_text = self._decode_output(stdout_bytes)
         stderr_text = self._decode_output(stderr_bytes)

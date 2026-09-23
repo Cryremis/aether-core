@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from app.core.config import settings
+from app.runtime.event_protocol import make_event
 from app.services.agent_run_service import agent_run_service
+from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
 
@@ -89,3 +92,65 @@ def test_agent_run_service_drops_stale_transcript_items_not_backed_by_messages(t
     agent_run_service._finalize_transcript(session)
 
     assert [item["id"] for item in session.transcript] == ["m_user_1"]
+
+
+def test_agent_run_service_closes_run_when_finalize_fails(tmp_path, monkeypatch):
+    """回归: transcript 收尾失败不能让会话永久停留在执行中。"""
+    initialize_store(tmp_path)
+    agent_run_service._runs.clear()
+    agent_run_service._session_runs.clear()
+    session = session_service.get_or_create("sess_finalize_failure")
+
+    from app.runtime.engine import agent_engine
+
+    async def fake_stream_chat(stream_session, message, **kwargs):
+        yield make_event(stream_session, "result", subtype="success", is_error=False, result="done")
+        yield make_event(stream_session, "completed", subtype="success", elapsed_ms=1)
+
+    def fail_finalize(_session):
+        raise RuntimeError("finalize failed")
+
+    monkeypatch.setattr(agent_engine, "stream_chat", fake_stream_chat)
+    monkeypatch.setattr(agent_run_service, "_finalize_transcript", fail_finalize)
+
+    async def drive():
+        run_id = await agent_run_service.start_chat_run(session, "hello")
+        await agent_run_service.wait_for_run(run_id)
+        return run_id
+
+    run_id = asyncio.run(drive())
+
+    assert store_service.get_agent_run(run_id)["status"] == "completed"
+    assert agent_run_service.get_session_run_id(session.session_id) is None
+    assert session.current_run_id() is None
+    assert run_id not in agent_run_service._runs
+
+
+def test_agent_run_service_cancel_run_clears_active_state(tmp_path, monkeypatch):
+    """回归: 强制取消必须写终态并清理内存 run，不允许会话被僵尸任务锁死。"""
+    initialize_store(tmp_path)
+    agent_run_service._runs.clear()
+    agent_run_service._session_runs.clear()
+    session = session_service.get_or_create("sess_cancel_run")
+
+    from app.runtime.engine import agent_engine
+
+    async def fake_stream_chat(stream_session, message, **kwargs):
+        await asyncio.Future()
+        if False:
+            yield
+
+    monkeypatch.setattr(agent_engine, "stream_chat", fake_stream_chat)
+
+    async def drive():
+        run_id = await agent_run_service.start_chat_run(session, "long task")
+        await asyncio.sleep(0)
+        await agent_run_service.cancel_run(session, run_id, grace_seconds=0.1)
+        return run_id
+
+    run_id = asyncio.run(drive())
+
+    assert store_service.get_agent_run(run_id)["status"] == "cancelled"
+    assert agent_run_service.get_session_run_id(session.session_id) is None
+    assert session.current_run_id() is None
+    assert run_id not in agent_run_service._runs

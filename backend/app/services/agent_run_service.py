@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import traceback
 import uuid
 import json
@@ -16,6 +17,9 @@ from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.tool_execution_service import tool_execution_service
 from app.services.transcript_service import transcript_service
+
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
@@ -174,7 +178,7 @@ class AgentRunService:
 
         session.request_abort()
         tool_task = session.get_tool_task(run_id)
-        if tool_task is not None and not tool_task.done():
+        if isinstance(tool_task, asyncio.Future) and not tool_task.done():
             tool_task.cancel()
 
         try:
@@ -182,12 +186,25 @@ class AgentRunService:
         except asyncio.TimeoutError:
             state.task.cancel()
             try:
-                await state.task
+                await asyncio.wait_for(asyncio.shield(state.task), timeout=1.0)
             except asyncio.CancelledError:
                 pass
+            except asyncio.TimeoutError:
+                logger.exception("Agent run %s did not finish after forced cancellation", run_id)
         except asyncio.CancelledError:
             pass
         return self.get_run_view(run_id) or {"run_id": run_id, "status": "failed"}
+
+    def request_cancel(self, session: AgentSession) -> str | None:
+        """立即发起协作式取消，不等待工具清理完成。"""
+        run_id = session.current_run_id()
+        if run_id is None:
+            return None
+        session.request_abort()
+        tool_task = session.get_tool_task(run_id)
+        if isinstance(tool_task, asyncio.Future) and not tool_task.done():
+            tool_task.cancel()
+        return run_id
 
     def get_run_view(self, run_id: str) -> dict[str, Any] | None:
         run = store_service.get_agent_run(run_id)
@@ -274,25 +291,54 @@ class AgentRunService:
             await self._publish(run_id, completed_event)
             terminal_event_sent = True
         finally:
-            if not terminal_event_sent:
-                completed_event = make_event(
-                    session,
-                    "completed",
-                    elapsed_ms=self._active_elapsed_ms(session),
-                    subtype="completed",
-                )
-                self._apply_event_to_active_view(session, completed_event)
-                await self._publish(run_id, completed_event)
-            self._finalize_transcript(session)
-            session.finish_run(run_id)
-            session.active_run_view = None
-            session_service.persist(session)
-            final_run = store_service.get_agent_run(run_id)
-            if str((final_run or {}).get("status")) in {"failed", "cancelled", "timed_out"}:
-                from app.services.subagent_service import subagent_service
+            try:
+                if not terminal_event_sent:
+                    completed_event = make_event(
+                        session,
+                        "completed",
+                        elapsed_ms=self._active_elapsed_ms(session),
+                        subtype="completed",
+                    )
+                    self._apply_event_to_active_view(session, completed_event)
+                    await self._publish(run_id, completed_event)
+            except Exception:
+                logger.exception("Failed to publish terminal event for agent run %s", run_id)
+                try:
+                    store_service.fail_agent_run(
+                        run_id,
+                        message="任务终态发布失败，已自动收敛为 failed",
+                        interrupt_point="terminal_publish_failed",
+                    )
+                except Exception:
+                    logger.exception("Failed to finalize agent run %s in database", run_id)
+            finally:
+                try:
+                    self._finalize_transcript(session)
+                except Exception:
+                    logger.exception("Failed to finalize transcript for agent run %s", run_id)
+                finally:
+                    session.finish_run(run_id)
+                    session.active_run_view = None
+                    try:
+                        session_service.persist(session)
+                    except Exception:
+                        logger.exception("Failed to persist session after agent run %s", run_id)
+                    finally:
+                        final_run = store_service.get_agent_run(run_id)
+                        if str((final_run or {}).get("status")) in {"failed", "cancelled", "timed_out"}:
+                            from app.services.subagent_service import subagent_service
 
-                await subagent_service.cancel_for_parent_run(run_id, session.session_id)
-            await self._close_run(run_id, session.session_id)
+                            try:
+                                await asyncio.wait_for(
+                                    subagent_service.cancel_for_parent_run(run_id, session.session_id),
+                                    timeout=5.0,
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Failed to cancel subagents for parent agent run %s",
+                                    run_id,
+                                )
+                        await self._close_run(run_id, session.session_id)
 
     async def _publish(self, run_id: str, event: AgentEvent) -> None:
         subscribers: list[asyncio.Queue[AgentEvent | None]] = []
