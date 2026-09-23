@@ -52,9 +52,10 @@ class Settings(BaseSettings):
     auth_oauth_config_json: str = ""
     capability_secret_encryption_key: str = ""
 
-    agent_max_turns: int = 0
-    agent_max_runtime_seconds: int = 0
-    agent_max_stall_rounds: int = 0
+    agent_max_turns: int = 32
+    agent_max_runtime_seconds: int = 3600
+    agent_max_stall_rounds: int = 5
+    host_tool_timeout_seconds: int = 120
 
     storage_root: Path = Path("storage")
     sessions_dir_name: str = "sessions"
@@ -143,6 +144,15 @@ class Settings(BaseSettings):
     sandbox_runtime_idle_ttl_seconds: int = 60 * 60 * 24
     sandbox_runtime_max_age_seconds: int = 60 * 60 * 24 * 7
     sandbox_runtime_gc_interval_seconds: int = 300
+
+    # 定时任务调度。默认单进程内启用；关闭后只保留任务管理 API，不触发后台执行。
+    scheduler_enabled: bool = True
+    scheduler_tick_seconds: float = Field(default=5.0, ge=0.1, le=60)
+    scheduler_workers: int = Field(default=4, ge=1, le=64)
+    scheduler_lease_seconds: int = Field(default=120, ge=15, le=3600)
+    schedule_max_per_owner: int = Field(default=50, ge=1, le=10_000)
+    schedule_min_interval_seconds: int = Field(default=60, ge=60, le=86_400)
+    agent_schedules_require_approval: bool = True
 
     manage_backend_port: int = 8100
     manage_frontend_port: int = 5178

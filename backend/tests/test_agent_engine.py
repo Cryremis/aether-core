@@ -660,7 +660,7 @@ def test_agent_engine_emits_runtime_event_before_tool_finished(monkeypatch, tmp_
     assert "tool_finished" in event_types
     assert event_types.index("runtime_recreated") < event_types.index("tool_finished")
     tool_finished = next(item for item in events if item["type"] == "tool_finished")
-    assert tool_finished["payload"]["output"].startswith("shell.executed: success")
+    assert tool_finished["payload"]["output"] == "ok"
     assert tool_finished["payload"]["result"]["kind"] == "shell.executed"
     assert tool_finished["payload"]["result"]["status"] == "success"
     assert any(
@@ -892,13 +892,74 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
     assert any(item["type"] == "aborted" for item in first_events)
     tool_finished = next(item for item in first_events if item["type"] == "tool_finished")
     assert tool_finished["payload"]["result"]["status"] == "aborted"
-    assert tool_finished["payload"]["output"].startswith("tool.execution: aborted")
+    assert tool_finished["payload"]["output"].startswith("error:")
     assert session.current_run_id() is None
 
     result_event = next(item for item in second_events if item["type"] == "result")
     assert result_event["payload"]["subtype"] == "success"
     assert result_event["payload"]["result"] == "second run ok"
     assert all(item["type"] != "aborted" for item in second_events)
+
+
+def test_agent_engine_cleans_pending_wait_tasks_when_cancelled(monkeypatch, tmp_path):
+    """回归: 外部取消工具循环时必须回收等待任务和工具任务，避免僵尸 Task。"""
+    initialize_store(tmp_path)
+
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
+        yield {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_cancel",
+                                "function": {
+                                    "name": "sandbox_shell",
+                                    "arguments": '{"command":"sleep 30","shell":"bash"}',
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        }
+
+    tool_started = asyncio.Event()
+
+    async def fake_execute(session, tool_name, arguments):
+        tool_started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr("app.runtime.engine.tool_service.execute", fake_execute)
+    monkeypatch.setattr(agent_engine, "_TOOL_PROGRESS_INTERVAL_SECONDS", 0.05)
+
+    session = build_session("sess_engine_cancel_cleanup")
+
+    async def run_flow():
+        async def consume():
+            async for _event in agent_engine.stream_chat(session, "cancel me"):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0)
+        return [task for task in asyncio.all_tasks() if task.get_coro().__qualname__ in {"Queue.get", "Event.wait"}]
+
+    leaked_tasks = asyncio.run(run_flow())
+
+    assert leaked_tasks == []
 
 
 def test_agent_engine_persists_transcript_when_tool_requests_user_input(monkeypatch, tmp_path):
@@ -1043,6 +1104,53 @@ def test_agent_engine_raises_readable_llm_error_message(monkeypatch, tmp_path):
 
     with pytest.raises(RuntimeError, match="LLM 服务报错: invalid model: qwen3.6"):
         asyncio.run(collect_stream(session, "hello"))
+
+
+def test_agent_engine_retries_transient_upstream_error(monkeypatch, tmp_path):
+    """回归: LLM 网关瞬时 503 时退避重试,而不是直接把错误暴露给用户。"""
+    initialize_store(tmp_path)
+
+    call_count = 0
+
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            request = httpx.Request("POST", "http://models.example.com/v1/chat/completions")
+            response = httpx.Response(
+                503,
+                request=request,
+                json={"error": {"message": "upstream error"}},
+            )
+            raise httpx.HTTPStatusError("service unavailable", request=request, response=response)
+            if False:
+                yield {}
+        else:
+            yield {"choices": [{"delta": {"content": "recovered answer"}, "finish_reason": None}]}
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    async def fake_sleep(_seconds):
+        return
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    session = build_session("sess_engine_upstream_retry")
+    events = asyncio.run(collect_stream(session, "hello"))
+
+    retry_events = [item for item in events if item["type"] == "stream_retry"]
+    assert len(retry_events) == 1
+    assert retry_events[0]["payload"]["reason"] == "upstream_status"
+    assert "upstream error" in retry_events[0]["payload"]["message"]
+    result_event = next(item for item in events if item["type"] == "result")
+    assert result_event["payload"]["subtype"] == "success"
+    assert result_event["payload"]["result"] == "recovered answer"
+    assert call_count == 2
+    assert not any(item["type"] == "error" for item in events)
 
 
 def test_agent_engine_recovers_from_length_truncation_reasoning_only(monkeypatch, tmp_path):

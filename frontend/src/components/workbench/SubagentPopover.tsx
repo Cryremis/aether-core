@@ -60,7 +60,7 @@ export function SubagentPopover({
           <div className="subagent-popover__list">
             {subagents.map((subagent) => (
               <div
-                key={subagent.subagent_run_id}
+                key={subagent.subagent_id}
                 className={`subagent-row ${activeChildSessionId === subagent.child_session_id ? "active" : ""} subagent-row--${subagent.status}`}
               >
                 <button type="button" className="subagent-row__main" onClick={() => onSelect(subagent)}>

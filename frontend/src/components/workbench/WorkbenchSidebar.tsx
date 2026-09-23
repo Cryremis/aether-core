@@ -6,6 +6,7 @@ import { useAppPreferences } from "../../i18n";
 import type { FileItem, SidebarView, SkillItem, WorkbenchConversation } from "../../pages/workbench/types";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 import { CapabilityPanel } from "./CapabilityPanel";
+import { SchedulePanel } from "./SchedulePanel";
 
 type WorkbenchSidebarProps = {
   conversations: WorkbenchConversation[];
@@ -136,6 +137,7 @@ export function WorkbenchSidebar({
             <button className={`segment-btn ${sidebarView === "sessions" ? "active" : ""}`} onClick={() => onSidebarViewChange("sessions")}>{t("workbench.sidebar.sessions")}</button>
             <button className={`segment-btn ${sidebarView === "files" ? "active" : ""}`} onClick={() => onSidebarViewChange("files")}>{t("workbench.sidebar.files")}</button>
             <button className={`segment-btn ${sidebarView === "skills" ? "active" : ""}`} onClick={() => onSidebarViewChange("skills")}>能力</button>
+            <button className={`segment-btn ${sidebarView === "schedules" ? "active" : ""}`} onClick={() => onSidebarViewChange("schedules")}>定时</button>
           </div>
 
           <div className="sidebar-content">
@@ -191,6 +193,14 @@ export function WorkbenchSidebar({
                     </article>
                   ))}
                 </div>
+              </div>
+            ) : sidebarView === "schedules" ? (
+              <div className="tab-pane tab-pane--schedule">
+                <SchedulePanel
+                  conversations={conversations}
+                  sessionId={sessionId}
+                  onSessionSelect={onSessionSelect}
+                />
               </div>
             ) : (
               <div className="tab-pane tab-pane--capability"><CapabilityPanel sessionId={sessionId} skills={skills} isEmbedMode={isEmbedMode} onUploadSessionSkill={onUploadSkill} onRefresh={onRefreshCapabilities} /></div>

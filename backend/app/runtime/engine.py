@@ -7,7 +7,7 @@ import inspect
 import json
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -36,6 +36,7 @@ class AgentEngine:
     """AetherCore runtime loop with production context management."""
 
     _TOOL_PROGRESS_INTERVAL_SECONDS = 15.0
+    _RETRYABLE_LLM_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504, 529}
 
     def _append_assistant_block(self, blocks: list[dict[str, Any]], block: dict[str, Any]) -> None:
         blocks.append(block)
@@ -175,37 +176,6 @@ class AgentEngine:
             subtype="aborted",
         )
 
-    async def _interruptible_model_stream(self, session: AgentSession, run_id: str, stream):
-        # 模型可能长时间只发心跳或没有首段输出，取消不能依赖下一段模型数据。
-        run = session.get_run(run_id)
-        if run is None:
-            yield {}
-            return
-        abort_wait = asyncio.create_task(run.abort_event.wait())
-        next_chunk = None
-        try:
-            while True:
-                next_chunk = asyncio.create_task(anext(stream))
-                done, _ = await asyncio.wait({next_chunk, abort_wait}, return_when=asyncio.FIRST_COMPLETED)
-                if abort_wait in done:
-                    # 先关闭模型请求，再交回中断分支保存部分输出并发送结束事件。
-                    next_chunk.cancel()
-                    await asyncio.gather(next_chunk, return_exceptions=True)
-                    await stream.aclose()
-                    yield {}
-                    return
-                try:
-                    chunk = next_chunk.result()
-                except StopAsyncIteration:
-                    return
-                yield chunk
-        finally:
-            for task in (next_chunk, abort_wait):
-                if task is not None and not task.done():
-                    task.cancel()
-            await asyncio.gather(*(task for task in (next_chunk, abort_wait) if task is not None), return_exceptions=True)
-            await stream.aclose()
-
     async def _cancel_tool_execution(self, execution_task: asyncio.Task[ToolExecutionResult]) -> ToolExecutionResult:
         execution_task.cancel()
         try:
@@ -218,6 +188,16 @@ class AgentEngine:
         try:
             await self._cancel_tool_execution(execution_task)
         except Exception:
+            pass
+
+    async def _cancel_wait_task(self, wait_task: asyncio.Task[Any] | None) -> None:
+        """回收工具循环中的临时等待任务，避免取消路径留下 pending task。"""
+        if wait_task is None or wait_task.done():
+            return
+        wait_task.cancel()
+        try:
+            await wait_task
+        except asyncio.CancelledError:
             pass
 
     def _start_tool_execution(
@@ -257,6 +237,52 @@ class AgentEngine:
         if signature is not None and "catalog_snapshot" in signature.parameters:
             execute_kwargs["catalog_snapshot"] = catalog_snapshot
         return asyncio.create_task(tool_service.execute(session, tool_name, tool_input, **execute_kwargs))
+
+    async def _stream_llm_until_abort(
+        self,
+        session: AgentSession,
+        run_id: str,
+        stream: AsyncIterator[dict[str, Any]],
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """让无 chunk 的 LLM 等待也能被 abort event 立即唤醒。"""
+        run = session.get_run(run_id)
+        if run is None:
+            async for chunk in stream:
+                yield chunk
+            return
+
+        iterator = stream.__aiter__()
+        while True:
+            next_chunk_task = asyncio.create_task(iterator.__anext__())
+            abort_task = asyncio.create_task(run.abort_event.wait())
+            done, pending = await asyncio.wait(
+                {next_chunk_task, abort_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if abort_task in done:
+                next_chunk_task.cancel()
+                try:
+                    await next_chunk_task
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
+                await iterator.aclose()
+                abort_task.cancel()
+                try:
+                    await abort_task
+                except asyncio.CancelledError:
+                    pass
+                return
+
+            abort_task.cancel()
+            try:
+                await abort_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                chunk = next_chunk_task.result()
+            except StopAsyncIteration:
+                return
+            yield chunk
 
     async def stream_chat(
         self,
@@ -411,9 +437,19 @@ class AgentEngine:
             baseline = response_started_at if response_started_at is not None else started_at
             return int((time.perf_counter() - baseline) * 1000)
 
-        transport_retry_deadline = 0.0
-        transport_retry_count = 0
-        transport_retry_delays = [1, 3, 5, 10, 10, 10, 10, 10]
+        llm_retry_deadline = 0.0
+        llm_retry_count = 0
+        llm_retry_delays = [1, 3, 5, 10, 10, 10, 10, 10]
+
+        def take_llm_retry_delay() -> int | None:
+            nonlocal llm_retry_deadline, llm_retry_count
+            if llm_retry_deadline == 0.0:
+                llm_retry_deadline = time.perf_counter() + 60
+            if time.perf_counter() >= llm_retry_deadline:
+                return None
+            delay = llm_retry_delays[min(llm_retry_count, len(llm_retry_delays) - 1)]
+            llm_retry_count += 1
+            return delay
 
         while True:
             turn_count += 1
@@ -500,13 +536,13 @@ class AgentEngine:
                 )
                 return
 
-            destroyed_subagent_ids = store_service.list_destroyed_subagent_run_ids_for_session(
+            destroyed_subagent_ids = store_service.list_destroyed_subagent_ids_for_session(
                 session.session_id
             )
             visible_messages = [
                 message
                 for message in session.messages
-                if str(message.get("subagent_run_id") or "") not in destroyed_subagent_ids
+                if str(message.get("subagent_id") or "") not in destroyed_subagent_ids
             ]
             raw_messages: list[dict[str, Any]] = [
                 *self._build_system_messages(
@@ -564,8 +600,15 @@ class AgentEngine:
             last_usage_payload: dict[str, int] | None = None
 
             try:
-                async for chunk in self._interruptible_model_stream(
-                    session, run_id, llm_client.stream_chat_completion(llm_runtime, messages, tools, reasoning_effort=reasoning_effort),
+                async for chunk in self._stream_llm_until_abort(
+                    session,
+                    run_id,
+                    llm_client.stream_chat_completion(
+                        llm_runtime,
+                        messages,
+                        tools,
+                        reasoning_effort=reasoning_effort,
+                    ),
                 ):
                     if self._run_is_aborted(session, run_id):
                         if persisted_assistant_blocks or session.get_partial_content(run_id):
@@ -714,19 +757,38 @@ class AgentEngine:
                     for context_event in recovered.events:
                         yield self._emit_context_event(session, context_event.type, context_event.payload)
                     continue
+                # 网关偶发 5xx/限流时复用同一退避窗口；本轮已有输出则不重放，避免前端出现重复内容。
+                if (
+                    exc.response.status_code in self._RETRYABLE_LLM_STATUS_CODES
+                    and not assistant_content
+                    and not tool_calls
+                    and not active_reasoning_block_id
+                    and not active_content_block_id
+                ):
+                    delay = take_llm_retry_delay()
+                    if delay is not None:
+                        yield make_event(
+                            session,
+                            "stream_retry",
+                            round=turn_count,
+                            attempt=llm_retry_count,
+                            delay=delay,
+                            reason="upstream_status",
+                            message=error_message,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
                 raise RuntimeError(error_message) from exc
             except httpx.TransportError:
-                if transport_retry_deadline == 0.0:
-                    transport_retry_deadline = time.perf_counter() + 60
-                if time.perf_counter() < transport_retry_deadline:
-                    delay = transport_retry_delays[min(transport_retry_count, len(transport_retry_delays) - 1)]
-                    transport_retry_count += 1
+                delay = take_llm_retry_delay()
+                if delay is not None:
                     yield make_event(
                         session,
                         "stream_retry",
                         round=turn_count,
-                        attempt=transport_retry_count,
+                        attempt=llm_retry_count,
                         delay=delay,
+                        reason="transport",
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -735,6 +797,30 @@ class AgentEngine:
                     last_stop_reason = "stream_interrupted"
                 else:
                     raise
+
+            if self._run_is_aborted(session, run_id):
+                if persisted_assistant_blocks or session.get_partial_content(run_id):
+                    self._ensure_elapsed_block(
+                        persisted_assistant_blocks,
+                        int((time.perf_counter() - started_at) * 1000),
+                        response_started_at_iso or started_at_iso,
+                    )
+                    self._persist_assistant_round(
+                        session,
+                        turn_index=request_turn_index,
+                        content=session.get_partial_content(run_id).strip() or None,
+                        blocks=persisted_assistant_blocks,
+                        run_id=run_id,
+                    )
+                async for event in self._emit_aborted(
+                    session,
+                    run_id=run_id,
+                    started_at=started_at,
+                    interrupt_point="llm_stream",
+                ):
+                    yield event
+                session.finish_run(run_id)
+                return
 
             if active_reasoning_block_id:
                 self._update_assistant_block(
@@ -852,8 +938,7 @@ class AgentEngine:
                         while True:
                             if self._run_is_aborted(session, run_id):
                                 result = ToolExecutionResult.aborted()
-                                cleanup_task = asyncio.create_task(self._cleanup_tool_execution(execution_task))
-                                session.set_cleanup_task(run_id, cleanup_task)
+                                await self._cleanup_tool_execution(execution_task)
                                 self._update_assistant_block(
                                     persisted_assistant_blocks,
                                     tool_block_id,
@@ -891,20 +976,37 @@ class AgentEngine:
                                 session.finish_run(run_id)
                                 return
                             try:
-                                wait_task = asyncio.create_task(asyncio.sleep(self._TOOL_PROGRESS_INTERVAL_SECONDS))
-                                abort_wait_task = asyncio.create_task(session.get_run(run_id).abort_event.wait()) if session.get_run(run_id) else None
-                                output_wait_task = asyncio.create_task(tool_output_queue.get())
-                                wait_set = {execution_task, wait_task, output_wait_task}
-                                if abort_wait_task is not None:
-                                    wait_set.add(abort_wait_task)
-                                done, pending = await asyncio.wait(
-                                    wait_set,
-                                    return_when=asyncio.FIRST_COMPLETED,
-                                )
-                                if execution_task in done:
-                                    result = execution_task.result()
-                                    while not output_wait_task.done() and not tool_output_queue.empty():
-                                        output_event = await tool_output_queue.get()
+                                wait_task: asyncio.Task[None] | None = None
+                                abort_wait_task: asyncio.Task[None] | None = None
+                                output_wait_task: asyncio.Task[dict[str, Any]] | None = None
+                                try:
+                                    wait_task = asyncio.create_task(asyncio.sleep(self._TOOL_PROGRESS_INTERVAL_SECONDS))
+                                    abort_wait_task = asyncio.create_task(session.get_run(run_id).abort_event.wait()) if session.get_run(run_id) else None
+                                    output_wait_task = asyncio.create_task(tool_output_queue.get())
+                                    wait_set = {execution_task, wait_task, output_wait_task}
+                                    if abort_wait_task is not None:
+                                        wait_set.add(abort_wait_task)
+                                    done, _pending = await asyncio.wait(
+                                        wait_set,
+                                        return_when=asyncio.FIRST_COMPLETED,
+                                    )
+                                    if execution_task in done:
+                                        result = execution_task.result()
+                                        while not tool_output_queue.empty():
+                                            output_event = tool_output_queue.get_nowait()
+                                            yield make_event(
+                                                session,
+                                                "tool_output_delta",
+                                                id=output_event["id"],
+                                                tool_name=output_event["tool_name"],
+                                                stream=output_event["stream"],
+                                                text=output_event["text"],
+                                                seq=output_event["seq"],
+                                                timestamp=output_event["timestamp"],
+                                            )
+                                        break
+                                    if output_wait_task in done:
+                                        output_event = output_wait_task.result()
                                         yield make_event(
                                             session,
                                             "tool_output_delta",
@@ -915,71 +1017,23 @@ class AgentEngine:
                                             seq=output_event["seq"],
                                             timestamp=output_event["timestamp"],
                                         )
-                                    if not wait_task.done():
-                                        wait_task.cancel()
-                                        try:
-                                            await wait_task
-                                        except asyncio.CancelledError:
-                                            pass
-                                    if abort_wait_task is not None and not abort_wait_task.done():
-                                        abort_wait_task.cancel()
-                                        try:
-                                            await abort_wait_task
-                                        except asyncio.CancelledError:
-                                            pass
-                                    if not output_wait_task.done():
-                                        output_wait_task.cancel()
-                                        try:
-                                            await output_wait_task
-                                        except asyncio.CancelledError:
-                                            pass
-                                    break
-                                if output_wait_task in done:
-                                    output_event = output_wait_task.result()
+                                        continue
+                                    if abort_wait_task is not None and abort_wait_task in done:
+                                        continue
                                     yield make_event(
                                         session,
-                                        "tool_output_delta",
-                                        id=output_event["id"],
-                                        tool_name=output_event["tool_name"],
-                                        stream=output_event["stream"],
-                                        text=output_event["text"],
-                                        seq=output_event["seq"],
-                                        timestamp=output_event["timestamp"],
+                                        "tool_progress",
+                                        id=tool_call["id"],
+                                        tool_name=tool_name,
+                                        elapsed_ms=int((time.perf_counter() - tool_started_at) * 1000),
                                     )
-                                    for pending_task in pending:
-                                        if pending_task not in {execution_task, output_wait_task}:
-                                            pending_task.cancel()
-                                            try:
-                                                await pending_task
-                                            except asyncio.CancelledError:
-                                                pass
-                                    continue
-                                if abort_wait_task is not None and abort_wait_task in done:
-                                    continue
-                                yield make_event(
-                                    session,
-                                    "tool_progress",
-                                    id=tool_call["id"],
-                                    tool_name=tool_name,
-                                    elapsed_ms=int((time.perf_counter() - tool_started_at) * 1000),
-                                )
-                                for pending_task in pending:
-                                    if pending_task is not execution_task:
-                                        pending_task.cancel()
-                                        try:
-                                            await pending_task
-                                        except asyncio.CancelledError:
-                                            pass
+                                finally:
+                                    await self._cancel_wait_task(wait_task)
+                                    await self._cancel_wait_task(abort_wait_task)
+                                    await self._cancel_wait_task(output_wait_task)
                             except asyncio.CancelledError:
                                 result = ToolExecutionResult.aborted()
-                                break
-                            finally:
-                                # 停止分支也必须回收输出、进度和取消事件的等待任务。
-                                waiters = [task for task in (wait_task, abort_wait_task, output_wait_task) if task is not None]
-                                for task in waiters:
-                                    if not task.done():
-                                        task.cancel()
-                                await asyncio.gather(*waiters, return_exceptions=True)
+                                raise
                     except Exception as exc:  # noqa: BLE001
                         result = ToolExecutionResult.failure(
                             "tool.execution",
@@ -990,6 +1044,8 @@ class AgentEngine:
                             next_action="阅读错误信息，修正请求或先检查当前状态后再重试。",
                         )
                     finally:
+                        if not execution_task.done():
+                            await self._cleanup_tool_execution(execution_task)
                         session.clear_tool_running(run_id)
                         session.set_tool_task(run_id, None)
                     tool_result_text = tool_result_renderer.render(result)

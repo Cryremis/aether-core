@@ -125,10 +125,11 @@ class ToolExecutionResult:
 
 
 class ToolResultRenderer:
-    """Render compact, CLI-style text for model consumption.
+    """Render the minimum useful text for model consumption.
 
-    The renderer is intentionally independent of tool execution. Tools own
-    structured data; this class owns the stable model-facing text protocol.
+    Structured results remain the contract for UI, persistence, and auditing.
+    This projection omits protocol decorations and arguments the model already
+    supplied in its tool call.
     """
 
     max_output_chars = 16_000
@@ -136,153 +137,248 @@ class ToolResultRenderer:
 
     _sensitive_keys = {"api_key", "authorization", "password", "refresh_token", "secret", "token"}
 
-    _scalar_fields: dict[str, tuple[str, ...]] = {
-        "artifact.created": ("artifact_id", "name", "media_type", "size_bytes"),
-        "elicitation.requested": ("request_id", "blocking", "title"),
-        "file.read": ("file_path", "start_line", "end_line", "total_lines", "truncated"),
-        "runtime.rebuilt": ("status", "reason", "generation", "previous_generation"),
-        "search.glob": ("pattern", "num_files", "truncated", "duration_ms"),
-        "search.grep": ("mode", "num_lines", "num_matches", "num_files", "truncated", "duration_ms"),
-        "shell.executed": ("shell", "executor", "exit_code", "duration_ms", "log_path"),
-        "skill.loaded": ("skill_name", "source"),
-        "skills.listed": ("count",),
-        "subagent.cancel_requested": ("subagent_run_id", "status"),
-        "subagent.created": ("subagent_run_id", "child_session_id", "name", "status", "task"),
-        "subagent.message_sent": ("subagent_run_id", "child_session_id", "name", "status"),
-        "subagent.result": ("subagent_run_id", "status"),
-        "web.fetch": ("url", "format", "content_type", "truncated"),
-        "web.searched": ("query", "provider", "result_count"),
-        "workspace.listed": ("path", "item_count", "truncated"),
-        "workboard.updated": ("revision", "status", "item_count", "open_item_count"),
-    }
-
-    _content_fields: dict[str, tuple[str, ...]] = {
-        "file.read": ("content",),
-        "search.grep": ("content",),
-        "shell.executed": ("stdout", "stderr"),
-        "web.searched": ("answer",),
-        "web.fetch": ("content",),
-    }
+    # Dynamic host and MCP payloads can include timing; it has no model value.
+    _ignored_fields = {"duration_ms"}
 
     def render(self, result: ToolExecutionResult) -> str:
-        lines = [f"{result.kind}: {result.status}", f"summary: {result.summary}"]
-
         if result.error is not None:
-            lines.extend(
-                [
-                    f"code: {result.error.code}",
-                    f"message: {result.error.message}",
-                    f"retryable: {'yes' if result.error.retryable else 'no'}",
+            return self._bound_output("\n".join(self._render_error(result.error)))
+
+        lines = self._render_success(result)
+        return self._bound_output("\n".join(line for line in lines if line.strip()))
+
+    def _render_error(self, error: ToolExecutionError) -> list[str]:
+        lines = [f"error: {error.message}"]
+        if error.retryable:
+            lines.append("retryable: yes")
+        if error.next_action:
+            lines.append(f"next: {error.next_action}")
+        return lines
+
+    def _render_success(self, result: ToolExecutionResult) -> list[str]:
+        match result.kind:
+            case "artifact.created":
+                return self._render_artifact(result.data.get("artifact"))
+            case "file.read":
+                return self._render_text_block(
+                    result.data.get("content"),
+                    empty_message="(empty file)",
+                    truncation_note=self._file_truncation_note(result.data),
+                )
+            case "search.glob":
+                return self._render_string_list(result.data.get("files"), "No files found")
+            case "search.grep":
+                return self._render_text_block(result.data.get("content"), "No matches found")
+            case "shell.executed":
+                return self._render_shell(result.data)
+            case "skills.listed":
+                return self._render_skill_items(result.data.get("skills"))
+            case "skill.loaded":
+                return self._render_skill(result.data)
+            case "subagent.created":
+                return self._render_optional_value("subagent_id", result.data.get("subagent_id"))
+            case "subagent.listed":
+                return self._render_subagents(result.data.get("subagents"))
+            case "subagent.waited":
+                return [
+                    *self._render_optional_value("status", result.data.get("status")),
+                    *self._render_subagents(result.data.get("subagents")),
                 ]
-            )
-            if result.error.next_action:
-                lines.append(f"next: {result.error.next_action}")
+            case "subagent.message_sent":
+                return self._render_optional_value("status", result.data.get("status"))
+            case "subagent.cancelled":
+                return [
+                    *self._render_optional_value("status", result.data.get("status")),
+                    *self._render_optional_value("cancel_outcome", result.data.get("cancel_outcome")),
+                ]
+            case "subagent.result":
+                return self._render_subagent_result(result.data)
+            case "web.fetch" | "web.fetched":
+                return self._render_text_block(result.data.get("content"), "(empty response)")
+            case "web.searched":
+                return self._render_web_search(result.data)
+            case "workspace.listed":
+                return self._render_directory_items(result.data.get("items"))
+            case "workboard.updated":
+                return [
+                    *self._render_optional_value("revision", result.data.get("revision")),
+                    *self._render_optional_value("open_items", result.data.get("open_item_count")),
+                ]
+            case "runtime.rebuilt":
+                return [
+                    *self._render_optional_value("runtime", result.data.get("status")),
+                    *self._render_optional_value("generation", result.data.get("generation")),
+                ]
+            case "elicitation.requested":
+                return self._render_optional_value("request_id", result.data.get("request_id"))
+            case _:
+                return self._render_payload(result.data)
 
-        lines.extend(self._render_specialized(result))
-        lines.extend(self._render_remaining_fields(result))
-        rendered = "\n".join(line for line in lines if line.strip())
-        return self._bound_output(rendered)
-
-    def _render_specialized(self, result: ToolExecutionResult) -> list[str]:
-        if result.kind == "subagent.listed":
-            return self._render_subagents(result.data.get("subagents"))
-        if result.kind == "subagent.waited":
-            return [
-                f"status: {result.data.get('status', 'unknown')}",
-                *self._render_subagents(result.data.get("subagents")),
-            ]
-        if result.kind == "web.searched":
-            return self._render_web_results(result.data.get("results"))
-        if result.kind == "workspace.listed":
-            return self._render_directory_items(result.data.get("items"))
-        if result.kind == "skills.listed":
-            return self._render_skill_items(result.data.get("skills"))
-        return []
-
-    def _render_remaining_fields(self, result: ToolExecutionResult) -> list[str]:
-        content_fields = self._content_fields.get(result.kind, ())
-        scalar_fields = self._scalar_fields.get(result.kind, ())
-        handled = set(content_fields) | set(scalar_fields) | {
-            "subagents",
-            "status",
-            "results",
-            "items",
-            "skills",
-        }
-
+    def _render_payload(self, data: Mapping[str, Any]) -> list[str]:
         lines: list[str] = []
-        for key in scalar_fields:
-            if key in result.data:
-                lines.append(f"{key}: {self._format_scalar(result.data[key])}")
-
-        for key in content_fields:
-            value = result.data.get(key)
-            if isinstance(value, str) and value.strip():
-                lines.append(f"{key}:")
-                lines.extend(self._clip_block(value.rstrip("\n")))
-
-        for key, value in result.data.items():
-            if key in handled or value is None or value == "" or value == []:
+        for key, value in data.items():
+            if key in self._ignored_fields or value is None or value == "" or value == []:
                 continue
             lines.extend(self._render_value(key, value, indent=0))
         return lines
 
+    def _render_artifact(self, value: Any) -> list[str]:
+        if not isinstance(value, Mapping):
+            return []
+        fields = ("file_id", "relative_path", "size")
+        return [
+            line
+            for key in fields
+            for line in self._render_optional_value(key, value.get(key))
+        ]
+
+    def _render_skill(self, data: Mapping[str, Any]) -> list[str]:
+        lines = self._render_optional_value("description", data.get("description"))
+        allowed_tools = data.get("allowed_tools")
+        if isinstance(allowed_tools, list) and allowed_tools:
+            lines.append("allowed_tools:")
+            lines.extend(f"  {self._clip_line(str(item), 240)}" for item in allowed_tools[:30])
+            if len(allowed_tools) > 30:
+                lines.append(f"  [truncated: {len(allowed_tools) - 30} more tools]")
+        return lines
+
+    def _render_text_block(
+        self,
+        value: Any,
+        empty_message: str,
+        truncation_note: str = "",
+    ) -> list[str]:
+        if not isinstance(value, str) or not value.strip():
+            return [empty_message]
+        lines = self._clip_block(value.rstrip("\n"))
+        if truncation_note:
+            lines.append(truncation_note)
+        return lines
+
+    def _file_truncation_note(self, data: Mapping[str, Any]) -> str:
+        if not bool(data.get("truncated")):
+            return ""
+        start_line = data.get("start_line")
+        end_line = data.get("end_line")
+        total_lines = data.get("total_lines")
+        if all(isinstance(item, int) for item in (start_line, end_line, total_lines)):
+            return f"[truncated: lines {start_line}-{end_line} of {total_lines}]"
+        return "[truncated]"
+
+    def _render_string_list(self, value: Any, empty_message: str) -> list[str]:
+        rows = value if isinstance(value, list) else []
+        if not rows:
+            return [empty_message]
+        return [self._clip_line(str(item), 240) for item in rows]
+
+    def _render_shell(self, data: Mapping[str, Any]) -> list[str]:
+        lines: list[str] = []
+        stdout = data.get("stdout")
+        stderr = data.get("stderr")
+        if isinstance(stdout, str) and stdout.strip():
+            lines.extend(self._clip_block(stdout.rstrip("\n")))
+        if isinstance(stderr, str) and stderr.strip():
+            lines.append("stderr:")
+            lines.extend(f"  {line}" for line in self._clip_block(stderr.rstrip("\n")))
+        exit_code = data.get("exit_code")
+        if isinstance(exit_code, int) and exit_code != 0:
+            lines.append(f"exit_code: {exit_code}")
+        if not lines:
+            return ["(no output)"]
+        return lines
+
+    def _render_optional_value(self, label: str, value: Any) -> list[str]:
+        if value is None or value == "":
+            return []
+        return [f"{label}: {self._format_scalar(value)}"]
+
+    def _render_subagent_result(self, data: Mapping[str, Any]) -> list[str]:
+        lines = self._render_optional_value("status", data.get("status"))
+        result = data.get("result")
+        if isinstance(result, str) and result.strip():
+            lines.extend(self._clip_block(result.rstrip("\n")))
+        elif isinstance(result, Mapping):
+            lines.extend(self._render_payload(result))
+        elif result is not None:
+            lines.extend(self._render_value("result", result, indent=0))
+        error = data.get("error")
+        if isinstance(error, str) and error.strip():
+            lines.append(f"error: {self._clip_line(error, self.max_scalar_chars)}")
+        return lines
+
+    def _render_web_search(self, data: Mapping[str, Any]) -> list[str]:
+        answer = data.get("answer")
+        answer_lines = (
+            self._render_text_block(answer, "(no search answer)")
+            if isinstance(answer, str) and answer.strip()
+            else []
+        )
+        return [
+            *answer_lines,
+            *self._render_web_results(data.get("results")),
+        ]
+
     def _render_subagents(self, value: Any) -> list[str]:
         rows = value if isinstance(value, list) else []
         if not rows:
-            return ["subagents: none"]
-        lines = [f"subagents: {len(rows)}"]
+            return ["No subagents"]
+        lines: list[str] = []
         for row in rows[:30]:
             if not isinstance(row, dict):
                 continue
-            run_id = str(row.get("subagent_run_id") or row.get("child_run_id") or "-")
+            subagent_id = str(row.get("subagent_id") or "-")
             status = str(row.get("status") or "-")
             name = str(row.get("name") or "-")
             action = row.get("current_action")
             action_label = str(action.get("label") or "") if isinstance(action, dict) else ""
             suffix = f"  {action_label}" if action_label else ""
-            lines.append(self._clip_line(f"{run_id}  {status:<12}  {name}{suffix}", 240))
+            lines.append(self._clip_line(f"{subagent_id}  {status:<12}  {name}{suffix}", 240))
         if len(rows) > 30:
-            lines.append(f"truncated: {len(rows) - 30} more subagents")
+            lines.append(f"[truncated: {len(rows) - 30} more subagents]")
         return lines
 
     def _render_web_results(self, value: Any) -> list[str]:
         rows = value if isinstance(value, list) else []
         if not rows:
-            return ["results: none"]
-        lines = [f"results: {len(rows)}"]
+            return ["No results found"]
+        lines: list[str] = []
         for row in rows[:20]:
             if not isinstance(row, dict):
                 continue
             title = str(row.get("title") or row.get("url") or "-")
             url = str(row.get("url") or "")
-            lines.append(self._clip_line(f"- {title}" + (f"  {url}" if url else ""), 240))
+            snippet = str(row.get("snippet") or row.get("description") or "")
+            line = f"- {title}" + (f"  {url}" if url else "")
+            if snippet:
+                line += f"  {snippet}"
+            lines.append(self._clip_line(line, 240))
         if len(rows) > 20:
-            lines.append(f"truncated: {len(rows) - 20} more results")
+            lines.append(f"[truncated: {len(rows) - 20} more results]")
         return lines
 
     def _render_directory_items(self, value: Any) -> list[str]:
         rows = value if isinstance(value, list) else []
         if not rows:
-            return ["items: none"]
-        lines = [f"items: {len(rows)}"]
+            return ["(empty directory)"]
+        lines: list[str] = []
         for row in rows[:100]:
             if not isinstance(row, dict):
                 continue
             entry_type = str(row.get("type") or "-")
             name = str(row.get("name") or "-")
             size = row.get("size")
-            suffix = f"  {size} bytes" if isinstance(size, int) else ""
-            lines.append(self._clip_line(f"{entry_type:<8}  {name}{suffix}", 240))
+            prefix = "dir" if entry_type == "dir" else "file"
+            suffix = "  " + self._format_size(size) if isinstance(size, int) else ""
+            lines.append(self._clip_line(f"{prefix} {name}{suffix}", 240))
         if len(rows) > 100:
-            lines.append(f"truncated: {len(rows) - 100} more items")
+            lines.append(f"[truncated: {len(rows) - 100} more items]")
         return lines
 
     def _render_skill_items(self, value: Any) -> list[str]:
         rows = value if isinstance(value, list) else []
         if not rows:
-            return ["skills: none"]
-        lines = [f"skills: {len(rows)}"]
+            return ["No skills found"]
+        lines: list[str] = []
         for row in rows[:50]:
             if not isinstance(row, dict):
                 continue
@@ -290,8 +386,17 @@ class ToolResultRenderer:
             description = str(row.get("description") or "")
             lines.append(self._clip_line(f"- {name}" + (f"  {description}" if description else ""), 240))
         if len(rows) > 50:
-            lines.append(f"truncated: {len(rows) - 50} more skills")
+            lines.append(f"[truncated: {len(rows) - 50} more skills]")
         return lines
+
+    def _format_size(self, value: int) -> str:
+        if value < 1024:
+            return f"{value}B"
+        for unit in ("KB", "MB", "GB"):
+            value /= 1024
+            if value < 1024:
+                return f"{value:.1f}{unit}"
+        return f"{value:.1f}TB"
 
     def _render_value(self, key: str, value: Any, *, indent: int) -> list[str]:
         prefix = "  " * indent

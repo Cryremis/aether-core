@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import traceback
 import uuid
 import json
@@ -11,12 +12,15 @@ from typing import Any
 from app.runtime.engine import agent_engine
 from app.runtime.event_protocol import make_event
 from app.schemas.agent import AgentEvent
-from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
+from app.services.runtime_state import runtime_state_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.tool_execution_service import tool_execution_service
 from app.services.transcript_service import transcript_service
+
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
@@ -36,8 +40,8 @@ class LiveRunState:
 class AgentRunService:
     """Manage decoupled background agent runs and SSE subscribers."""
 
-    _LIVE_OUTPUT_PREVIEW_LIMIT = 4000
     _ABORT_GRACE_SECONDS = 5.0
+    _LIVE_OUTPUT_PREVIEW_LIMIT = 4000
 
     def __init__(self) -> None:
         self._runs: dict[str, LiveRunState] = {}
@@ -115,40 +119,6 @@ class AgentRunService:
             self._session_runs[session.session_id] = run_id
             return run_id
 
-    async def abort_session(self, session: AgentSession) -> dict[str, Any]:
-        run_id = self._session_runs.get(session.session_id)
-        state = self._runs.get(run_id) if run_id else None
-        if state is not None:
-            # 让刚创建的执行协程进入 try/finally，避免在首次调度前取消导致无法收尾。
-            await asyncio.sleep(0)
-            if session.current_run_id() == run_id:
-                session.request_abort()
-            if not state.task.done():
-                done, _ = await asyncio.wait({state.task}, timeout=self._ABORT_GRACE_SECONDS)
-                if not done:
-                    # 目录加载、重试等待等尚未观察取消标记时，中断执行协程。
-                    if not state.task.cancelling():
-                        state.task.cancel()
-                    done, _ = await asyncio.wait({state.task}, timeout=self._ABORT_GRACE_SECONDS)
-                    if not done:
-                        raise RuntimeError("停止尚未完成，请稍后重试；当前运行仍被保留。")
-            # 异常清理不能被包装成停止成功。
-            await state.task
-        else:
-            active = store_service.get_active_agent_run_for_session(session.session_id)
-            if active is not None and active["status"] != "waiting_input":
-                raise RuntimeError("当前运行不在此进程中，无法确认停止，请稍后重试。")
-            # 等待回答时协程已退出，但数据库的 waiting_input 和问题仍会锁住会话。
-            runtime_state_service.settle_aborted_run(session)
-            if active is not None:
-                run_id = str(active["run_id"])
-                await self._publish(run_id, make_event(session, "completed", subtype="aborted", elapsed_ms=0))
-        board = runtime_state_service.get_workboard(session)
-        elicitation = runtime_state_service.get_elicitation(session)
-        return {"success": True, "run_id": run_id, "status": "stopped",
-                "partial_content": session.last_abort.partial_content if session.last_abort else "",
-                "workboard": board.model_dump(mode="json"), "elicitation": elicitation.model_dump(mode="json")}
-
     async def subscribe(self, run_id: str, *, replay_history: bool = True) -> asyncio.Queue[AgentEvent | None]:
         async with self._lock:
             state = self._runs.get(run_id)
@@ -187,6 +157,83 @@ class AgentRunService:
         if state is not None and state.task is not None and not state.task.done():
             await state.task
         return self.get_run_view(run_id) or {}
+
+    async def abort_session(self, session: AgentSession) -> dict[str, Any]:
+        """复用上游取消流程，在确认收尾后返回清单和提问状态。"""
+        run_id = self._session_runs.get(session.session_id)
+        state = self._runs.get(run_id) if run_id else None
+        if state is not None:
+            # 首次调度前不能直接取消，否则执行协程没有机会进入 finally。
+            await asyncio.sleep(0)
+            result = await self.cancel_run(session, run_id, grace_seconds=self._ABORT_GRACE_SECONDS)
+            if not state.task.done():
+                raise RuntimeError("停止尚未完成，请稍后重试；当前运行仍被保留。")
+            await state.task
+            if result.get("status") not in {"cancelled", "completed"}:
+                raise RuntimeError("运行收尾失败，请检查会话状态后重试。")
+        else:
+            active = store_service.get_active_agent_run_for_session(session.session_id)
+            if active is not None and active["status"] != "waiting_input":
+                raise RuntimeError("当前运行不在此进程中，无法确认停止，请稍后重试。")
+            runtime_state_service.settle_aborted_run(session)
+            if active is not None:
+                run_id = str(active["run_id"])
+                await self.cancel_run(session, run_id)
+        return {"success": True, "run_id": run_id, "status": "stopped",
+                "partial_content": session.last_abort.partial_content if session.last_abort else "",
+                "workboard": runtime_state_service.get_workboard(session).model_dump(mode="json"),
+                "elicitation": runtime_state_service.get_elicitation(session).model_dump(mode="json")}
+
+    async def cancel_run(
+        self,
+        session: AgentSession,
+        run_id: str,
+        *,
+        grace_seconds: float = 5.0,
+    ) -> dict[str, Any]:
+        """请求取消并等待 run 进入可持久化的终态。"""
+        state = self._runs.get(run_id)
+        run = self.get_run_view(run_id)
+        if run and str(run.get("status")) not in {"queued", "running", "waiting_input"}:
+            return run
+        if state is None or state.task is None or state.task.done():
+            if run is not None:
+                cancelled_run = store_service.cancel_orphan_agent_run(run_id)
+                if cancelled_run is None:
+                    return self.get_run_view(run_id)
+                return self.get_run_view(str(cancelled_run["run_id"]))
+            return {"run_id": run_id, "status": "failed", "error": {"message": "运行任务不存在"}}
+
+        session.request_abort()
+        tool_task = session.get_tool_task(run_id)
+        if isinstance(tool_task, asyncio.Future) and not tool_task.done():
+            tool_task.cancel()
+
+        try:
+            await asyncio.wait_for(asyncio.shield(state.task), timeout=grace_seconds)
+        except asyncio.TimeoutError:
+            if not state.task.cancelling():
+                state.task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(state.task), timeout=1.0)
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                logger.exception("Agent run %s did not finish after forced cancellation", run_id)
+        except asyncio.CancelledError:
+            pass
+        return self.get_run_view(run_id) or {"run_id": run_id, "status": "failed"}
+
+    def request_cancel(self, session: AgentSession) -> str | None:
+        """立即发起协作式取消，不等待工具清理完成。"""
+        run_id = session.current_run_id()
+        if run_id is None:
+            return None
+        session.request_abort()
+        tool_task = session.get_tool_task(run_id)
+        if isinstance(tool_task, asyncio.Future) and not tool_task.done():
+            tool_task.cancel()
+        return run_id
 
     def get_run_view(self, run_id: str) -> dict[str, Any] | None:
         run = store_service.get_agent_run(run_id)
@@ -233,20 +280,27 @@ class AgentRunService:
                 reasoning_effort=reasoning_effort,
             ):
                 if event.type == "completed":
-                    # 收尾完成后再通知前端，避免收到 completed 后马上发送的新消息撞上旧运行。
+                    # 清理完成后再发布终态，避免前端立即续聊撞上旧运行。
                     terminal_event = event
                     continue
                 self._apply_event_to_active_view(session, event)
                 await self._publish(run_id, event)
         except asyncio.CancelledError:
-            run = session.get_run(run_id)
-            if run is not None and run.tool_task is not None and not run.tool_task.done():
-                run.tool_task.cancel()
-            aborted = make_event(session, "aborted", partial_content=session.get_partial_content(run_id),
-                                 interrupt_point="run_cancelled")
-            self._apply_event_to_active_view(session, aborted)
-            await self._publish(run_id, aborted)
-            terminal_event = make_event(session, "completed", elapsed_ms=self._active_elapsed_ms(session), subtype="aborted")
+            aborted_event = make_event(
+                session,
+                "aborted",
+                partial_content=session.get_partial_content(run_id),
+                interrupt_point="run_task_cancelled",
+            )
+            self._apply_event_to_active_view(session, aborted_event)
+            await self._publish(run_id, aborted_event)
+            completed_event = make_event(
+                session,
+                "completed",
+                elapsed_ms=self._active_elapsed_ms(session),
+                subtype="aborted",
+            )
+            terminal_event = completed_event
         except Exception as exc:  # noqa: BLE001
             error_event = make_event(
                 session,
@@ -267,21 +321,42 @@ class AgentRunService:
             try:
                 if terminal_event is None:
                     terminal_event = make_event(session, "completed", elapsed_ms=self._active_elapsed_ms(session), subtype="completed")
-                final_status = self._status_for_event(terminal_event)
-                if final_status == "cancelled":
-                    board, elicitation = runtime_state_service.settle_aborted_run(session)
-                    await self._publish(run_id, make_event(session, "workboard_updated", snapshot=board.model_dump(mode="json")))
-                    await self._publish(run_id, make_event(session, "ask_cancelled", snapshot=elicitation.model_dump(mode="json")))
+                if self._status_for_event(terminal_event) == "cancelled":
+                    try:
+                        board, elicitation = runtime_state_service.settle_aborted_run(session)
+                        await self._publish(run_id, make_event(session, "workboard_updated", snapshot=board.model_dump(mode="json")))
+                        await self._publish(run_id, make_event(session, "ask_cancelled", snapshot=elicitation.model_dump(mode="json")))
+                    except Exception:
+                        logger.exception("Failed to settle runtime state for agent run %s", run_id)
+                        terminal_event = make_event(session, "completed", elapsed_ms=self._active_elapsed_ms(session), subtype="error_cleanup")
                 self._apply_event_to_active_view(session, terminal_event)
-                self._finalize_transcript(session)
+                # 保留上游的异常隔离，记录/持久化失败不能阻止运行锁的释放。
+                try:
+                    self._finalize_transcript(session)
+                except Exception:
+                    logger.exception("Failed to finalize transcript for agent run %s", run_id)
                 session.finish_run(run_id)
                 session.active_run_view = None
-                session_service.persist(session)
-                if final_status in {"failed", "cancelled", "timed_out"}:
+                try:
+                    session_service.persist(session)
+                except Exception:
+                    logger.exception("Failed to persist session after agent run %s", run_id)
+                if self._status_for_event(terminal_event) in {"failed", "cancelled", "timed_out"}:
                     from app.services.subagent_service import subagent_service
 
-                    await subagent_service.cancel_for_parent_run(run_id, session.session_id)
-                await self._publish(run_id, terminal_event)
+                    try:
+                        await asyncio.wait_for(subagent_service.cancel_for_parent_run(run_id, session.session_id), timeout=5.0)
+                    except Exception:
+                        logger.exception("Failed to cancel subagents for parent agent run %s", run_id)
+                try:
+                    await self._publish(run_id, terminal_event)
+                except Exception:
+                    logger.exception("Failed to publish terminal event for agent run %s", run_id)
+                    try:
+                        store_service.fail_agent_run(run_id, message="任务终态发布失败，已自动收敛为 failed",
+                                                    interrupt_point="terminal_publish_failed")
+                    except Exception:
+                        logger.exception("Failed to finalize agent run %s in database", run_id)
             finally:
                 await self._close_run(run_id, session.session_id)
 
@@ -320,8 +395,7 @@ class AgentRunService:
     @staticmethod
     def _status_for_event(event: AgentEvent) -> str | None:
         if event.type != "completed":
-            if event.type == "aborted":
-                return "cancelling"
+            # aborted 只是取消通知，收尾前仍须保留数据库中的运行锁。
             return None
         subtype = str(event.payload.get("subtype") or "")
         if subtype == "success":

@@ -165,3 +165,63 @@ def test_abort_during_host_tool_reclaims_waiters_and_allows_next_message(tmp_pat
         await asyncio.wait_for(service.wait_for_run(run_id), 5)
         assert store_service.get_agent_run(run_id)["status"] == "completed"
     asyncio.run(scenario())
+
+
+def test_abort_keeps_database_lock_until_runtime_state_cleanup_finishes(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    session = session_service.get_or_create("abort-cleanup-lock")
+
+    async def scenario():
+        entered, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def model(*args, **kwargs):
+            entered.set()
+            await asyncio.Future()
+            yield {}
+        monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", model)
+        monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+        service = AgentRunService()
+        publish = service._publish
+        async def paused_publish(run_id, event):
+            if event.type == "workboard_updated":
+                cleaning.set()
+                await release.wait()
+            await publish(run_id, event)
+        monkeypatch.setattr(service, "_publish", paused_publish)
+        run_id = await service.start_chat_run(session, "执行")
+        await asyncio.wait_for(entered.wait(), 5)
+        stopping = asyncio.create_task(service.abort_session(session))
+        try:
+            await asyncio.wait_for(cleaning.wait(), 5)
+            assert store_service.get_active_agent_run_for_session(session.session_id)["run_id"] == run_id
+            with pytest.raises(RuntimeError, match="已有执行中的任务"):
+                await AgentRunService().start_chat_run(session, "继续")
+        finally:
+            release.set()
+            await asyncio.wait_for(stopping, 5)
+        assert store_service.get_active_agent_run_for_session(session.session_id) is None
+    asyncio.run(scenario())
+
+
+def test_abort_reports_runtime_state_cleanup_failure(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    session = session_service.get_or_create("abort-cleanup-failure")
+
+    async def scenario():
+        entered = asyncio.Event()
+        async def model(*args, **kwargs):
+            entered.set()
+            await asyncio.Future()
+            yield {}
+        monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", model)
+        monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+        def fail_settle(session):
+            raise RuntimeError("storage failure")
+        monkeypatch.setattr(runtime_state_service, "settle_aborted_run", fail_settle)
+        service = AgentRunService()
+        run_id = await service.start_chat_run(session, "执行")
+        await asyncio.wait_for(entered.wait(), 5)
+        with pytest.raises(RuntimeError, match="收尾失败"):
+            await service.abort_session(session)
+        assert store_service.get_agent_run(run_id)["status"] == "failed"
+        assert service.get_session_run_id(session.session_id) is None
+    asyncio.run(scenario())

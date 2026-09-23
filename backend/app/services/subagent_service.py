@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Any
 
 from app.schemas.agent import AgentEvent
@@ -15,8 +16,8 @@ from app.services.store import store_service
 class SubagentService:
     """一层 Subagent 编排服务。
 
-    子 Agent 拥有独立上下文与 run，并共享父 Workspace；
-    子 Agent 不获得 subagent 工具，保证默认只有一层结构。
+    子 Agent 拥有稳定实体 ID 与独立上下文；每轮沟通对应一个 latest run，
+    并与父 Agent 共享 Workspace。子 Agent 不获得 subagent 工具。
     """
 
     def __init__(self) -> None:
@@ -49,24 +50,21 @@ class SubagentService:
             return await self.send_message(
                 parent_session,
                 parent_run_id=parent_run_id,
-                subagent_run_id=str(arguments["subagent_run_id"]),
+                subagent_id=str(arguments["subagent_id"]),
                 message=str(arguments["message"]),
             )
         if tool_name == "subagent_wait":
             return await self.wait(
                 parent_session,
-                subagent_run_id=str(arguments.get("subagent_run_id") or "") or None,
+                subagent_id=str(arguments.get("subagent_id") or "") or None,
                 timeout_seconds=arguments.get("timeout_seconds"),
             )
         if tool_name == "subagent_list":
             return {"subagents": self.list_subagents(parent_session)}
-        if tool_name == "subagent_cancel" and "subagent_run_id" in arguments:
-            return await self.cancel(
-                parent_session,
-                subagent_run_id=str(arguments["subagent_run_id"]),
-            )
-        if tool_name == "subagent_get_result" and "subagent_run_id" in arguments:
-            return self.get_result(parent_session, str(arguments["subagent_run_id"]))
+        if tool_name == "subagent_cancel" and "subagent_id" in arguments:
+            return await self.cancel(parent_session, str(arguments["subagent_id"]))
+        if tool_name == "subagent_get_result" and "subagent_id" in arguments:
+            return self.get_result(parent_session, str(arguments["subagent_id"]))
 
         raise RuntimeError("未知 subagent 工具")
 
@@ -89,14 +87,16 @@ class SubagentService:
         if instructions:
             full_task = f"{task}\n\nAdditional instructions:\n{instructions}"
 
-        child_run_id = await agent_run_service.start_chat_run(
+        subagent_id = f"subagent_{uuid.uuid4().hex}"
+        latest_run_id = await agent_run_service.start_chat_run(
             child_session,
             full_task,
             parent_run_id=parent_run_id,
             agent_kind="subagent",
         )
-        row = store_service.create_subagent_run(
-            child_run_id=child_run_id,
+        row = store_service.create_subagent(
+            subagent_id=subagent_id,
+            latest_run_id=latest_run_id,
             workspace_id=parent_session.workspace_id,
             parent_run_id=parent_run_id,
             parent_session_id=parent_session.session_id,
@@ -107,16 +107,16 @@ class SubagentService:
         self._start_watcher(
             parent_run_id=parent_run_id,
             parent_session_id=parent_session.session_id,
-            subagent_run_id=str(row["child_run_id"]),
-            latest_run_id=child_run_id,
+            subagent_id=subagent_id,
+            latest_run_id=latest_run_id,
             name=name,
         )
         await self._publish_parent_event(
             parent_session,
             parent_run_id,
             "subagent_created",
-            subagent_run_id=str(row["child_run_id"]),
-            run_id=child_run_id,
+            subagent_id=subagent_id,
+            latest_run_id=latest_run_id,
             child_session_id=child_session.session_id,
             name=name,
             task=task,
@@ -125,24 +125,25 @@ class SubagentService:
             parent_session,
             parent_run_id,
             "subagent_started",
-            subagent_run_id=str(row["child_run_id"]),
-            run_id=child_run_id,
+            subagent_id=subagent_id,
+            latest_run_id=latest_run_id,
             child_session_id=child_session.session_id,
             name=name,
         )
-        return self._public_row(store_service.get_subagent_run(str(row["child_run_id"])) or row)
+        return self._public_row(store_service.get_subagent(subagent_id) or row)
 
     async def send_message(
         self,
         parent_session: AgentSession,
         *,
         parent_run_id: str,
-        subagent_run_id: str,
+        subagent_id: str,
         message: str,
     ) -> dict[str, Any]:
-        row = self._owned_row(parent_session, subagent_run_id, include_destroyed=True)
+        row = self._owned_row(parent_session, subagent_id, include_destroyed=True)
         if row.get("destroyed_at"):
             raise RuntimeError("子 Agent 已销毁，不能继续发送消息")
+
         latest_run_id = str(row["latest_run_id"])
         latest_run = store_service.get_agent_run(latest_run_id)
         if latest_run and str(latest_run.get("status")) in {"queued", "running", "waiting_input"}:
@@ -155,11 +156,11 @@ class SubagentService:
             parent_run_id=parent_run_id,
             agent_kind="subagent",
         )
-        store_service.set_subagent_latest_run(subagent_run_id, new_run_id)
+        store_service.set_subagent_latest_run(subagent_id, new_run_id)
         self._start_watcher(
             parent_run_id=parent_run_id,
             parent_session_id=parent_session.session_id,
-            subagent_run_id=subagent_run_id,
+            subagent_id=subagent_id,
             latest_run_id=new_run_id,
             name=str(row["name"]),
         )
@@ -167,26 +168,30 @@ class SubagentService:
             parent_session,
             parent_run_id,
             "subagent_status_changed",
-            subagent_run_id=subagent_run_id,
-            run_id=new_run_id,
+            subagent_id=subagent_id,
+            latest_run_id=new_run_id,
             child_session_id=str(row["child_session_id"]),
             status="running",
             reason="follow_up_message",
         )
-        updated = store_service.get_subagent_run(subagent_run_id) or row
+        updated = store_service.get_subagent(subagent_id) or row
         return self._public_row(updated)
 
     async def wait(
         self,
         parent_session: AgentSession,
         *,
-        subagent_run_id: str | None,
+        subagent_id: str | None,
         timeout_seconds: Any = None,
     ) -> dict[str, Any]:
-        rows = [self._owned_row(parent_session, subagent_run_id)] if subagent_run_id else [
-            self._owned_row(parent_session, str(row["child_run_id"]))
-            for row in store_service.list_subagent_runs_for_session(parent_session.session_id)
-        ]
+        rows = (
+            [self._owned_row(parent_session, subagent_id)]
+            if subagent_id
+            else [
+                self._owned_row(parent_session, str(row["subagent_id"]))
+                for row in store_service.list_subagents_for_session(parent_session.session_id)
+            ]
+        )
         if not rows:
             return {"subagents": [], "status": "completed"}
 
@@ -201,9 +206,9 @@ class SubagentService:
             if run is None:
                 raise RuntimeError("子 Agent 运行记录不存在")
             if str(run.get("status")) not in {"queued", "running", "waiting_input"}:
-                return self._public_row(store_service.get_subagent_run(str(row["child_run_id"])) or row)
+                return self._public_row(store_service.get_subagent(str(row["subagent_id"])) or row)
 
-            future = self._futures.get(str(row["child_run_id"]))
+            future = self._futures.get(str(row["subagent_id"]))
             if future is not None and not future.done():
                 await future
             else:
@@ -217,7 +222,7 @@ class SubagentService:
                     }:
                         break
                     await asyncio.sleep(0.1)
-            return self._public_row(store_service.get_subagent_run(str(row["child_run_id"])) or row)
+            return self._public_row(store_service.get_subagent(str(row["subagent_id"])) or row)
 
         try:
             items = await asyncio.wait_for(asyncio.gather(*(wait_one(row) for row in rows)), timeout=timeout)
@@ -231,23 +236,22 @@ class SubagentService:
     def list_subagents(self, parent_session: AgentSession) -> list[dict[str, Any]]:
         return [
             self._public_row(row)
-            for row in store_service.list_subagent_runs_for_session(parent_session.session_id)
+            for row in store_service.list_subagents_for_session(parent_session.session_id)
         ]
 
-    async def cancel(self, parent_session: AgentSession, subagent_run_id: str) -> dict[str, Any]:
-        row = self._owned_row(parent_session, subagent_run_id, include_destroyed=True)
+    async def cancel(self, parent_session: AgentSession, subagent_id: str) -> dict[str, Any]:
+        row = self._owned_row(parent_session, subagent_id, include_destroyed=True)
         if row.get("destroyed_at"):
             raise RuntimeError("子 Agent 已销毁，不能停止")
-        child_session = session_service.get_or_create(str(row["child_session_id"]))
-        run_id = child_session.request_abort()
-        return {
-            "subagent_run_id": subagent_run_id,
-            "run_id": run_id,
-            "status": "cancelling" if run_id else str(row.get("status")),
-        }
+        if str(row.get("status")) in {"completed", "failed", "cancelled", "timed_out"}:
+            return {
+                **self._public_row(row),
+                "cancel_outcome": f"already_{row['status']}",
+            }
+        return await self._cancel_row(store_service.mark_subagent_cancel_requested(subagent_id) or row)
 
-    def get_result(self, parent_session: AgentSession, subagent_run_id: str) -> dict[str, Any]:
-        row = self._owned_row(parent_session, subagent_run_id, include_destroyed=True)
+    def get_result(self, parent_session: AgentSession, subagent_id: str) -> dict[str, Any]:
+        row = self._owned_row(parent_session, subagent_id, include_destroyed=True)
         if row.get("destroyed_at"):
             raise RuntimeError("子 Agent 已销毁，结果已从主 Agent 上下文移除")
         run = store_service.get_agent_run(str(row["latest_run_id"])) or {}
@@ -258,8 +262,8 @@ class SubagentService:
             except json.JSONDecodeError:
                 result = result
         return {
-            "subagent_run_id": subagent_run_id,
-            "run_id": str(row["latest_run_id"]),
+            "subagent_id": subagent_id,
+            "latest_run_id": str(row["latest_run_id"]),
             "status": str(run.get("status") or row.get("status")),
             "result": result,
             "error": run.get("error_json"),
@@ -268,31 +272,48 @@ class SubagentService:
     async def destroy(
         self,
         parent_session: AgentSession,
-        subagent_run_id: str,
+        subagent_id: str,
         *,
         destroyed_by: str = "user",
         destroy_reason: str = "",
     ) -> dict[str, Any]:
-        row = self._owned_row(parent_session, subagent_run_id, include_destroyed=True)
+        row = self._owned_row(parent_session, subagent_id, include_destroyed=True)
         if row.get("destroyed_at"):
             return self._public_row(row)
 
-        child_session = session_service.get_or_create(str(row["child_session_id"]))
-        child_session.request_abort()
         updated = store_service.mark_subagent_destroyed(
-            subagent_run_id,
+            subagent_id,
             destroyed_by=destroyed_by,
             destroy_reason=destroy_reason,
-        )
-        return self._public_row(updated or row)
+        ) or row
+        await self._cancel_row(updated)
+        return self._public_row(store_service.get_subagent(subagent_id) or updated)
 
     async def cancel_for_parent_run(self, parent_run_id: str, parent_session_id: str) -> None:
         # 只取消当前父 run 创建的子任务，避免影响同一会话历史轮次。
-        for row in store_service.list_subagent_runs_for_session(parent_session_id):
-            if str(row.get("parent_run_id")) != parent_run_id:
-                continue
-            child_session = session_service.get_or_create(str(row["child_session_id"]))
-            child_session.request_abort()
+        rows = [
+            row
+            for row in store_service.list_subagents_for_session(parent_session_id)
+            if str(row.get("parent_run_id")) == parent_run_id
+            and str(row.get("status")) not in {"completed", "failed", "cancelled", "timed_out"}
+        ]
+        if rows:
+            await asyncio.gather(*(self._cancel_row(row) for row in rows))
+
+    async def _cancel_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        subagent_id = str(row["subagent_id"])
+        latest_run_id = str(row["latest_run_id"])
+        child_session = session_service.get_or_create(str(row["child_session_id"]))
+        run = await agent_run_service.cancel_run(child_session, latest_run_id)
+        status = str(run.get("status") or row.get("status") or "failed")
+        updated = store_service.update_subagent(
+            subagent_id,
+            status=status,
+            result_text=run.get("result") if isinstance(run.get("result"), str) else None,
+            error_text=run.get("error", {}).get("message") if isinstance(run.get("error"), dict) else None,
+        ) or store_service.get_subagent(subagent_id) or row
+        outcome = "cancelled" if status == "cancelled" else f"already_{status}"
+        return {**self._public_row(updated), "cancel_outcome": outcome}
 
     def _create_child_session(
         self,
@@ -345,12 +366,12 @@ class SubagentService:
         *,
         parent_run_id: str,
         parent_session_id: str,
-        subagent_run_id: str,
+        subagent_id: str,
         latest_run_id: str,
         name: str,
     ) -> None:
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        self._futures[subagent_run_id] = future
+        self._futures[subagent_id] = future
 
         async def watch() -> None:
             try:
@@ -358,13 +379,16 @@ class SubagentService:
                 result = run.get("result")
                 error = run.get("error")
                 status = str(run.get("status") or "failed")
-                result_text = result if isinstance(result, str) else json.dumps(
-                    result,
-                    ensure_ascii=False,
-                ) if result is not None else ""
+                result_text = (
+                    result
+                    if isinstance(result, str)
+                    else json.dumps(result, ensure_ascii=False)
+                    if result is not None
+                    else ""
+                )
                 error_text = error.get("message") if isinstance(error, dict) else str(error or "")
-                store_service.update_subagent_run(
-                    subagent_run_id,
+                store_service.update_subagent(
+                    subagent_id,
                     status=status,
                     result_text=result_text or None,
                     error_text=error_text or None,
@@ -372,24 +396,20 @@ class SubagentService:
                 await self._inject_result(
                     parent_run_id=parent_run_id,
                     parent_session_id=parent_session_id,
-                    subagent_run_id=subagent_run_id,
+                    subagent_id=subagent_id,
                     latest_run_id=latest_run_id,
                     name=name,
                     status=status,
                     result_text=result_text or error_text or "",
                 )
                 if not future.done():
-                    future.set_result(self._public_row(store_service.get_subagent_run(subagent_run_id) or {}))
+                    future.set_result(self._public_row(store_service.get_subagent(subagent_id) or {}))
             except Exception as exc:  # noqa: BLE001
-                store_service.update_subagent_run(
-                    subagent_run_id,
-                    status="failed",
-                    error_text=str(exc),
-                )
+                store_service.update_subagent(subagent_id, status="failed", error_text=str(exc))
                 if not future.done():
                     future.set_exception(exc)
             finally:
-                self._futures.pop(subagent_run_id, None)
+                self._futures.pop(subagent_id, None)
 
         watcher = asyncio.create_task(watch())
         self._watchers.add(watcher)
@@ -400,14 +420,14 @@ class SubagentService:
         *,
         parent_run_id: str,
         parent_session_id: str,
-        subagent_run_id: str,
+        subagent_id: str,
         latest_run_id: str,
         name: str,
         status: str,
         result_text: str,
     ) -> None:
         parent = session_service.get_or_create(parent_session_id)
-        row = store_service.get_subagent_run(subagent_run_id)
+        row = store_service.get_subagent(subagent_id)
         if row is not None and row.get("destroyed_at"):
             return
         content = f"Subagent {name} {status}: {result_text}"
@@ -417,8 +437,8 @@ class SubagentService:
                 {
                     "role": "user",
                     "content": content,
-                    "subagent_run_id": subagent_run_id,
-                    "child_run_id": latest_run_id,
+                    "subagent_id": subagent_id,
+                    "latest_run_id": latest_run_id,
                     "workspace_id": parent.workspace_id,
                 },
                 turn_index=turn_index,
@@ -431,8 +451,8 @@ class SubagentService:
             parent,
             parent_run_id,
             "subagent_result_ready",
-            subagent_run_id=subagent_run_id,
-            run_id=latest_run_id,
+            subagent_id=subagent_id,
+            latest_run_id=latest_run_id,
             name=name,
             status=status,
             result=result_text,
@@ -442,8 +462,8 @@ class SubagentService:
             parent,
             parent_run_id,
             event_type,
-            subagent_run_id=subagent_run_id,
-            run_id=latest_run_id,
+            subagent_id=subagent_id,
+            latest_run_id=latest_run_id,
             name=name,
             status=status,
         )
@@ -465,11 +485,11 @@ class SubagentService:
     def _owned_row(
         self,
         parent_session: AgentSession,
-        subagent_run_id: str,
+        subagent_id: str,
         *,
         include_destroyed: bool = False,
     ) -> dict[str, Any]:
-        row = store_service.get_subagent_run(subagent_run_id)
+        row = store_service.get_subagent(subagent_id)
         if row is None or str(row.get("parent_session_id")) != parent_session.session_id:
             raise LookupError("子 Agent 不存在或不属于当前会话")
         if not include_destroyed and row.get("destroyed_at"):
@@ -478,15 +498,16 @@ class SubagentService:
 
     def _public_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
-            "subagent_run_id": str(row.get("child_run_id")),
+            "subagent_id": str(row.get("subagent_id")),
             "workspace_id": str(row.get("workspace_id") or ""),
             "child_session_id": str(row.get("child_session_id") or ""),
-            "run_id": str(row.get("latest_run_id")),
+            "latest_run_id": str(row.get("latest_run_id") or ""),
             "name": str(row.get("name")),
             "task": str(row.get("task")),
             "status": str(row.get("status")),
             "result": row.get("result_text"),
             "error": row.get("error_text"),
+            "cancel_requested_at": row.get("cancel_requested_at"),
             "created_at": row.get("created_at"),
             "finished_at": row.get("finished_at"),
             "destroyed_at": row.get("destroyed_at"),
@@ -532,22 +553,13 @@ class SubagentService:
                 block
                 for block in reversed(blocks)
                 if isinstance(block, dict)
-                and block.get("kind") == "content"
-                and str(block.get("content") or "").strip()
+                and block.get("kind") in {"reasoning", "content"}
+                and block.get("status") == "streaming"
             ),
             None,
         )
         if isinstance(speaking, dict):
-            return {"kind": "message", "label": str(speaking.get("content") or "").strip()}
-
-        if any(
-            isinstance(block, dict)
-            and block.get("kind") == "reasoning"
-            and str(block.get("content") or "").strip()
-            for block in blocks
-        ):
             return {"kind": "thinking", "label": "思考中"}
-
         return {"kind": "running", "label": "准备执行"}
 
 

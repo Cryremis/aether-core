@@ -8,7 +8,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from app.core.config import settings
 from app.services.password_service import password_service
@@ -67,6 +67,7 @@ class StoreService:
                 wal_conn.close()
 
         with self._connect() as conn:
+            self._migrate_subagents_table(conn)
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -344,6 +345,89 @@ class StoreService:
                 CREATE INDEX IF NOT EXISTS idx_agent_runs_parent
                 ON agent_runs(parent_run_id, created_at DESC);
 
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    owner_user_id INTEGER,
+                    platform_id INTEGER,
+                    external_user_id TEXT,
+                    external_org_id TEXT,
+                    prompt TEXT NOT NULL,
+                    target_mode TEXT NOT NULL,
+                    target_session_id TEXT,
+                    target_conversation_id TEXT,
+                    new_session_title_prefix TEXT,
+                    workspace_policy TEXT NOT NULL DEFAULT 'isolated',
+                    schedule_json TEXT NOT NULL,
+                    timezone TEXT NOT NULL,
+                    starts_at TEXT,
+                    ends_at TEXT,
+                    next_run_at TEXT,
+                    timeout_seconds INTEGER NOT NULL DEFAULT 900,
+                    concurrency_policy TEXT NOT NULL DEFAULT 'skip',
+                    missed_run_policy TEXT NOT NULL DEFAULT 'skip',
+                    max_runs INTEGER,
+                    run_count INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    approved_at TEXT,
+                    paused_at TEXT,
+                    completed_at TEXT,
+                    last_run_at TEXT,
+                    last_successful_run_at TEXT,
+                    last_failure_reason TEXT,
+                    consecutive_failure_count INTEGER NOT NULL DEFAULT 0,
+                    created_via TEXT NOT NULL,
+                    created_session_id TEXT,
+                    created_by_user_id INTEGER,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due
+                ON scheduled_tasks(status, next_run_at);
+
+                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_owner
+                ON scheduled_tasks(owner_user_id, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_platform_user
+                ON scheduled_tasks(platform_id, external_user_id, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_target_session
+                ON scheduled_tasks(target_session_id);
+
+                CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+                    run_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    trigger_at TEXT NOT NULL,
+                    scheduled_for TEXT NOT NULL,
+                    session_id TEXT,
+                    conversation_id TEXT,
+                    agent_run_id TEXT,
+                    status TEXT NOT NULL,
+                    attempt INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 1,
+                    lease_owner TEXT,
+                    lease_expires_at TEXT,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    duration_ms INTEGER,
+                    error TEXT,
+                    result_summary TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES scheduled_tasks(task_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task
+                ON scheduled_task_runs(task_id, scheduled_for DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_status
+                ON scheduled_task_runs(status, lease_expires_at);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_scheduled_task_runs_occurrence
+                ON scheduled_task_runs(task_id, scheduled_for);
+
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_active_session
                 ON agent_runs(session_id)
                 WHERE status IN ('queued', 'running', 'waiting_input');
@@ -359,8 +443,8 @@ class StoreService:
                     FOREIGN KEY (run_id) REFERENCES agent_runs(run_id) ON DELETE CASCADE
                 );
 
-                CREATE TABLE IF NOT EXISTS subagent_runs (
-                    child_run_id TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS subagents (
+                    subagent_id TEXT PRIMARY KEY,
                     workspace_id TEXT,
                     parent_run_id TEXT NOT NULL,
                     parent_session_id TEXT NOT NULL,
@@ -371,6 +455,7 @@ class StoreService:
                     status TEXT NOT NULL,
                     result_text TEXT,
                     error_text TEXT,
+                    cancel_requested_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     finished_at TEXT,
@@ -379,8 +464,8 @@ class StoreService:
                     destroy_reason TEXT
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_subagent_runs_parent_session
-                ON subagent_runs(parent_session_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_subagents_parent_session
+                ON subagents(parent_session_id, created_at DESC);
                 """
             )
             self._ensure_column(conn, "conversations", "visibility", "TEXT NOT NULL DEFAULT 'normal'")
@@ -391,6 +476,7 @@ class StoreService:
             self._ensure_column(conn, "conversations", "revision", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "conversations", "last_run_id", "TEXT")
             self._ensure_column(conn, "agent_runs", "idempotency_key", "TEXT")
+            self._ensure_column(conn, "scheduled_tasks", "approved_at", "TEXT")
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_conversation_idempotency
@@ -398,11 +484,12 @@ class StoreService:
                 WHERE idempotency_key IS NOT NULL
                 """
             )
-            self._ensure_column(conn, "subagent_runs", "latest_run_id", "TEXT")
-            self._ensure_column(conn, "subagent_runs", "workspace_id", "TEXT")
-            self._ensure_column(conn, "subagent_runs", "destroyed_at", "TEXT")
-            self._ensure_column(conn, "subagent_runs", "destroyed_by", "TEXT")
-            self._ensure_column(conn, "subagent_runs", "destroy_reason", "TEXT")
+            self._ensure_column(conn, "subagents", "latest_run_id", "TEXT")
+            self._ensure_column(conn, "subagents", "workspace_id", "TEXT")
+            self._ensure_column(conn, "subagents", "cancel_requested_at", "TEXT")
+            self._ensure_column(conn, "subagents", "destroyed_at", "TEXT")
+            self._ensure_column(conn, "subagents", "destroyed_by", "TEXT")
+            self._ensure_column(conn, "subagents", "destroy_reason", "TEXT")
             self._migrate_subagent_conversation_ownership(conn)
             self._ensure_column(conn, "users", "last_login_at", "TEXT")
             self._ensure_column(conn, "platform_admins", "assigned_by", "INTEGER")
@@ -443,6 +530,26 @@ class StoreService:
         if column_name in columns:
             return
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+    def _migrate_subagents_table(self, conn: sqlite3.Connection) -> None:
+        """将旧的 run 语义表迁移为稳定的 subagent 实体表。"""
+        tables = {
+            str(row["name"])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+        has_legacy = "subagent_runs" in tables
+        has_current = "subagents" in tables
+        if has_legacy and has_current:
+            raise RuntimeError("subagent_runs 与 subagents 同时存在，拒绝自动迁移")
+        if has_legacy:
+            conn.execute("ALTER TABLE subagent_runs RENAME TO subagents")
+            conn.execute("DROP INDEX IF EXISTS idx_subagent_runs_parent_session")
+
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(subagents)").fetchall()}
+        if "child_run_id" in columns:
+            if "subagent_id" in columns:
+                raise RuntimeError("subagents 同时存在 child_run_id 与 subagent_id，拒绝自动迁移")
+            conn.execute("ALTER TABLE subagents RENAME COLUMN child_run_id TO subagent_id")
 
     def _migrate_workspaces(self, conn: sqlite3.Connection) -> None:
         """一次性把会话归属迁移为共享 Workspace 归属。"""
@@ -550,10 +657,10 @@ class StoreService:
 
         conn.execute(
             """
-            UPDATE subagent_runs
+            UPDATE subagents
             SET workspace_id = (
                 SELECT c.workspace_id FROM conversations c
-                WHERE c.session_id = subagent_runs.parent_session_id
+                WHERE c.session_id = subagents.parent_session_id
             )
             WHERE workspace_id IS NULL OR workspace_id = ''
             """
@@ -569,7 +676,7 @@ class StoreService:
                 owner_user_id = COALESCE(child.owner_user_id, parent.owner_user_id),
                 external_user_id = COALESCE(child.external_user_id, parent.external_user_id),
                 external_org_id = COALESCE(child.external_org_id, parent.external_org_id)
-            FROM subagent_runs AS relation
+            FROM subagents AS relation
             JOIN conversations AS parent
               ON parent.session_id = relation.parent_session_id
             WHERE child.session_id = relation.child_session_id
@@ -579,7 +686,7 @@ class StoreService:
             """
             UPDATE conversations AS child
             SET title = 'Subagent: ' || relation.name
-            FROM subagent_runs AS relation
+            FROM subagents AS relation
             WHERE child.session_id = relation.child_session_id
               AND (
                 child.title IS NULL
@@ -1715,7 +1822,7 @@ class StoreService:
                 return True
             subagent = conn.execute(
                 """
-                SELECT 1 FROM subagent_runs
+                SELECT 1 FROM subagents
                 WHERE workspace_id = ? AND status = 'running'
                 LIMIT 1
                 """,
@@ -2132,6 +2239,23 @@ class StoreService:
                     continue
                 conn.execute(
                     """
+                    UPDATE subagents
+                    SET status = 'failed',
+                        error_text = ?,
+                        updated_at = ?,
+                        finished_at = ?
+                    WHERE latest_run_id = ?
+                      AND status IN ('queued', 'running', 'waiting_input')
+                    """,
+                    (
+                        json.dumps(error, ensure_ascii=False),
+                        now,
+                        now,
+                        str(row["run_id"]),
+                    ),
+                )
+                conn.execute(
+                    """
                     INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
                     VALUES (?, ?, 'error', ?, 'visible', ?)
                     """,
@@ -2181,6 +2305,102 @@ class StoreService:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
+
+    def cancel_orphan_agent_run(self, run_id: str) -> dict[str, Any] | None:
+        """取消已无内存 worker 的 active run，并原子写入终态事件。"""
+        now = utcnow_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT event_cursor FROM agent_runs
+                WHERE run_id = ? AND status IN ('queued', 'running', 'waiting_input')
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is not None:
+                seq = int(row["event_cursor"]) + 1
+                conn.execute(
+                    """
+                    UPDATE agent_runs
+                    SET status = 'cancelled', event_cursor = ?, finished_at = ?
+                    WHERE run_id = ? AND status IN ('queued', 'running', 'waiting_input')
+                    """,
+                    (seq + 1, now, run_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                    VALUES (?, ?, 'aborted', ?, 'visible', ?)
+                    """,
+                    (
+                        run_id,
+                        seq,
+                        json.dumps(
+                            {"interrupt_point": "orphan_run_cancelled"},
+                            ensure_ascii=False,
+                        ),
+                        now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                    VALUES (?, ?, 'completed', ?, 'visible', ?)
+                    """,
+                    (
+                        run_id,
+                        seq + 1,
+                        json.dumps({"subtype": "aborted", "elapsed_ms": 0}, ensure_ascii=False),
+                        now,
+                    ),
+                )
+        return self.get_agent_run(run_id)
+
+    def fail_agent_run(self, run_id: str, *, message: str, interrupt_point: str = "run_finalize_failed") -> dict[str, Any] | None:
+        """兜底收敛 active run，用于正常事件发布失败时的终态保障。"""
+        placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
+        active_statuses = tuple(self.ACTIVE_AGENT_RUN_STATUSES)
+        now = utcnow_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT event_cursor FROM agent_runs
+                WHERE run_id = ? AND status IN ({placeholders})
+                """,
+                (run_id, *active_statuses),
+            ).fetchone()
+            if row is None:
+                return self.get_agent_run(run_id)
+            seq = int(row["event_cursor"]) + 1
+            error = {"message": message, "interrupt_point": interrupt_point}
+            conn.execute(
+                f"""
+                UPDATE agent_runs
+                SET status = 'failed', error_json = ?, event_cursor = ?, finished_at = ?
+                WHERE run_id = ? AND status IN ({placeholders})
+                """,
+                (json.dumps(error, ensure_ascii=False), seq + 1, now, run_id, *active_statuses),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                VALUES (?, ?, 'error', ?, 'visible', ?)
+                """,
+                (run_id, seq, json.dumps(error, ensure_ascii=False), now),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                VALUES (?, ?, 'completed', ?, 'visible', ?)
+                """,
+                (
+                    run_id,
+                    seq + 1,
+                    json.dumps({"subtype": "error", "elapsed_ms": 0}, ensure_ascii=False),
+                    now,
+                ),
+            )
+        return self.get_agent_run(run_id)
 
     def get_agent_runs(self, run_ids: list[str]) -> list[dict[str, Any]]:
         normalized = [str(item) for item in dict.fromkeys(run_ids) if item]
@@ -2267,10 +2487,11 @@ class StoreService:
             result.append(item)
         return result
 
-    def create_subagent_run(
+    def create_subagent(
         self,
         *,
-        child_run_id: str,
+        subagent_id: str,
+        latest_run_id: str,
         workspace_id: str,
         parent_run_id: str,
         parent_session_id: str,
@@ -2282,37 +2503,37 @@ class StoreService:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO subagent_runs(
-                    child_run_id, workspace_id, parent_run_id, parent_session_id, child_session_id,
+                INSERT INTO subagents(
+                    subagent_id, workspace_id, parent_run_id, parent_session_id, child_session_id,
                     latest_run_id, name, task, status, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 (
-                    child_run_id,
+                    subagent_id,
                     workspace_id,
                     parent_run_id,
                     parent_session_id,
                     child_session_id,
-                    child_run_id,
+                    latest_run_id,
                     name,
                     task,
                     now,
                     now,
                 ),
             )
-        return self.get_subagent_run(child_run_id) or {}
+        return self.get_subagent(subagent_id) or {}
 
-    def get_subagent_run(self, child_run_id: str) -> dict[str, Any] | None:
+    def get_subagent(self, subagent_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM subagent_runs WHERE child_run_id = ?",
-                (child_run_id,),
+                "SELECT * FROM subagents WHERE subagent_id = ?",
+                (subagent_id,),
             ).fetchone()
         return dict(row) if row else None
 
-    def update_subagent_run(
+    def update_subagent(
         self,
-        child_run_id: str,
+        subagent_id: str,
         *,
         status: str,
         result_text: str | None = None,
@@ -2323,10 +2544,10 @@ class StoreService:
         with self._connect() as conn:
             conn.execute(
                 """
-                UPDATE subagent_runs
+                UPDATE subagents
                 SET status = ?, result_text = COALESCE(?, result_text), error_text = COALESCE(?, error_text),
                     updated_at = ?, finished_at = CASE WHEN ? THEN ? ELSE finished_at END
-                WHERE child_run_id = ?
+                WHERE subagent_id = ?
                 """,
                 (
                     status,
@@ -2335,25 +2556,37 @@ class StoreService:
                     now,
                     1 if terminal else 0,
                     now,
-                    child_run_id,
+                    subagent_id,
                 ),
             )
-        return self.get_subagent_run(child_run_id)
+        return self.get_subagent(subagent_id)
 
-    def set_subagent_latest_run(self, child_run_id: str, latest_run_id: str) -> None:
+    def set_subagent_latest_run(self, subagent_id: str, latest_run_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
-                UPDATE subagent_runs
-                SET latest_run_id = ?, status = 'running', updated_at = ?
-                WHERE child_run_id = ?
+                UPDATE subagents
+                SET latest_run_id = ?, status = 'running', cancel_requested_at = NULL, updated_at = ?
+                WHERE subagent_id = ?
                 """,
-                (latest_run_id, utcnow_iso(), child_run_id),
+                (latest_run_id, utcnow_iso(), subagent_id),
             )
+
+    def mark_subagent_cancel_requested(self, subagent_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE subagents
+                SET cancel_requested_at = COALESCE(cancel_requested_at, ?), updated_at = ?
+                WHERE subagent_id = ?
+                """,
+                (utcnow_iso(), utcnow_iso(), subagent_id),
+            )
+        return self.get_subagent(subagent_id)
 
     def mark_subagent_destroyed(
         self,
-        child_run_id: str,
+        subagent_id: str,
         *,
         destroyed_by: str = "user",
         destroy_reason: str = "",
@@ -2362,39 +2595,503 @@ class StoreService:
         with self._connect() as conn:
             conn.execute(
                 """
-                UPDATE subagent_runs
+                UPDATE subagents
                 SET destroyed_at = COALESCE(destroyed_at, ?),
                     destroyed_by = COALESCE(destroyed_by, ?),
                     destroy_reason = COALESCE(destroy_reason, ?),
                     updated_at = ?
-                WHERE child_run_id = ?
+                WHERE subagent_id = ?
                 """,
-                (now, destroyed_by, destroy_reason, now, child_run_id),
+                (now, destroyed_by, destroy_reason, now, subagent_id),
             )
-        return self.get_subagent_run(child_run_id)
+        return self.get_subagent(subagent_id)
 
-    def list_subagent_runs_for_session(self, session_id: str) -> list[dict[str, Any]]:
+    def list_subagents_for_session(self, session_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT * FROM subagent_runs
+                SELECT * FROM subagents
                 WHERE parent_session_id = ? AND destroyed_at IS NULL
                 ORDER BY created_at DESC
                 """,
                 (session_id,),
-            ).fetchall()
+        ).fetchall()
         return [dict(row) for row in rows]
 
-    def list_destroyed_subagent_run_ids_for_session(self, session_id: str) -> set[str]:
+    @staticmethod
+    def _row_to_schedule_task(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        payload = dict(row)
+        payload["schedule"] = json.loads(payload.pop("schedule_json", "{}") or "{}")
+        return payload
+
+    @staticmethod
+    def _row_to_schedule_run(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        return dict(row) if row is not None else None
+
+    def create_schedule_task(self, task: dict[str, Any]) -> dict[str, Any]:
+        columns = [
+            "task_id", "title", "owner_user_id", "platform_id", "external_user_id",
+            "external_org_id", "prompt", "target_mode", "target_session_id",
+            "target_conversation_id", "new_session_title_prefix", "workspace_policy",
+            "schedule_json", "timezone", "starts_at", "ends_at", "next_run_at",
+            "timeout_seconds", "concurrency_policy", "missed_run_policy", "max_runs",
+            "run_count", "status", "created_via", "created_session_id",
+            "created_by_user_id", "approved_at", "revision", "created_at", "updated_at",
+        ]
+        values = [task.get(column) for column in columns]
+        placeholders = ", ".join("?" for _ in columns)
+        with self._connect() as conn:
+            conn.execute(
+                f"INSERT INTO scheduled_tasks ({', '.join(columns)}) VALUES ({placeholders})",
+                values,
+            )
+        result = self.get_schedule_task(str(task["task_id"]))
+        if result is None:
+            raise RuntimeError("定时任务保存失败")
+        return result
+
+    def get_schedule_task(self, task_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM scheduled_tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        return self._row_to_schedule_task(row)
+
+    def list_schedule_tasks(
+        self,
+        *,
+        owner_user_id: int | None = None,
+        platform_id: int | None = None,
+        external_user_id: str | None = None,
+        status: str | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if owner_user_id is not None:
+            clauses.append("owner_user_id = ?")
+            params.append(owner_user_id)
+        elif platform_id is not None and external_user_id is not None:
+            clauses.extend(["platform_id = ?", "external_user_id = ?"])
+            params.extend([platform_id, external_user_id])
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if search:
+            clauses.append("(title LIKE ? OR prompt LIKE ?)")
+            like = f"%{search}%"
+            params.extend([like, like])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.extend([limit, offset])
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM scheduled_tasks {where}
+                ORDER BY updated_at DESC LIMIT ? OFFSET ?
+                """,
+                params,
+            ).fetchall()
+        return [self._row_to_schedule_task(row) or {} for row in rows]
+
+    def count_schedule_tasks(
+        self,
+        *,
+        owner_user_id: int | None = None,
+        platform_id: int | None = None,
+        external_user_id: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if owner_user_id is not None:
+            clauses.append("owner_user_id = ?")
+            params.append(owner_user_id)
+        elif platform_id is not None and external_user_id is not None:
+            clauses.extend(["platform_id = ?", "external_user_id = ?"])
+            params.extend([platform_id, external_user_id])
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS total FROM scheduled_tasks {where}", params
+            ).fetchone()
+        return int(row["total"])
+
+    def update_schedule_task(
+        self,
+        task_id: str,
+        updates: dict[str, Any],
+        *,
+        expected_revision: int,
+    ) -> dict[str, Any] | None:
+        if not updates:
+            return self.get_schedule_task(task_id)
+        update_fields = {**updates, "revision": expected_revision + 1, "updated_at": utcnow_iso()}
+        if "schedule" in update_fields:
+            update_fields["schedule_json"] = json.dumps(
+                update_fields.pop("schedule"), ensure_ascii=False
+            )
+        assignments = ", ".join(f"{field} = ?" for field in update_fields)
+        params = list(update_fields.values()) + [task_id, expected_revision]
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE scheduled_tasks SET {assignments}
+                WHERE task_id = ? AND revision = ?
+                """,
+                params,
+            )
+            if cursor.rowcount == 0:
+                return None
+        return self.get_schedule_task(task_id)
+
+    def set_schedule_task_status(
+        self,
+        task_id: str,
+        status: str,
+        *,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        updates: dict[str, Any] = {"status": status}
+        if status == "paused":
+            updates["paused_at"] = utcnow_iso()
+        if status == "completed":
+            updates["completed_at"] = utcnow_iso()
+        if reason is not None:
+            updates["last_failure_reason"] = reason
+        current = self.get_schedule_task(task_id)
+        if current is None:
+            return None
+        return self.update_schedule_task(
+            task_id,
+            updates,
+            expected_revision=int(current["revision"]),
+        )
+
+    def materialize_due_schedule_tasks(
+        self,
+        *,
+        now_iso: str,
+        limit: int,
+        build_plan: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """在同一事务中推进 next_run_at 并生成 run，杜绝重复触发。"""
+        created: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM scheduled_tasks
+                    WHERE status = 'active'
+                      AND next_run_at IS NOT NULL
+                      AND next_run_at <= ?
+                    ORDER BY next_run_at ASC
+                    LIMIT ?
+                    """,
+                    (now_iso, limit),
+                ).fetchall()
+                for row in rows:
+                    task = self._row_to_schedule_task(row)
+                    if task is None:
+                        continue
+                    plan = build_plan(task)
+                    task_updates: dict[str, Any] = {
+                        "run_count": int(task["run_count"]) + int(plan["run_count_delta"]),
+                        "updated_at": utcnow_iso(),
+                    }
+                    if plan.get("next_run_at") is not None:
+                        task_updates["next_run_at"] = plan["next_run_at"]
+                    if plan.get("status"):
+                        task_updates["status"] = plan["status"]
+                    if plan.get("status") == "completed":
+                        task_updates["completed_at"] = utcnow_iso()
+                    conn.execute(
+                        """
+                        UPDATE scheduled_tasks
+                        SET run_count = ?, next_run_at = ?, status = ?, completed_at = ?, updated_at = ?
+                        WHERE task_id = ?
+                        """,
+                        (
+                            task_updates.get("run_count", task["run_count"]),
+                            task_updates.get("next_run_at", task["next_run_at"]),
+                            task_updates.get("status", task["status"]),
+                            task_updates.get("completed_at"),
+                            task_updates.get("updated_at", utcnow_iso()),
+                            task["task_id"],
+                        ),
+                    )
+                    for occurrence in plan.get("occurrences", []):
+                        run_id = f"schedrun_{uuid.uuid4().hex}"
+                        conn.execute(
+                            """
+                            INSERT INTO scheduled_task_runs(
+                                run_id, task_id, trigger_at, scheduled_for, status,
+                                attempt, max_attempts, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, 'queued', 0, 1, ?, ?)
+                            """,
+                            (
+                                run_id,
+                                task["task_id"],
+                                now_iso,
+                                occurrence,
+                                utcnow_iso(),
+                                utcnow_iso(),
+                            ),
+                        )
+                        created.append(
+                            {
+                                "run_id": run_id,
+                                "task_id": task["task_id"],
+                                "scheduled_for": occurrence,
+                                "task": task,
+                            }
+                        )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return created
+
+    def create_schedule_run(
+        self,
+        *,
+        task_id: str,
+        scheduled_for: str,
+        trigger_at: str,
+    ) -> dict[str, Any]:
+        run_id = f"schedrun_{uuid.uuid4().hex}"
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_task_runs(
+                    run_id, task_id, trigger_at, scheduled_for, status,
+                    attempt, max_attempts, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'queued', 0, 1, ?, ?)
+                """,
+                (run_id, task_id, trigger_at, scheduled_for, now, now),
+            )
+        run = self.get_schedule_run(run_id)
+        if run is None:
+            raise RuntimeError("定时任务执行记录保存失败")
+        return run
+
+    def get_schedule_run(self, run_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM scheduled_task_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        return self._row_to_schedule_run(row)
+
+    def list_schedule_task_runs(
+        self,
+        task_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT child_run_id FROM subagent_runs
+                SELECT * FROM scheduled_task_runs
+                WHERE task_id = ?
+                ORDER BY scheduled_for DESC LIMIT ? OFFSET ?
+                """,
+                (task_id, limit, offset),
+            ).fetchall()
+        return [self._row_to_schedule_run(row) or {} for row in rows]
+
+    def claim_next_schedule_run(
+        self,
+        *,
+        lease_owner: str,
+        lease_expires_at: str,
+    ) -> dict[str, Any] | None:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    """
+                    SELECT r.* FROM scheduled_task_runs r
+                    JOIN scheduled_tasks t ON t.task_id = r.task_id
+                    WHERE r.status = 'queued'
+                      AND t.status != 'archived'
+                    ORDER BY r.scheduled_for ASC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if row is None:
+                    conn.commit()
+                    return None
+                run_id = str(row["run_id"])
+                conn.execute(
+                    """
+                    UPDATE scheduled_task_runs
+                    SET status = 'running', lease_owner = ?, lease_expires_at = ?,
+                        started_at = ?, attempt = attempt + 1, updated_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (lease_owner, lease_expires_at, now, now, run_id),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        run = self.get_schedule_run(run_id)
+        if run is None:
+            return None
+        task = self.get_schedule_task(str(run["task_id"]))
+        return {**run, "task": task}
+
+    def finish_schedule_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        agent_run_id: str | None = None,
+        error: str | None = None,
+        result_summary: str | None = None,
+    ) -> dict[str, Any] | None:
+        now = utcnow_iso()
+        run = self.get_schedule_run(run_id)
+        if run is None:
+            return None
+        started_at = run.get("started_at")
+        duration_ms = None
+        if started_at:
+            try:
+                duration_ms = max(
+                    0,
+                    int(
+                        (
+                            datetime.now(timezone.utc)
+                            - datetime.fromisoformat(started_at)
+                        ).total_seconds()
+                        * 1000
+                    ),
+                )
+            except ValueError:
+                duration_ms = None
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE scheduled_task_runs
+                SET status = ?, session_id = ?, conversation_id = ?, agent_run_id = ?,
+                    finished_at = ?, duration_ms = ?, error = ?, result_summary = ?,
+                    lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+                WHERE run_id = ? AND status = 'running'
+                """,
+                (
+                    status,
+                    session_id or run.get("session_id"),
+                    conversation_id or run.get("conversation_id"),
+                    agent_run_id or run.get("agent_run_id"),
+                    now,
+                    duration_ms,
+                    error,
+                    result_summary,
+                    now,
+                    run_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                return self.get_schedule_run(run_id)
+
+            succeeded = status == "succeeded"
+            if succeeded:
+                conn.execute(
+                    """
+                    UPDATE scheduled_tasks
+                    SET last_run_at = ?, last_successful_run_at = ?,
+                        consecutive_failure_count = 0, updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (now, now, now, run["task_id"]),
+                )
+            elif status in {"failed", "timed_out"}:
+                conn.execute(
+                    """
+                    UPDATE scheduled_tasks
+                    SET last_run_at = ?, last_failure_reason = ?,
+                        consecutive_failure_count = consecutive_failure_count + 1, updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (now, error, now, run["task_id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE scheduled_tasks
+                    SET status = 'paused', paused_at = ?, last_failure_reason = ?,
+                        updated_at = ?
+                    WHERE task_id = ? AND consecutive_failure_count >= 5 AND status = 'active'
+                    """,
+                    (now, error, now, run["task_id"]),
+                )
+        return self.get_schedule_run(run_id)
+
+    def recover_expired_schedule_run_leases(self) -> int:
+        now = utcnow_iso()
+        with self._connect() as conn:
+            expired = conn.execute(
+                """
+                SELECT DISTINCT task_id FROM scheduled_task_runs
+                WHERE status = 'running'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at < ?
+                """,
+                (now,),
+            ).fetchall()
+            task_ids = [str(row["task_id"]) for row in expired]
+            cursor = conn.execute(
+                """
+                UPDATE scheduled_task_runs
+                SET status = 'failed', error = ?, finished_at = ?, lease_owner = NULL,
+                    lease_expires_at = NULL, updated_at = ?
+                WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?
+                """,
+                ("执行租约过期，调度器已终止该次执行", now, now, now),
+            )
+            for task_id in task_ids:
+                conn.execute(
+                    """
+                    UPDATE scheduled_tasks
+                    SET last_run_at = ?, last_failure_reason = ?,
+                        consecutive_failure_count = consecutive_failure_count + 1, updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (now, "执行租约过期，调度器已终止该次执行", now, task_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE scheduled_tasks
+                    SET status = 'paused', paused_at = ?, updated_at = ?
+                    WHERE task_id = ? AND consecutive_failure_count >= 5 AND status = 'active'
+                    """,
+                    (now, now, task_id),
+                )
+            return cursor.rowcount
+
+    def list_destroyed_subagent_ids_for_session(self, session_id: str) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT subagent_id FROM subagents
                 WHERE parent_session_id = ? AND destroyed_at IS NOT NULL
                 """,
                 (session_id,),
             ).fetchall()
-        return {str(row["child_run_id"]) for row in rows}
+        return {str(row["subagent_id"]) for row in rows}
 
     def backfill_conversation_metadata(self, session_id: str, updates: dict[str, Any]) -> bool:
         """补全会话 metadata 中缺失的字段,已有非空值不会被覆盖。

@@ -71,8 +71,8 @@ class HostBindRequest(BaseModel):
 
     platform_key: str
     host_name: str
-    session_id: str | None = None
-    conversation_id: str | None = None
+    session_id: str | None = Field(default=None, min_length=1, description="已有会话 ID；不存在、已删除或无权访问时拒绝。新建会话请省略。")
+    conversation_id: str | None = Field(default=None, min_length=1, description="已有对话 ID；与 session_id 同时提供时必须对应同一对话。")
     conversation_key: str | None = None
     visibility: Literal["normal", "hidden"] = "normal"
     context: HostContextDescriptor = Field(default_factory=HostContextDescriptor)
@@ -135,7 +135,7 @@ class HostAssistantMessage(BaseModel):
     message_id: str
     run_id: str | None = None
     agent_id: str | None = None
-    subagent_run_id: str | None = None
+    subagent_id: str | None = None
     content: str
     run_status: str | None = None
     created_at: str

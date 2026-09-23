@@ -169,7 +169,7 @@ GET /api/v1/host/conversations/{conversation_id}/assistant-messages
       "message_id": "msg_...",
       "run_id": "run_...",
       "agent_id": null,
-      "subagent_run_id": null,
+      "subagent_id": null,
       "content": "AI visible reply",
       "run_status": "completed",
       "created_at": "2026-09-18T00:00:00Z"
@@ -204,7 +204,7 @@ GET /api/v1/host/conversations/{conversation_id}/assistant-messages
     "input_tokens": 1234,
     "output_tokens": 234,
     "tool_calls": 4,
-    "subagent_runs": 2
+    "subagents": 2
   },
   "subagents": []
 }
@@ -332,10 +332,10 @@ created_at
 
 平台可以定义平台级 agent，宿主可以注入会话级 agent 定义；版本不可变，修改生成新版本。
 
-### 6.5 subagent_runs
+### 6.5 subagents
 
 ```text
-child_run_id PK
+subagent_id PK
 workspace_id
 parent_run_id FK
 parent_session_id
@@ -346,10 +346,11 @@ task
 status
 result_text
 error_text
+cancel_requested_at
 created_at / updated_at / finished_at
 ```
 
-Subagent 同时拥有独立 session/conversation 与 run 记录。内部会话默认隐藏，用户通过工作台只读卡片查看状态，不能直接发消息；追加沟通由主 Agent 的 `subagent_send_message` 发起。
+Subagent 是稳定实体，`subagent_id` 是唯一工具句柄；`latest_run_id` 只表示当前轮次，不能作为句柄。子代理拥有独立 session/conversation 与 run 记录。内部会话默认隐藏，用户通过工作台只读卡片查看状态，不能直接发消息；追加沟通由主 Agent 的 `subagent_send_message` 发起。
 
 ## 7. Run 状态机
 
@@ -410,6 +411,8 @@ subagent_list
 subagent_cancel
 subagent_get_result
 ```
+
+除 `subagent_create` 外，所有子代理工具都使用 `subagent_id`。`subagent_cancel` 会记录取消请求、中断 LLM/工具执行、等待终态，并返回 `cancelled` 或 `already_*`。
 
 `subagent_create` 参数：
 
@@ -505,7 +508,7 @@ effective_tools =
 
 1. 父 run 取消时级联取消所有未终态子 run。
 2. 单个子 run 超时或失败不自动取消父 run，父收到结构化错误。
-3. 子 run 等待用户输入时，父 run 进入 `waiting_input` 并携带 `subagent_run_id`。
+3. 子 run 等待用户输入时，父 run 进入 `waiting_input` 并携带 `subagent_id`。
 4. 子 run 的工具执行必须能响应取消信号，复用现有 tool task cleanup。
 5. Worker 崩溃后 run 由 reconciliation 恢复为 `failed` 或重新排队，事件保持单调。
 
@@ -526,7 +529,8 @@ subagent 最终回复不能要求主 agent 轮询才知道结果。Orchestrator 
   "role": "tool_result",
   "content": "Subagent repo_explorer completed: ...",
   "metadata": {
-    "subagent_run_id": "run_...",
+    "subagent_id": "subagent_...",
+    "latest_run_id": "run_...",
     "parent_run_id": "run_...",
     "result_kind": "subagent_final_reply"
   }
