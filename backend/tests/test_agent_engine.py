@@ -1045,6 +1045,53 @@ def test_agent_engine_raises_readable_llm_error_message(monkeypatch, tmp_path):
         asyncio.run(collect_stream(session, "hello"))
 
 
+def test_agent_engine_retries_transient_upstream_error(monkeypatch, tmp_path):
+    """回归: LLM 网关瞬时 503 时退避重试,而不是直接把错误暴露给用户。"""
+    initialize_store(tmp_path)
+
+    call_count = 0
+
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            request = httpx.Request("POST", "http://models.example.com/v1/chat/completions")
+            response = httpx.Response(
+                503,
+                request=request,
+                json={"error": {"message": "upstream error"}},
+            )
+            raise httpx.HTTPStatusError("service unavailable", request=request, response=response)
+            if False:
+                yield {}
+        else:
+            yield {"choices": [{"delta": {"content": "recovered answer"}, "finish_reason": None}]}
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    async def fake_sleep(_seconds):
+        return
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    session = build_session("sess_engine_upstream_retry")
+    events = asyncio.run(collect_stream(session, "hello"))
+
+    retry_events = [item for item in events if item["type"] == "stream_retry"]
+    assert len(retry_events) == 1
+    assert retry_events[0]["payload"]["reason"] == "upstream_status"
+    assert "upstream error" in retry_events[0]["payload"]["message"]
+    result_event = next(item for item in events if item["type"] == "result")
+    assert result_event["payload"]["subtype"] == "success"
+    assert result_event["payload"]["result"] == "recovered answer"
+    assert call_count == 2
+    assert not any(item["type"] == "error" for item in events)
+
+
 def test_agent_engine_recovers_from_length_truncation_reasoning_only(monkeypatch, tmp_path):
     """回归: finish_reason=length 且只有 reasoning 没有 visible content 时,
     不报 error_empty_response,而是持久化已有内容后继续,最终成功产出回答。

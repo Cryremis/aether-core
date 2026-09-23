@@ -36,6 +36,7 @@ class AgentEngine:
     """AetherCore runtime loop with production context management."""
 
     _TOOL_PROGRESS_INTERVAL_SECONDS = 15.0
+    _RETRYABLE_LLM_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504, 529}
 
     def _append_assistant_block(self, blocks: list[dict[str, Any]], block: dict[str, Any]) -> None:
         blocks.append(block)
@@ -426,9 +427,19 @@ class AgentEngine:
             baseline = response_started_at if response_started_at is not None else started_at
             return int((time.perf_counter() - baseline) * 1000)
 
-        transport_retry_deadline = 0.0
-        transport_retry_count = 0
-        transport_retry_delays = [1, 3, 5, 10, 10, 10, 10, 10]
+        llm_retry_deadline = 0.0
+        llm_retry_count = 0
+        llm_retry_delays = [1, 3, 5, 10, 10, 10, 10, 10]
+
+        def take_llm_retry_delay() -> int | None:
+            nonlocal llm_retry_deadline, llm_retry_count
+            if llm_retry_deadline == 0.0:
+                llm_retry_deadline = time.perf_counter() + 60
+            if time.perf_counter() >= llm_retry_deadline:
+                return None
+            delay = llm_retry_delays[min(llm_retry_count, len(llm_retry_delays) - 1)]
+            llm_retry_count += 1
+            return delay
 
         while True:
             turn_count += 1
@@ -736,19 +747,38 @@ class AgentEngine:
                     for context_event in recovered.events:
                         yield self._emit_context_event(session, context_event.type, context_event.payload)
                     continue
+                # 网关偶发 5xx/限流时复用同一退避窗口；本轮已有输出则不重放，避免前端出现重复内容。
+                if (
+                    exc.response.status_code in self._RETRYABLE_LLM_STATUS_CODES
+                    and not assistant_content
+                    and not tool_calls
+                    and not active_reasoning_block_id
+                    and not active_content_block_id
+                ):
+                    delay = take_llm_retry_delay()
+                    if delay is not None:
+                        yield make_event(
+                            session,
+                            "stream_retry",
+                            round=turn_count,
+                            attempt=llm_retry_count,
+                            delay=delay,
+                            reason="upstream_status",
+                            message=error_message,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
                 raise RuntimeError(error_message) from exc
             except httpx.TransportError:
-                if transport_retry_deadline == 0.0:
-                    transport_retry_deadline = time.perf_counter() + 60
-                if time.perf_counter() < transport_retry_deadline:
-                    delay = transport_retry_delays[min(transport_retry_count, len(transport_retry_delays) - 1)]
-                    transport_retry_count += 1
+                delay = take_llm_retry_delay()
+                if delay is not None:
                     yield make_event(
                         session,
                         "stream_retry",
                         round=turn_count,
-                        attempt=transport_retry_count,
+                        attempt=llm_retry_count,
                         delay=delay,
+                        reason="transport",
                     )
                     await asyncio.sleep(delay)
                     continue

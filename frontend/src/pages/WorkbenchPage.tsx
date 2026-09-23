@@ -1613,10 +1613,12 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       if (eventType === "stream_retry") {
         const attempt = Number(payload.attempt ?? 0);
         const delay = Number(payload.delay ?? 0);
+        const retryReason = String(payload.reason ?? "transport");
         refs.activeContentText.value = "";
         refs.activeContentId.value = null;
         refs.activeReasoningId.value = null;
-        setError(`网络中断，第 ${attempt} 次重连中（${delay}秒）…`);
+        const retryLabel = retryReason === "upstream_status" ? "模型服务暂时不可用" : "网络中断";
+        setError(`${retryLabel}，第 ${attempt} 次重连中（${delay}秒）…`);
         return;
       }
 
