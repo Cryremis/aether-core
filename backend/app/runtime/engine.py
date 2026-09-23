@@ -973,6 +973,13 @@ class AgentEngine:
                             except asyncio.CancelledError:
                                 result = ToolExecutionResult.aborted()
                                 break
+                            finally:
+                                # 停止分支也必须回收输出、进度和取消事件的等待任务。
+                                waiters = [task for task in (wait_task, abort_wait_task, output_wait_task) if task is not None]
+                                for task in waiters:
+                                    if not task.done():
+                                        task.cancel()
+                                await asyncio.gather(*waiters, return_exceptions=True)
                     except Exception as exc:  # noqa: BLE001
                         result = ToolExecutionResult.failure(
                             "tool.execution",

@@ -127,3 +127,41 @@ def test_abort_does_not_clear_an_unowned_live_run(tmp_path):
         assert store_service.get_agent_run("run-other-process")["status"] == "running"
         assert runtime_state_service.get_workboard(session).items[0].status == "in_progress"
     asyncio.run(scenario())
+
+
+def test_abort_during_host_tool_reclaims_waiters_and_allows_next_message(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    session = session_service.get_or_create("abort-host-callback")
+
+    async def scenario():
+        entered, cleaned = asyncio.Event(), asyncio.Event()
+        initial_tasks = asyncio.all_tasks()
+
+        async def model(*args, **kwargs):
+            if next(m["content"] for m in reversed(args[1]) if m["role"] == "user") == "继续":
+                yield {"choices": [{"delta": {"content": "可以继续"}, "finish_reason": "stop"}]}
+            else:
+                yield {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-host",
+                    "function": {"name": "host_pending", "arguments": "{}"}}]}, "finish_reason": "tool_calls"}]}
+
+        async def execute(session, tool_name, arguments):
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cleaned.set()
+
+        monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", model)
+        monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+        monkeypatch.setattr("app.runtime.engine.tool_service.execute", execute)
+        service = AgentRunService()
+        await service.start_chat_run(session, "执行")
+        await asyncio.wait_for(entered.wait(), 5)
+        assert (await service.abort_session(session))["status"] == "stopped"
+        await asyncio.wait_for(cleaned.wait(), 1)
+        await asyncio.sleep(.01)
+        assert not (asyncio.all_tasks() - initial_tasks), "停止后不得遗留输出队列或进度等待任务"
+        run_id = await service.start_chat_run(session, "继续")
+        await asyncio.wait_for(service.wait_for_run(run_id), 5)
+        assert store_service.get_agent_run(run_id)["status"] == "completed"
+    asyncio.run(scenario())
