@@ -75,6 +75,7 @@ class HostBindRequest(BaseModel):
     conversation_id: str | None = Field(default=None, min_length=1, description="已有对话 ID；与 session_id 同时提供时必须对应同一对话。")
     conversation_key: str | None = None
     visibility: Literal["normal", "hidden"] = "normal"
+    external_org_id: str | None = Field(default=None, max_length=256)
     context: HostContextDescriptor = Field(default_factory=HostContextDescriptor)
     tools: list[HostToolDescriptor] = Field(default_factory=list)
     skills: list[HostSkillDescriptor] = Field(default_factory=list)

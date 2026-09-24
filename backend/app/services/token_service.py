@@ -37,6 +37,7 @@ class TokenService:
         platform_id: int,
         conversation_id: str,
         external_user_id: str,
+        external_org_id: str | None = None,
     ) -> tuple[str, int]:
         return self._create_token(
             {
@@ -44,6 +45,7 @@ class TokenService:
                 "sub": external_user_id,
                 "platform_id": platform_id,
                 "conversation_id": conversation_id,
+                "external_org_id": external_org_id,
             },
             timedelta(minutes=settings.auth_embed_token_expire_minutes),
         )

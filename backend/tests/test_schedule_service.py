@@ -5,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.main import app
 from app.core.config import settings
 from app.schemas.schedule import ScheduleCreateRequest
 from app.services.scheduling.errors import SchedulePermissionError
@@ -13,6 +15,7 @@ from app.services.scheduling.models import ScheduleIdentity
 from app.services.scheduling.scheduler import ScheduleScheduler
 from app.services.scheduling.service import schedule_service
 from app.services.store import store_service
+from app.services.token_service import token_service
 
 
 def initialize_store(tmp_path: Path) -> None:
@@ -34,9 +37,8 @@ def create_request(**overrides):
     return ScheduleCreateRequest.model_validate(payload)
 
 
-def test_agent_created_schedule_requires_approval(tmp_path) -> None:
+def test_agent_created_schedule_starts_active_before_unified_approval(tmp_path) -> None:
     initialize_store(tmp_path)
-    settings.agent_schedules_require_approval = True
 
     task = schedule_service.create(
         create_request(),
@@ -45,22 +47,24 @@ def test_agent_created_schedule_requires_approval(tmp_path) -> None:
         created_session_id="sess_agent",
     )
 
-    assert task.status.value == "pending_approval"
-    approved = schedule_service.approve(
-        task.task_id, identity=ScheduleIdentity(owner_user_id=1)
-    )
-    assert approved.status.value == "active"
-    assert approved.next_run_at is not None
+    assert task.status.value == "active"
+    assert task.next_run_at is not None
 
 
 def test_pending_approval_cannot_be_paused_or_run_manually(tmp_path) -> None:
     initialize_store(tmp_path)
-    settings.agent_schedules_require_approval = True
     identity = ScheduleIdentity(owner_user_id=1)
     task = schedule_service.create(
         create_request(),
         identity=identity,
         created_via="agent",
+    )
+    row = store_service.get_schedule_task(task.task_id)
+    assert row is not None
+    store_service.update_schedule_task(
+        task.task_id,
+        {"status": "pending_approval", "approved_at": None},
+        expected_revision=int(row["revision"]),
     )
 
     with pytest.raises(Exception, match="只有运行中的任务可以暂停"):
@@ -71,7 +75,6 @@ def test_pending_approval_cannot_be_paused_or_run_manually(tmp_path) -> None:
 
 def test_ui_created_schedule_starts_active(tmp_path) -> None:
     initialize_store(tmp_path)
-    settings.agent_schedules_require_approval = True
 
     task = schedule_service.create(
         create_request(),
@@ -230,18 +233,42 @@ def test_archived_schedule_can_be_restored(tmp_path) -> None:
 
 def test_rejected_agent_schedule_restores_to_pending_approval(tmp_path) -> None:
     initialize_store(tmp_path)
-    settings.agent_schedules_require_approval = True
     identity = ScheduleIdentity(owner_user_id=1)
     task = schedule_service.create(
         create_request(),
         identity=identity,
         created_via="agent",
     )
+    row = store_service.get_schedule_task(task.task_id)
+    assert row is not None
+    store_service.update_schedule_task(
+        task.task_id,
+        {"status": "pending_approval", "approved_at": None},
+        expected_revision=int(row["revision"]),
+    )
     schedule_service.reject(task.task_id, identity=identity)
 
     restored = schedule_service.restore(task.task_id, identity=identity)
 
     assert restored.status.value == "pending_approval"
+
+
+def test_embed_schedule_route_accepts_external_org_identity(tmp_path) -> None:
+    initialize_store(tmp_path)
+    token, _ = token_service.create_embed_token(
+        platform_id=1,
+        conversation_id="conv_embed",
+        external_user_id="user_embed",
+        external_org_id="org_embed",
+    )
+
+    response = TestClient(app).get(
+        "/api/v1/agent/schedules",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
 
 
 def test_completed_schedule_at_run_limit_cannot_be_restored(tmp_path) -> None:

@@ -95,9 +95,9 @@ flowchart LR
 
 AetherCore 支持间隔、每天、工作日、每周和标准 5 字段 Cron 频率。任务可以固定在某个会话中执行，也可以每次触发创建独立会话。调度状态持久化在 SQLite 中，触发推进与执行记录生成在同一事务内完成，Worker 使用租约机制在进程重启后恢复异常执行。
 
-工作台侧栏提供“定时”视图，支持创建、审批、暂停、恢复、编辑、立即执行、查看历史、归档和取消归档任务，可直接访问 `/workbench?sidebar=schedules`。Agent 也可以调用 `schedule_create`、`schedule_list`、`schedule_update`、`schedule_pause`、`schedule_resume`、`schedule_restore` 和 `schedule_delete`；默认情况下，Agent 创建的任务需要用户确认后才会开始触发。
+工作台侧栏提供“定时”视图，支持创建、暂停、恢复、编辑、立即执行、查看历史、归档和取消归档任务，可直接访问 `/workbench?sidebar=schedules`。Agent 也可以调用 `schedule_create`、`schedule_list`、`schedule_update`、`schedule_pause`、`schedule_resume`、`schedule_restore` 和 `schedule_delete`。在统一审批系统引入前，Agent 创建的任务会立即开始触发。
 
-API 前缀为 `/api/v1/agent/schedules`。调度器默认启用；设置 `SCHEDULER_ENABLED=false` 可以停止后台触发，但任务管理 API 和历史仍可访问。其他默认值为 `SCHEDULER_TICK_SECONDS=5`、`SCHEDULER_WORKERS=4`、`SCHEDULER_LEASE_SECONDS=120`、`SCHEDULE_MAX_PER_OWNER=50`、`SCHEDULE_MIN_INTERVAL_SECONDS=60`、`AGENT_SCHEDULES_REQUIRE_APPROVAL=true`。
+API 前缀为 `/api/v1/agent/schedules`。调度器默认启用；设置 `SCHEDULER_ENABLED=false` 可以停止后台触发，但任务管理 API 和历史仍可访问。其他默认值为 `SCHEDULER_TICK_SECONDS=5`、`SCHEDULER_WORKERS=4`、`SCHEDULER_LEASE_SECONDS=120`、`SCHEDULE_MAX_PER_OWNER=50`、`SCHEDULE_MIN_INTERVAL_SECONDS=60`。
 
 ## 快速开始
 

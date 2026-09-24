@@ -626,6 +626,10 @@ class ToolService:
                     timezone=str(arguments.get("timezone") or "UTC"),
                     starts_at=arguments.get("starts_at"),
                     ends_at=arguments.get("ends_at"),
+                    execution={
+                        "timeout_seconds": int(arguments.get("timeout_seconds", 900)),
+                        "max_runs": arguments.get("max_runs"),
+                    },
                 )
                 task = schedule_service.create(
                     request,

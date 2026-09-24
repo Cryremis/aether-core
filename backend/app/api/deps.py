@@ -22,6 +22,7 @@ class AuthContext:
     platform_id: int | None = None
     conversation_id: str | None = None
     external_user_id: str | None = None
+    external_org_id: str | None = None
 
 
 def get_auth_context(
@@ -50,6 +51,11 @@ def get_auth_context(
             platform_id=int(payload["platform_id"]),
             conversation_id=str(payload["conversation_id"]),
             external_user_id=str(payload["sub"]),
+            external_org_id=(
+                str(payload["external_org_id"])
+                if payload.get("external_org_id") is not None
+                else None
+            ),
         )
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证令牌无效")
 

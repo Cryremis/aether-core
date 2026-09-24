@@ -14,7 +14,6 @@ def initialize_store(tmp_path: Path) -> None:
     store_service._db_path = settings.metadata_db_path  # noqa: SLF001
     store_service._db_path.parent.mkdir(parents=True, exist_ok=True)
     store_service.initialize()
-    settings.agent_schedules_require_approval = True
 
 
 def test_schedule_tools_are_registered() -> None:
@@ -30,7 +29,7 @@ def test_schedule_tools_are_registered() -> None:
         assert tool_service._registry.get_handler(name) is not None  # noqa: SLF001
 
 
-def test_agent_create_tool_uses_session_identity_and_requires_approval(tmp_path) -> None:
+def test_agent_create_tool_uses_session_identity_and_starts_active(tmp_path) -> None:
     initialize_store(tmp_path)
     session = AgentSession(session_id="sess_tool", owner_user_id=7)
     handler = tool_service._registry.get_handler("schedule_create")  # noqa: SLF001
@@ -45,17 +44,21 @@ def test_agent_create_tool_uses_session_identity_and_requires_approval(tmp_path)
                 "target_mode": "new_session_per_run",
                 "schedule": {"type": "daily", "time": "09:00"},
                 "timezone": "Asia/Shanghai",
+                "timeout_seconds": 60,
+                "max_runs": 3,
             },
         )
     )
 
     assert result.status == "success"
-    assert result.data["status"] == "pending_approval"
+    assert result.data["status"] == "active"
     row = store_service.get_schedule_task(str(result.data["task_id"]))
     assert row is not None
     assert row["owner_user_id"] == 7
     assert row["created_via"] == "agent"
     assert row["created_session_id"] == "sess_tool"
+    assert row["timeout_seconds"] == 60
+    assert row["max_runs"] == 3
 
 
 def test_agent_list_tool_only_returns_current_identity(tmp_path) -> None:

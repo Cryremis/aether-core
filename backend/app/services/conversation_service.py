@@ -99,6 +99,7 @@ class ConversationService:
             platform_id=platform["platform_id"],
             conversation_id=conversation["conversation_id"],
             external_user_id=external_user_id,
+            external_org_id=external_org_id,
         )
         return session, token
 

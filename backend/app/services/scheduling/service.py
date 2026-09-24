@@ -83,9 +83,7 @@ class ScheduleService:
         if ends_at is not None and next_run_at > ends_at:
             raise ScheduleError("首次运行时间晚于结束时间")
 
-        status = ScheduleStatus.ACTIVE
-        if created_via == "agent" and settings.agent_schedules_require_approval:
-            status = ScheduleStatus.PENDING_APPROVAL
+        status = self._initial_status(created_via)
         task_id = f"sch_{uuid.uuid4().hex}"
         now_iso = now.isoformat()
         row = store_service.create_schedule_task(
@@ -154,6 +152,15 @@ class ScheduleService:
             status=status,
         )
         return [self.to_view(row) for row in rows], total
+
+    @staticmethod
+    def _initial_status(created_via: str) -> ScheduleStatus:
+        # TODO(unified-approval): 统一审批系统落地前，产品决策是 Agent 创建的
+        # 定时任务直接激活。保留 pending_approval 状态、approve/reject API 和
+        # approved_at 字段，是为了兼容历史数据并降低后续接入统一审批的成本。
+        # 后续只需在这里恢复审批条件判断，不需要重建状态机。
+        del created_via
+        return ScheduleStatus.ACTIVE
 
     def get(self, task_id: str, *, identity: ScheduleIdentity) -> ScheduleTaskView:
         row = self._authorized_row(task_id, identity)

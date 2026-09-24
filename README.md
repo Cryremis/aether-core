@@ -95,9 +95,9 @@ flowchart LR
 
 AetherCore supports durable scheduled tasks with interval, daily, workday, weekly, and standard 5-field cron frequencies. A task can run in a fixed session or create a fresh session for each occurrence. Tasks are stored in SQLite, each trigger is materialized exactly once in a transaction, and workers use leases to recover after process restarts.
 
-The Workbench sidebar includes a Schedules view for creating, approving, pausing, resuming, editing, manually running, archiving, and restoring tasks. You can open it directly at `/workbench?sidebar=schedules`. Agents can also use `schedule_create`, `schedule_list`, `schedule_update`, `schedule_pause`, `schedule_resume`, `schedule_restore`, and `schedule_delete`; by default, agent-created tasks remain pending until the user approves them.
+The Workbench sidebar includes a Schedules view for creating, pausing, resuming, editing, manually running, archiving, and restoring tasks. You can open it directly at `/workbench?sidebar=schedules`. Agents can also use `schedule_create`, `schedule_list`, `schedule_update`, `schedule_pause`, `schedule_resume`, `schedule_restore`, and `schedule_delete`. Agent-created tasks start immediately until the unified approval system is introduced.
 
-The API is available under `/api/v1/agent/schedules`. The scheduler is enabled by default and can be disabled with `SCHEDULER_ENABLED=false`; task management APIs and history remain available, but no new background trigger is dispatched. Other defaults are `SCHEDULER_TICK_SECONDS=5`, `SCHEDULER_WORKERS=4`, `SCHEDULER_LEASE_SECONDS=120`, `SCHEDULE_MAX_PER_OWNER=50`, `SCHEDULE_MIN_INTERVAL_SECONDS=60`, and `AGENT_SCHEDULES_REQUIRE_APPROVAL=true`.
+The API is available under `/api/v1/agent/schedules`. The scheduler is enabled by default and can be disabled with `SCHEDULER_ENABLED=false`; task management APIs and history remain available, but no new background trigger is dispatched. Other defaults are `SCHEDULER_TICK_SECONDS=5`, `SCHEDULER_WORKERS=4`, `SCHEDULER_LEASE_SECONDS=120`, `SCHEDULE_MAX_PER_OWNER=50`, and `SCHEDULE_MIN_INTERVAL_SECONDS=60`.
 
 ## Quick Start
 

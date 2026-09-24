@@ -152,7 +152,6 @@ class Settings(BaseSettings):
     scheduler_lease_seconds: int = Field(default=120, ge=15, le=3600)
     schedule_max_per_owner: int = Field(default=50, ge=1, le=10_000)
     schedule_min_interval_seconds: int = Field(default=60, ge=60, le=86_400)
-    agent_schedules_require_approval: bool = True
 
     manage_backend_port: int = 8100
     manage_frontend_port: int = 5178
