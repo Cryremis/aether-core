@@ -2448,6 +2448,7 @@
 .management-console__audit-card,
 .management-console__audit-detail {
   width: 100%;
+  min-width: 0;
   text-align: left;
   padding: 20px;
   border-radius: 18px;
@@ -2462,11 +2463,17 @@
 
 .management-console__audit-list {
   align-content: start;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* ManagementConsole 带列表头时恢复 auto + 1fr 两行 */
+.management-console__audit-list:has(.management-console__audit-list-header) {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
 .management-console__audit-list-scroll {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
   align-content: start;
@@ -2487,11 +2494,18 @@
 }
 
 .management-console__audit-card:hover,
-.management-console__audit-card.is-active,
-.management-console__audit-detail {
+.management-console__audit-card.is-active {
   background: #ffffff;
   border-color: rgba(148, 163, 184, 0.35);
   box-shadow: 0 16px 32px -16px rgba(15, 23, 42, 0.1);
+}
+
+/* detail 投影只向下扩散：spread(-22) 把阴影矩形收进元素内侧，
+   羽化尾迹够不到左缘，避免向左越过间隙覆盖左侧列表（分数 DPR 取整后尤明显） */
+.management-console__audit-detail {
+  background: #ffffff;
+  border-color: rgba(148, 163, 184, 0.35);
+  box-shadow: 0 22px 26px -22px rgba(15, 23, 42, 0.18);
 }
 
 .management-console__audit-card.is-active {
@@ -2516,6 +2530,7 @@
   font-size: 15px;
   line-height: 1.45;
   text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   color: var(--text-primary);
 }
 
@@ -2666,6 +2681,7 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
+  min-width: 0;
 }
 
 .management-console__audit-card-meta .audit-meta-item {
@@ -2674,6 +2690,9 @@
   gap: 4px;
   font-size: 12px;
   color: var(--text-secondary);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .management-console__audit-card-meta .audit-meta-item svg {

@@ -322,7 +322,7 @@
   }
 }
 
-.bubble { max-width: 85%; padding: 14px 20px; border-radius: var(--radius-lg); font-size: 15px; line-height: 1.6; }
+.bubble { max-width: 85%; min-width: 0; padding: 14px 20px; border-radius: var(--radius-lg); font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
 .user-bubble { 
   background: #ffffff; 
   color: var(--text-primary); 
@@ -564,8 +564,8 @@
   color: #1f2937;
 }
 
-.assistant-content { width: 100%; display: flex; flex-direction: column; gap: 16px; }
-.text-bubble { font-size: 15px; line-height: 1.7; color: var(--text-primary); max-width: 100%; }
+.assistant-content { width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.text-bubble { font-size: 15px; line-height: 1.7; color: var(--text-primary); max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 
 .runtime-notice {
   display: flex;
@@ -1794,7 +1794,11 @@
 .markdown-body p:last-child { margin-bottom: 0; }
 .markdown-body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(37,99,235,0.3); transition: border-color 0.2s; }
 .markdown-body a:hover { border-color: var(--accent); }
-.markdown-body { color: var(--text-primary); }
+.markdown-body { color: var(--text-primary); overflow-wrap: anywhere; min-width: 0; }
+
+/* 长链接：GFM 生成的 <a> 内是无空格连续串，默认无法断行会撑爆气泡，
+   anywhere 仅在行宽不够时才在词内断行，不影响普通文本排版 */
+.markdown-body a { overflow-wrap: anywhere; }
 .markdown-body strong { font-weight: 600; color: var(--text-primary); }
 
 .markdown-body ul, .markdown-body ol { padding-left: 22px; margin-bottom: 14px; }
