@@ -15,6 +15,7 @@ from app.services.runtime_state.models import (
 )
 from app.services.runtime_state.store import runtime_state_store
 from app.services.session_types import AgentSession
+from app.services.context.message_adapter import context_message_adapter
 
 
 class RuntimeStateService:
@@ -118,6 +119,38 @@ class RuntimeStateService:
         elicitation = self.get_elicitation(session)
         if elicitation.pending is not None:
             elicitation = self.cancel_pending_elicitation(session, elicitation.pending.id)
+        return board, elicitation
+
+    def settle_stopped_run(self, session: AgentSession) -> tuple[WorkboardState, ElicitationState]:
+        """停止运行时保留提问与用户停止动作，供后续 Agent 理解上下文。"""
+        pending = self.get_elicitation(session).pending
+        board, elicitation = self.settle_aborted_run(session)
+        if pending is None:
+            return board, elicitation
+
+        lines = [
+            "用户停止了当前任务，未回答下方交互提问。",
+            "请注意：停止动作不是确认、同意或授权。",
+            f"交互请求：{pending.title}",
+        ]
+        for question in pending.questions:
+            options = "、".join(option.label for option in question.options)
+            lines.append(
+                f"- {question.header}：{question.question}"
+                + (f"（可选值：{options}）" if options else "")
+            )
+        turn_index = max(
+            (int(message.get("turn_index", 0)) for message in session.messages),
+            default=0,
+        )
+        session.messages.append(
+            context_message_adapter.make_internal_user_message(
+                "\n".join(lines),
+                turn_index=turn_index + 1,
+                kind="elicitation_stopped",
+            )
+        )
+        session.touch()
         return board, elicitation
 
     def _replace_workboard_items(self, current_items: list[WorkItem], raw_items: list[dict[str, Any]], now: str) -> list[WorkItem]:

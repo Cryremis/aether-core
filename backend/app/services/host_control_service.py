@@ -225,16 +225,14 @@ class HostControlService:
 
     async def cancel_run(self, *, platform: dict, run_id: str) -> dict[str, Any]:
         run = self.get_run(platform=platform, run_id=run_id)
+        if str(run.get("status")) not in {"queued", "running", "waiting_input"}:
+            return {"run_id": run_id, "status": str(run.get("status"))}
         session = session_service.get_or_create(str(run["session_id"]))
-        cancelled_run_id = session.request_abort()
-        if cancelled_run_id:
-            event = AgentEvent(
-                type="run_status_changed",
-                session_id=session.session_id,
-                payload={"run_id": run_id, "status": "cancelling"},
-            )
-            await agent_run_service.publish_event(run_id, event)
-        return {"run_id": run_id, "status": "cancelling" if cancelled_run_id else str(run.get("status"))}
+        result = await agent_run_service.abort_session(session)
+        return {
+            "run_id": run_id,
+            "status": result.get("status") or str(run.get("status")),
+        }
 
     def assistant_messages(
         self,

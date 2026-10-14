@@ -91,6 +91,12 @@ def test_abort_endpoint_clears_blocking_question_and_waiting_run(tmp_path, monke
             assert store_service.get_active_agent_run_for_session(session.session_id) is None
             assert store_service.get_agent_run("run-waiting")["status"] == "cancelled"
             assert response.json()["elicitation"]["history"][-1]["status"] == "cancelled"
+            stopped_context = session.messages[-1]
+            assert stopped_context["kind"] == "elicitation_stopped"
+            assert stopped_context["visible_in_transcript"] is False
+            assert "用户停止了当前任务，未回答下方交互提问。" in stopped_context["content"]
+            assert "是否继续？" in stopped_context["content"]
+            assert "停止动作不是确认、同意或授权。" in stopped_context["content"]
     asyncio.run(scenario())
 
 

@@ -16,6 +16,7 @@ from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.subagent_service import subagent_service
+from app.services.runtime_state.service import runtime_state_service
 from app.services.tool_service import SUBAGENT_TOOL_NAMES, tool_service
 
 
@@ -156,6 +157,91 @@ def test_host_message_idempotency_key_replays_existing_run(tmp_path, monkeypatch
     assert first["run_id"] == "run_idempotent"
     assert second["run_id"] == "run_idempotent"
     assert second["idempotent_replay"] is True
+
+
+def test_host_cancel_stops_waiting_question_and_preserves_context(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    conversation = store_service.create_conversation(
+        session_id="sess_host_cancel",
+        title="Host Cancel",
+        host_name="Host Control",
+        platform_id=platform["platform_id"],
+        external_user_id="user-host-cancel",
+    )
+    session = session_service.get_or_create(conversation["session_id"])
+    runtime_state_service.request_user_input(
+        session,
+        {
+            "title": "确认操作",
+            "blocking": True,
+            "questions": [
+                {
+                    "id": "question",
+                    "header": "确认",
+                    "question": "是否继续执行？",
+                    "options": [{"label": "继续"}, {"label": "取消"}],
+                }
+            ],
+        },
+    )
+    run = store_service.create_agent_run(
+        run_id="run_host_cancel",
+        session_id=session.session_id,
+        conversation_id=conversation["conversation_id"],
+        status="waiting_input",
+    )
+
+    async def cancel():
+        return await host_control_service.cancel_run(
+            platform=platform,
+            run_id=run["run_id"],
+        )
+
+    result = asyncio.run(cancel())
+    assert result["status"] == "stopped"
+    assert store_service.get_agent_run(run["run_id"])["status"] == "cancelled"
+    assert store_service.get_active_agent_run_for_session(session.session_id) is None
+    assert runtime_state_service.get_elicitation(session).pending is None
+    stopped_context = session.messages[-1]
+    assert stopped_context["kind"] == "elicitation_stopped"
+    assert stopped_context["visible_in_transcript"] is False
+    assert "是否继续执行？" in stopped_context["content"]
+    assert "用户停止了当前任务，未回答下方交互提问。" in stopped_context["content"]
+    session_service._sessions.pop(session.session_id, None)
+    restored_session = session_service.get_or_create(session.session_id)
+    assert restored_session.messages[-1]["kind"] == "elicitation_stopped"
+
+
+def test_host_cancel_completed_run_leaves_nonblocking_question_untouched(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    conversation = store_service.create_conversation(
+        session_id="sess_host_cancel_completed",
+        title="Host Cancel Completed",
+        host_name="Host Control",
+        platform_id=platform["platform_id"],
+        external_user_id="user-host-cancel-completed",
+    )
+    session = session_service.get_or_create(conversation["session_id"])
+    request = runtime_state_service.request_user_input(
+        session,
+        {"title": "后台确认", "blocking": False, "questions": [{"id": "q", "header": "确认", "question": "是否继续？"}]},
+    )
+    run = store_service.create_agent_run(
+        run_id="run_host_cancel_completed",
+        session_id=session.session_id,
+        conversation_id=conversation["conversation_id"],
+        status="completed",
+    )
+
+    result = asyncio.run(
+        host_control_service.cancel_run(platform=platform, run_id=run["run_id"])
+    )
+
+    assert result == {"run_id": run["run_id"], "status": "completed"}
+    assert runtime_state_service.get_elicitation(session).pending == request
+    assert not session.messages
 
 
 def test_assistant_messages_include_run_status_and_subagent_results(tmp_path):

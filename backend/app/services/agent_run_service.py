@@ -175,10 +175,11 @@ class AgentRunService:
             active = store_service.get_active_agent_run_for_session(session.session_id)
             if active is not None and active["status"] != "waiting_input":
                 raise RuntimeError("当前运行不在此进程中，无法确认停止，请稍后重试。")
-            runtime_state_service.settle_aborted_run(session)
+            runtime_state_service.settle_stopped_run(session)
             if active is not None:
                 run_id = str(active["run_id"])
                 await self.cancel_run(session, run_id)
+            session_service.persist(session)
         return {"success": True, "run_id": run_id, "status": "stopped",
                 "partial_content": session.last_abort.partial_content if session.last_abort else "",
                 "workboard": runtime_state_service.get_workboard(session).model_dump(mode="json"),
@@ -323,7 +324,7 @@ class AgentRunService:
                     terminal_event = make_event(session, "completed", elapsed_ms=self._active_elapsed_ms(session), subtype="completed")
                 if self._status_for_event(terminal_event) == "cancelled":
                     try:
-                        board, elicitation = runtime_state_service.settle_aborted_run(session)
+                        board, elicitation = runtime_state_service.settle_stopped_run(session)
                         await self._publish(run_id, make_event(session, "workboard_updated", snapshot=board.model_dump(mode="json")))
                         await self._publish(run_id, make_event(session, "ask_cancelled", snapshot=elicitation.model_dump(mode="json")))
                     except Exception:
