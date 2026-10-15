@@ -1194,6 +1194,114 @@ def test_agent_engine_recovers_from_length_truncation_reasoning_only(monkeypatch
     assert call_count == 2
 
 
+def test_agent_engine_recovers_from_reasoning_only_stop_response(monkeypatch, tmp_path):
+    """回归: 仅 reasoning 且正常 stop 时,继续追问而不是误报空响应。"""
+    initialize_store(tmp_path)
+
+    call_count = 0
+
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            yield {
+                "choices": [
+                    {"delta": {"reasoning_content": "我先整理一下思路..."}, "finish_reason": None}
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        else:
+            yield {
+                "choices": [
+                    {"delta": {"content": "这是最终回答。"}, "finish_reason": None}
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = build_session("sess_engine_reasoning_only_stop")
+    events = asyncio.run(collect_stream(session, "hello"))
+
+    result_event = next(item for item in events if item["type"] == "result")
+    assert result_event["payload"]["subtype"] == "success"
+    assert result_event["payload"]["result"] == "这是最终回答。"
+    assert call_count == 2
+    assert any(
+        message.get("content") == "[系统提示] 你已完成思考但未给出可见回答,请直接给出回答或调用工具。"
+        for message in session.messages
+    )
+
+
+def test_agent_engine_reports_empty_response_when_stream_has_no_output(monkeypatch, tmp_path):
+    """回归: 完全没有 reasoning、正文或工具调用时,仍保持空响应错误。"""
+    initialize_store(tmp_path)
+
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
+        yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = build_session("sess_engine_empty_stream")
+    events = asyncio.run(collect_stream(session, "hello"))
+
+    result_event = next(item for item in events if item["type"] == "result")
+    completed_event = next(item for item in events if item["type"] == "completed")
+    assert result_event["payload"]["subtype"] == "error_empty_response"
+    assert completed_event["payload"]["subtype"] == "error_empty_response"
+
+
+def test_agent_engine_persists_completed_reasoning_block_with_ended_at(monkeypatch, tmp_path):
+    """回归: 恢复 reasoning-only 回复时保留 reasoning 块完成状态和结束时间。"""
+    initialize_store(tmp_path)
+
+    async def fake_stream_chat_completion(config, messages, tools, **kwargs) -> AsyncGenerator[dict, None]:
+        if len([message for message in session.messages if message.get("role") == "system"]) == 0:
+            yield {
+                "choices": [
+                    {"delta": {"reasoning_content": "内部推理内容"}, "finish_reason": None}
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        else:
+            yield {
+                "choices": [
+                    {"delta": {"content": "最终回答"}, "finish_reason": None}
+                ]
+            }
+            yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(settings, "agent_max_turns", 0)
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1800)
+    monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    session = build_session("sess_engine_reasoning_ended_at")
+    events = asyncio.run(collect_stream(session, "hello"))
+
+    result_event = next(item for item in events if item["type"] == "result")
+    assert result_event["payload"]["subtype"] == "success"
+    reasoning_blocks = [
+        block
+        for item in session.transcript
+        if item.get("role") == "assistant"
+        for block in item.get("blocks", [])
+        if block.get("kind") == "reasoning"
+    ]
+    assert reasoning_blocks
+    assert reasoning_blocks[0]["status"] == "completed"
+    assert reasoning_blocks[0]["ended_at"]
+
+
 def test_agent_engine_retries_on_transport_error(monkeypatch, tmp_path):
     """回归: 流式传输中 TransportError 时自动重连,第二次成功产出完整回答。"""
     initialize_store(tmp_path)

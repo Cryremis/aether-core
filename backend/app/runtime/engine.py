@@ -597,6 +597,7 @@ class AgentEngine:
             finish_reason = ""
             active_reasoning_block_id = ""
             active_content_block_id = ""
+            had_reasoning_output = False
             last_usage_payload: dict[str, int] | None = None
 
             try:
@@ -647,6 +648,7 @@ class AgentEngine:
 
                     reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning") or ""
                     if reasoning_delta:
+                        had_reasoning_output = True
                         visible_started_event = maybe_emit_visible_started()
                         if visible_started_event is not None:
                             yield visible_started_event
@@ -1158,7 +1160,12 @@ class AgentEngine:
             # 持久化已有内容后继续对话。不设次数上限,靠 max_turns / max_runtime 自然兜底。
             # error_empty_response 仅在模型完全未产出任何内容时触发。
             # 注意: stream_interrupted 有部分正文时不算截断,直接走 success 返回部分内容。
-            has_output = bool(active_reasoning_block_id or active_content_block_id or assistant_content.strip())
+            has_output = bool(
+                had_reasoning_output
+                or active_reasoning_block_id
+                or active_content_block_id
+                or assistant_content.strip()
+            )
             if not tool_calls and (
                 last_stop_reason == "length"
                 or (not assistant_content.strip() and has_output)
