@@ -32,6 +32,7 @@ In addition to bind, the host backend can manage conversations and runs with the
 - `POST .../messages`: start an agent run. Use `response_mode=stream` for SSE or `poll` for a `run_id`. `idempotency_key` (or `client_message_id`) replays the same run on retry.
 - `GET .../assistant-messages?limit=N&include_subagents=true`: read recent visible AI replies with each reply's run status.
 - `GET /api/v1/host/runs/{run_id}` and `GET /api/v1/host/runs/{run_id}/events?after_seq=N`: read run state and append-only events after a cursor.
+- `GET /api/v1/host/runs/{run_id}/events/stream?after_seq=N`: consume append-only events as SSE. The stream replays persisted events first, then pushes live events; `seq` is the reconnect cursor, heartbeat frames keep intermediaries open, and slow subscribers are disconnected so they can reconnect from their last sequence.
 - `POST /api/v1/host/runs/{run_id}/cancel`: request cooperative cancellation.
 
 Runs and events are persisted in SQLite. SSE frames include `id: <seq>` so clients can reconnect with `Last-Event-ID`; the HTTP event API also accepts `after_seq`.
