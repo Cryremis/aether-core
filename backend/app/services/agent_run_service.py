@@ -37,6 +37,9 @@ class LiveRunState:
     completed: bool = False
 
 
+HOST_EVENT_QUEUE_LIMIT = 4096
+
+
 class AgentRunService:
     """Manage decoupled background agent runs and SSE subscribers."""
 
@@ -148,6 +151,40 @@ class AgentRunService:
                 )
         await queue.put(None)
         return queue
+
+    async def subscribe_from(
+        self,
+        run_id: str,
+        after_seq: int,
+    ) -> tuple[asyncio.Queue[AgentEvent | None], bool]:
+        """从指定序号后订阅事件；返回队列以及 run 是否仍在本进程内。"""
+        queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue(maxsize=HOST_EVENT_QUEUE_LIMIT)
+        async with self._lock:
+            state = self._runs.get(run_id)
+            if state is not None:
+                state.subscribers.add(queue)
+                return queue, True
+
+        run = store_service.get_agent_run(run_id)
+        if run is None:
+            raise RuntimeError("目标运行不存在。")
+        return queue, False
+
+    def list_events_after(self, run_id: str, after_seq: int) -> list[AgentEvent]:
+        run = store_service.get_agent_run(run_id)
+        if run is None:
+            raise RuntimeError("目标运行不存在。")
+        return [
+            AgentEvent(
+                type=str(row["type"]),
+                session_id=str(run["session_id"]),
+                run_id=run_id,
+                seq=int(row["seq"]),
+                timestamp=str(row["created_at"]),
+                payload=dict(row.get("payload") or {}),
+            )
+            for row in store_service.list_agent_run_events(run_id, after_seq=after_seq, limit=100_000)
+        ]
 
     async def publish_event(self, run_id: str, event: AgentEvent) -> None:
         await self._publish(run_id, event)
@@ -391,7 +428,14 @@ class AgentRunService:
             if event.type == "completed":
                 state.completed = True
         for queue in subscribers:
-            await queue.put(event)
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                async with self._lock:
+                    state = self._runs.get(run_id)
+                    if state is not None:
+                        state.subscribers.discard(queue)
+                self._close_queue_after_overflow(queue)
 
     @staticmethod
     def _status_for_event(event: AgentEvent) -> str | None:
@@ -416,7 +460,22 @@ class AgentRunService:
                 self._session_runs.pop(session_id, None)
             subscribers = list(state.subscribers) if state is not None else []
         for queue in subscribers:
-            await queue.put(None)
+            self._put_close(queue)
+
+    @staticmethod
+    def _put_close(queue: asyncio.Queue[AgentEvent | None]) -> None:
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            AgentRunService._close_queue_after_overflow(queue)
+
+    @staticmethod
+    def _close_queue_after_overflow(queue: asyncio.Queue[AgentEvent | None]) -> None:
+        try:
+            queue.get_nowait()
+            queue.put_nowait(None)
+        except (asyncio.QueueEmpty, asyncio.QueueFull):
+            pass
 
     def _active_elapsed_ms(self, session: AgentSession) -> int:
         active_view = session.active_run_view or {}

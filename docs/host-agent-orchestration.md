@@ -128,6 +128,7 @@ Patch 支持：
 POST /api/v1/host/conversations/{conversation_id}/messages
 GET  /api/v1/host/runs/{run_id}
 GET  /api/v1/host/runs/{run_id}/events
+GET  /api/v1/host/runs/{run_id}/events/stream
 POST /api/v1/host/runs/{run_id}/cancel
 POST /api/v1/host/runs/{run_id}/elicitation/{request_id}/responses
 GET  /api/v1/host/conversations/{conversation_id}/assistant-messages
@@ -148,6 +149,16 @@ data: {...}
 ```
 
 客户端可用 `Last-Event-ID: 42` 或 `?cursor=42` 续读。
+
+Host Run 还提供独立事件流端点：
+
+```http
+GET /api/v1/host/runs/{run_id}/events/stream?after_seq=42
+```
+
+端点先重放数据库中 `seq > 42` 的事件，再订阅当前进程的实时事件；心跳使用
+`event: heartbeat`，结束使用 `event: stream_end`。订阅队列有界，慢消费者溢出时会被
+主动断开，客户端应基于已收到的最大 `seq` 指数退避重连。
 
 ### 5.3 最近 AI 回复
 

@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.main import app
-from app.schemas.agent import AgentEvent
-from app.services.agent_run_service import agent_run_service
+from app.services.agent_run_service import AgentRunService, agent_run_service
 from app.services.host_control_service import host_control_service
 from app.runtime.event_protocol import make_event
 from app.services.session_service import session_service
@@ -29,12 +29,12 @@ def initialize_isolated_runtime(tmp_path: Path) -> None:
     store_service.initialize()
 
 
-def create_platform() -> dict:
+def create_platform(platform_key: str = "host-control") -> dict:
     admin = store_service.get_user_by_username(settings.auth_system_admin_username)
     assert admin is not None
     return store_service.create_platform(
-        platform_key="host-control",
-        display_name="Host Control",
+        platform_key=platform_key,
+        display_name=f"Host {platform_key}",
         host_type="embedded",
         description="host control test",
         owner_user_id=admin.user_id,
@@ -116,6 +116,191 @@ def test_run_events_are_persisted_and_replayable_after_live_state_is_gone(tmp_pa
     assert [event.type for event in events] == ["run_started", "content_delta", "completed"]
     assert [event.seq for event in events] == [1, 2, 3]
     assert store_service.get_agent_run("run_replay")["status"] == "completed"
+
+
+def test_host_run_event_stream_replays_after_requested_sequence(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    conversation = store_service.create_conversation(
+        session_id="sess_stream_replay",
+        title="Stream Replay",
+        host_name="Host Control",
+        platform_id=platform["platform_id"],
+        external_user_id="user-stream-replay",
+    )
+    store_service.create_agent_run(
+        run_id="run_stream_replay",
+        session_id=conversation["session_id"],
+        conversation_id=conversation["conversation_id"],
+        status="completed",
+    )
+    for index, event_type in enumerate(("run_started", "content_delta", "completed"), start=1):
+        store_service.append_agent_run_event(
+            run_id="run_stream_replay",
+            event_type=event_type,
+            payload={"index": index},
+            status="completed" if event_type == "completed" else None,
+        )
+
+    client = TestClient(app)
+    response = client.get(
+        "/api/v1/host/runs/run_stream_replay/events/stream",
+        headers={"X-Aether-Platform-Secret": platform["host_secret"]},
+        params={"after_seq": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-accel-buffering"] == "no"
+    assert "id: 2" in response.text
+    assert "event: run_started" not in response.text
+    assert "content_delta" in response.text
+    assert "stream_end" in response.text
+
+
+def test_host_run_event_stream_pushes_live_events_and_cleans_subscription(
+    tmp_path,
+    monkeypatch,
+):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    conversation = store_service.create_conversation(
+        session_id="sess_stream_live",
+        title="Stream Live",
+        host_name="Host Control",
+        platform_id=platform["platform_id"],
+        external_user_id="user-stream-live",
+    )
+    store_service.create_agent_run(
+        run_id="run_stream_live",
+        session_id=conversation["session_id"],
+        conversation_id=conversation["conversation_id"],
+        status="running",
+    )
+    queue: asyncio.Queue = asyncio.Queue()
+    unsubscribed: list[object] = []
+
+    async def subscribe_from(run_id, after_seq):
+        assert run_id == "run_stream_live"
+        assert after_seq == 0
+        return queue, True
+
+    def list_events_after(run_id, after_seq):
+        assert run_id == "run_stream_live"
+        assert after_seq == 0
+        return []
+
+    async def unsubscribe(run_id, subscriber):
+        assert run_id == "run_stream_live"
+        unsubscribed.append(subscriber)
+
+    monkeypatch.setattr(agent_run_service, "subscribe_from", subscribe_from)
+    monkeypatch.setattr(agent_run_service, "list_events_after", list_events_after)
+    monkeypatch.setattr(agent_run_service, "unsubscribe", unsubscribe)
+
+    async def scenario():
+        async def produce_events():
+            await asyncio.sleep(0.05)
+            content_event = make_event(
+                session_service.get_or_create(conversation["session_id"]),
+                "content_delta",
+                delta="实时结果",
+            )
+            content_event.seq = 1
+            queue.put_nowait(content_event)
+            completed = make_event(
+                session_service.get_or_create(conversation["session_id"]),
+                "completed",
+                subtype="success",
+            )
+            completed.seq = 2
+            queue.put_nowait(completed)
+            queue.put_nowait(None)
+
+        producer = asyncio.create_task(produce_events())
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            async with client.stream(
+                "GET",
+                "/api/v1/host/runs/run_stream_live/events/stream",
+                headers={"X-Aether-Platform-Secret": platform["host_secret"]},
+            ) as response:
+                assert response.status_code == 200
+                text = "".join([chunk async for chunk in response.aiter_text()])
+        await producer
+        return text
+
+    text = asyncio.run(scenario())
+    assert "实时结果" in text
+    assert "event: completed" in text
+    assert "stream_end" in text
+    assert unsubscribed == [queue]
+
+
+def test_host_run_event_stream_rejects_missing_run_and_foreign_platform(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    foreign_platform = create_platform("host-control-foreign")
+    conversation = store_service.create_conversation(
+        session_id="sess_stream_forbidden",
+        title="Stream Forbidden",
+        host_name="Host Control",
+        platform_id=platform["platform_id"],
+        external_user_id="user-stream-forbidden",
+    )
+    store_service.create_agent_run(
+        run_id="run_stream_forbidden",
+        session_id=conversation["session_id"],
+        conversation_id=conversation["conversation_id"],
+        status="completed",
+    )
+    client = TestClient(app)
+
+    missing = client.get(
+        "/api/v1/host/runs/run_missing/events/stream",
+        headers={"X-Aether-Platform-Secret": platform["host_secret"]},
+    )
+    forbidden = client.get(
+        "/api/v1/host/runs/run_stream_forbidden/events/stream",
+        headers={"X-Aether-Platform-Secret": foreign_platform["host_secret"]},
+    )
+
+    assert missing.status_code == 404
+    assert forbidden.status_code == 404
+
+
+def test_host_event_stream_overflow_removes_slow_subscriber(tmp_path, monkeypatch):
+    initialize_isolated_runtime(tmp_path)
+    session = session_service.get_or_create("sess_stream_overflow")
+
+    async def scenario():
+        entered = asyncio.Event()
+
+        async def model(*args, **kwargs):
+            entered.set()
+            await asyncio.Future()
+            yield {}
+
+        monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", model)
+        monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+        monkeypatch.setattr("app.services.agent_run_service.HOST_EVENT_QUEUE_LIMIT", 1)
+        service = AgentRunService()
+        run_id = await service.start_chat_run(session, "执行")
+        queue, live = await service.subscribe_from(run_id, 0)
+        assert live is True
+
+        first_event = make_event(session, "content_delta", delta="第一段")
+        first_event.seq = 1
+        queue.put_nowait(first_event)
+        second_event = make_event(session, "content_delta", delta="第二段")
+        await service.publish_event(run_id, second_event)
+
+        assert await asyncio.wait_for(queue.get(), 1) is None
+        await service.abort_session(session)
+
+    asyncio.run(scenario())
 
 
 def test_host_message_idempotency_key_replays_existing_run(tmp_path, monkeypatch):

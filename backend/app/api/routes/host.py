@@ -1,4 +1,6 @@
 # backend/app/api/routes/host.py
+import asyncio
+import json
 import traceback
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -56,6 +58,11 @@ def _sse(event: AgentEvent) -> str:
         lines.append(f"id: {event.seq}")
     lines.append(f"data: {event.model_dump_json()}")
     return "\n".join(lines) + "\n\n"
+
+
+def _stream_end(last_seq: int, reason: str) -> str:
+    payload = json.dumps({"last_seq": last_seq, "reason": reason}, ensure_ascii=False)
+    return f"event: stream_end\ndata: {payload}\n\n"
 
 
 @router.get("/public/embed/aethercore-embed.js", include_in_schema=False)
@@ -348,6 +355,87 @@ def list_host_run_events(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="运行不存在") from exc
     return ApiResponse(message="运行事件", data={"items": items, "next_cursor": items[-1]["seq"] if items else None})
+
+
+@router.get("/runs/{run_id}/events/stream")
+async def stream_host_run_events(
+    run_id: str,
+    after_seq: int = Query(default=0, ge=0),
+    platform: dict = Depends(require_platform_secret),
+):
+    try:
+        host_control_service.get_run(platform=platform, run_id=run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="运行不存在") from exc
+
+    try:
+        queue, live = await agent_run_service.subscribe_from(run_id, after_seq)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail="运行不存在") from exc
+
+    async def event_stream():
+        last_seq = after_seq
+        try:
+            replay_events = agent_run_service.list_events_after(run_id, after_seq)
+            queued_events: list[AgentEvent] = []
+            closed_while_replaying = False
+            while not queue.empty():
+                item = queue.get_nowait()
+                if item is None:
+                    closed_while_replaying = True
+                else:
+                    queued_events.append(item)
+
+            events_by_seq: dict[int, AgentEvent] = {}
+            for event in [*replay_events, *queued_events]:
+                seq = int(event.seq or 0)
+                if seq > last_seq:
+                    events_by_seq[seq] = event
+
+            for seq in sorted(events_by_seq):
+                event = events_by_seq[seq]
+                last_seq = seq
+                yield _sse(event)
+                if event.type == "completed":
+                    yield _stream_end(last_seq, "completed")
+                    return
+
+            if closed_while_replaying:
+                yield _stream_end(last_seq, "closed")
+                return
+            if not live:
+                yield _stream_end(last_seq, "run_not_live")
+                return
+
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield 'event: heartbeat\ndata: {}\n\n'
+                    continue
+                if event is None:
+                    yield _stream_end(last_seq, "closed")
+                    return
+                seq = int(event.seq or 0)
+                if seq <= last_seq:
+                    continue
+                last_seq = seq
+                yield _sse(event)
+                if event.type == "completed":
+                    yield _stream_end(last_seq, "completed")
+                    return
+        finally:
+            await agent_run_service.unsubscribe(run_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/runs/{run_id}/cancel")
