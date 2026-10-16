@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import pytest
 
+from app.core.config import settings
 from app.schemas.llm import LlmNetworkConfig
 from app.services.llm_config_service import RuntimeLlmConfig
 from app.services.prompt_service import prompt_service
@@ -219,6 +221,59 @@ def test_request_user_input_tool_returns_control_payload(tmp_path):
     assert result.control is not None
     assert result.control["type"] == "await_user_input"
     assert runtime_state_service.get_elicitation(session).pending is not None
+
+
+@pytest.mark.parametrize(
+    "arguments,expected_message",
+    [
+        (
+            {
+                "header": "Environment",
+                "options": '[{"label":"Staging"}]',
+                "allow_notes": "true",
+                "id": "q2",
+            },
+            "不支持的顶层字段",
+        ),
+        (
+            {"title": "确认", "questions": []},
+            "questions 必须为非空数组",
+        ),
+        (
+            {
+                "title": "确认",
+                "questions": [{"header": "环境", "question": "选择哪个环境？"}],
+            },
+            "questions[0].options 必须为对象数组，而不是字符串",
+        ),
+        (
+            {
+                "title": "确认",
+                "questions": [
+                    {
+                        "header": "环境",
+                        "question": "选择哪个环境？",
+                        "options": '[{"label":"测试"}]',
+                    }
+                ],
+            },
+            "questions[0].options 必须为对象数组，而不是字符串",
+        ),
+    ],
+)
+def test_request_user_input_rejects_invalid_payloads(tmp_path, arguments, expected_message):
+    settings.storage_root = tmp_path / "storage"
+    session = AgentSession(session_id="sess_request_user_input_invalid")
+
+    result = asyncio.run(
+        tool_service.execute(session, "request_user_input", arguments)
+    )
+
+    assert result.status == "error"
+    assert result.control is None
+    assert result.error is not None
+    assert expected_message in result.error.message
+    assert runtime_state_service.get_elicitation(session).pending is None
 
 
 def test_update_workboard_tool_supports_ops(tmp_path):
