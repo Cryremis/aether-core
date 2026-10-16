@@ -779,6 +779,21 @@ class ToolService:
         )
 
     async def _handle_request_user_input(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        validation_error = self._validate_request_user_input(arguments)
+        if validation_error is not None:
+            return ToolExecutionResult.failure(
+                "elicitation.request_failed",
+                "用户提问参数无效",
+                code="INVALID_TOOL_ARGUMENTS",
+                message=validation_error,
+                retryable=True,
+                next_action=(
+                    "请按工具 schema 重新调用 request_user_input："
+                    "questions 必须为非空数组，每项包含 header/question/options 字段，"
+                    "options 为对象数组而非字符串。"
+                ),
+            )
+
         request = runtime_state_service.request_user_input(session, arguments)
         state = runtime_state_service.get_elicitation(session)
         request_payload = request.model_dump(mode="json")
@@ -806,6 +821,109 @@ class ToolService:
                 "title": request.title,
             },
         )
+
+    def _validate_request_user_input(self, arguments: dict[str, Any]) -> str | None:
+        allowed_fields = {
+            "id",
+            "kind",
+            "title",
+            "blocking",
+            "source_agent",
+            "related_work_items",
+            "preview_text",
+            "questions",
+        }
+        unknown_fields = sorted(set(arguments) - allowed_fields)
+        if unknown_fields:
+            return f"不支持的顶层字段：{', '.join(unknown_fields)}"
+
+        title = arguments.get("title")
+        if not isinstance(title, str) or not title.strip():
+            return "title 必须为非空字符串"
+
+        questions = arguments.get("questions")
+        if not isinstance(questions, list) or not questions:
+            return "questions 必须为非空数组"
+
+        allowed_question_fields = {
+            "id",
+            "header",
+            "question",
+            "multi_select",
+            "allow_other",
+            "allow_notes",
+            "options",
+        }
+        for index, question in enumerate(questions, start=1):
+            prefix = f"questions[{index - 1}]"
+            if not isinstance(question, dict):
+                return f"{prefix} 必须为对象"
+
+            unknown_fields = sorted(set(question) - allowed_question_fields)
+            if unknown_fields:
+                return f"{prefix} 包含不支持的字段：{', '.join(unknown_fields)}"
+
+            header = question.get("header")
+            if not isinstance(header, str) or not header.strip():
+                return f"{prefix}.header 必须为非空字符串"
+
+            question_text = question.get("question")
+            if not isinstance(question_text, str) or not question_text.strip():
+                return f"{prefix}.question 必须为非空字符串"
+
+            if "id" in question and not isinstance(question["id"], str):
+                return f"{prefix}.id 必须为字符串"
+
+            for field in ("multi_select", "allow_other", "allow_notes"):
+                if field in question and not isinstance(question[field], bool):
+                    return f"{prefix}.{field} 必须为布尔值"
+
+            if "options" not in question:
+                return f"{prefix}.options 必须为对象数组，而不是字符串"
+
+            options = question.get("options")
+            if not isinstance(options, list):
+                return f"{prefix}.options 必须为对象数组，而不是字符串"
+
+            for option_index, option in enumerate(options, start=1):
+                option_prefix = f"{prefix}.options[{option_index - 1}]"
+                if not isinstance(option, dict):
+                    return f"{option_prefix} 必须为对象"
+                label = option.get("label")
+                if not isinstance(label, str) or not label.strip():
+                    return f"{option_prefix}.label 必须为非空字符串"
+                if "description" in option and not isinstance(option["description"], str):
+                    return f"{option_prefix}.description 必须为字符串"
+                if set(option) - {"label", "description"}:
+                    return f"{option_prefix} 只能包含 label 和 description 字段"
+
+        for field, expected_type in (
+            ("id", str),
+            ("source_agent", str),
+            ("preview_text", str),
+        ):
+            if field in arguments and not isinstance(arguments[field], expected_type):
+                return f"{field} 必须为字符串"
+
+        if "kind" in arguments and arguments["kind"] not in {
+            "clarification",
+            "confirmation",
+            "decision",
+            "missing_info",
+            "approval",
+        }:
+            return "kind 必须为 clarification、confirmation、decision、missing_info 或 approval"
+
+        if "blocking" in arguments and not isinstance(arguments["blocking"], bool):
+            return "blocking 必须为布尔值"
+
+        related_work_items = arguments.get("related_work_items", [])
+        if not isinstance(related_work_items, list) or any(
+            not isinstance(item, str) for item in related_work_items
+        ):
+            return "related_work_items 必须为字符串数组"
+
+        return None
 
     async def _handle_list_skills(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         skills = [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]
