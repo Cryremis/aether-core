@@ -28,6 +28,7 @@ from app.api.routes.extensions import router as extensions_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.workspace_runtime_service import workspace_runtime_service
+from app.services.agent_run_service import agent_run_service
 from app.services.skill_service import skill_service
 from app.services.scheduling.scheduler import schedule_scheduler
 from app.services.store import store_service
@@ -40,6 +41,7 @@ store_service.initialize()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    await agent_run_service.start_background_tasks()
     await workspace_runtime_service.start_background_tasks()
     if settings.scheduler_enabled:
         await schedule_scheduler.start()
@@ -48,6 +50,7 @@ async def lifespan(_app: FastAPI):
     finally:
         if settings.scheduler_enabled:
             await schedule_scheduler.stop()
+        await agent_run_service.stop_background_tasks()
         await workspace_runtime_service.stop_background_tasks()
 
 
