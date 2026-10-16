@@ -153,6 +153,37 @@ class RuntimeStateService:
         session.touch()
         return board, elicitation
 
+    def settle_timed_out_run(self, session: AgentSession) -> tuple[WorkboardState, ElicitationState]:
+        """等待用户输入超时后保留提问内容，避免后续回答丢失上下文。"""
+        pending = self.get_elicitation(session).pending
+        board, elicitation = self.settle_aborted_run(session)
+        if pending is None:
+            return board, elicitation
+
+        lines = [
+            "等待用户输入超时，本轮交互已取消，未收到用户回答。",
+            f"交互请求：{pending.title}",
+        ]
+        for question in pending.questions:
+            options = "、".join(option.label for option in question.options)
+            lines.append(
+                f"- {question.header}：{question.question}"
+                + (f"（可选值：{options}）" if options else "")
+            )
+        turn_index = max(
+            (int(message.get("turn_index", 0)) for message in session.messages),
+            default=0,
+        )
+        session.messages.append(
+            context_message_adapter.make_internal_user_message(
+                "\n".join(lines),
+                turn_index=turn_index + 1,
+                kind="elicitation_timeout",
+            )
+        )
+        session.touch()
+        return board, elicitation
+
     def _replace_workboard_items(self, current_items: list[WorkItem], raw_items: list[dict[str, Any]], now: str) -> list[WorkItem]:
         existing_by_id = {item.id: item for item in current_items}
         next_items: list[WorkItem] = []

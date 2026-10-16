@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     agent_max_turns: int = 32
     agent_max_runtime_seconds: int = 3600
     agent_max_stall_rounds: int = 5
+    agent_waiting_input_timeout_seconds: int = Field(default=1800, ge=1)
+    agent_waiting_input_sweep_interval_seconds: int = Field(default=60, ge=1)
     host_tool_timeout_seconds: int = 120
 
     storage_root: Path = Path("storage")

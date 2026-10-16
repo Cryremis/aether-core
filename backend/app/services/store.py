@@ -2356,6 +2356,86 @@ class StoreService:
                 )
         return self.get_agent_run(run_id)
 
+    def find_expired_waiting_agent_runs(self, timeout_seconds: int) -> list[dict[str, Any]]:
+        """查找超过等待时限的 waiting_input run，等待起点取最后一次事件时间。"""
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=max(1, int(timeout_seconds)))
+        ).isoformat()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                WITH waiting_since AS (
+                    SELECT run_id, MAX(created_at) AS waiting_since
+                    FROM run_events
+                    GROUP BY run_id
+                )
+                SELECT ar.*, COALESCE(ws.waiting_since, ar.created_at) AS waiting_since
+                FROM agent_runs ar
+                LEFT JOIN waiting_since ws ON ws.run_id = ar.run_id
+                WHERE ar.status = 'waiting_input'
+                  AND COALESCE(ws.waiting_since, ar.created_at) <= ?
+                ORDER BY ar.created_at
+                LIMIT 500
+                """,
+                (cutoff,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def timeout_waiting_agent_run(self, run_id: str, *, timeout_seconds: int) -> dict[str, Any] | None:
+        """将超时等待用户输入的 run 原子收敛为 cancelled。"""
+        now = utcnow_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT event_cursor FROM agent_runs
+                WHERE run_id = ? AND status = 'waiting_input'
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return self.get_agent_run(run_id)
+            seq = int(row["event_cursor"]) + 1
+            conn.execute(
+                """
+                UPDATE agent_runs
+                SET status = 'cancelled', event_cursor = ?, finished_at = ?
+                WHERE run_id = ? AND status = 'waiting_input'
+                """,
+                (seq + 1, now, run_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                VALUES (?, ?, 'aborted', ?, 'visible', ?)
+                """,
+                (
+                    run_id,
+                    seq,
+                    json.dumps(
+                        {
+                            "interrupt_point": "elicitation_timeout",
+                            "reason": "waiting_input_timeout",
+                            "timeout_seconds": max(1, int(timeout_seconds)),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
+                VALUES (?, ?, 'completed', ?, 'visible', ?)
+                """,
+                (
+                    run_id,
+                    seq + 1,
+                    json.dumps({"subtype": "timeout", "elapsed_ms": 0}, ensure_ascii=False),
+                    now,
+                ),
+            )
+        return self.get_agent_run(run_id)
+
     def fail_agent_run(self, run_id: str, *, message: str, interrupt_point: str = "run_finalize_failed") -> dict[str, Any] | None:
         """兜底收敛 active run，用于正常事件发布失败时的终态保障。"""
         placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)

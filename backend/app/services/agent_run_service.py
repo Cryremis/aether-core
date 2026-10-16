@@ -11,6 +11,7 @@ from typing import Any
 
 from app.runtime.engine import agent_engine
 from app.runtime.event_protocol import make_event
+from app.core.config import settings
 from app.schemas.agent import AgentEvent
 from app.services.session_service import session_service
 from app.services.runtime_state import runtime_state_service
@@ -50,6 +51,61 @@ class AgentRunService:
         self._runs: dict[str, LiveRunState] = {}
         self._session_runs: dict[str, str] = {}
         self._lock = asyncio.Lock()
+        self._waiting_input_sweeper_task: asyncio.Task[None] | None = None
+
+    async def start_background_tasks(self) -> None:
+        """启动等待输入超时巡检，进程重启后也能回收历史悬挂 run。"""
+        if self._waiting_input_sweeper_task is not None and not self._waiting_input_sweeper_task.done():
+            return
+        self._waiting_input_sweeper_task = asyncio.create_task(
+            self._sweep_waiting_inputs(),
+            name="agent-waiting-input-sweeper",
+        )
+
+    async def stop_background_tasks(self) -> None:
+        task = self._waiting_input_sweeper_task
+        self._waiting_input_sweeper_task = None
+        if task is None or task.done():
+            if task is not None:
+                try:
+                    task.result()
+                except Exception:
+                    logger.exception("Waiting agent run sweeper exited unexpectedly")
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
+    def expire_waiting_inputs_once(self, *, timeout_seconds: int | None = None) -> int:
+        """一次性回收超时的 waiting_input run，返回成功回收数量。"""
+        timeout = settings.agent_waiting_input_timeout_seconds if timeout_seconds is None else timeout_seconds
+        expired = 0
+        for run in store_service.find_expired_waiting_agent_runs(timeout):
+            run_id = str(run["run_id"])
+            try:
+                updated = store_service.timeout_waiting_agent_run(run_id, timeout_seconds=timeout)
+                if updated is None or updated.get("status") != "cancelled":
+                    continue
+                session = session_service.get_or_create(str(run["session_id"]))
+                runtime_state_service.settle_timed_out_run(session)
+                session.finish_run(run_id)
+                session.active_run_view = None
+                session_service.persist(session)
+                expired += 1
+                logger.info("Expired waiting agent run %s after %s seconds", run_id, timeout)
+            except Exception:
+                logger.exception("Failed to expire waiting agent run %s", run_id)
+        return expired
+
+    async def _sweep_waiting_inputs(self) -> None:
+        while True:
+            try:
+                self.expire_waiting_inputs_once()
+            except Exception:
+                logger.exception("Failed to sweep waiting agent runs")
+            await asyncio.sleep(settings.agent_waiting_input_sweep_interval_seconds)
 
     async def start_chat_run(
         self,
