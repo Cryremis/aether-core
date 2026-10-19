@@ -920,6 +920,7 @@ class AgentEngine:
                         tool_name=tool_name,
                         tool_display=tool_display,
                         input=tool_input,
+                        timeout_seconds=tool_input.get("timeout_seconds"),
                     )
                     visible_started_event = maybe_emit_visible_started()
                     if visible_started_event is not None:

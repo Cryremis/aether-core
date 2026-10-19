@@ -47,6 +47,8 @@ SUBAGENT_TOOL_NAMES = {
     "subagent_get_result",
 }
 
+TIMEOUT_SECONDS_PROPERTY = "timeout_seconds"
+
 
 @dataclass(frozen=True)
 class ToolCatalogSnapshot:
@@ -1147,7 +1149,7 @@ class ToolService:
         _host_snapshot: HostToolCatalogSnapshot | None = None,
     ) -> list[dict[str, Any]]:
         """返回会话可用的工具 schema 列表。"""
-        tools = self._registry.get_schemas()
+        tools = [self._with_timeout_parameter(schema) for schema in self._registry.get_schemas()]
         runtime_config = self._resolve_runtime_config(session)
 
         # 动态添加网络工具
@@ -1202,7 +1204,7 @@ class ToolService:
                 return False
             return allowed_tools is None or name in allowed_tools
 
-        return [schema for schema in tools if permitted(schema)]
+        return [self._with_timeout_parameter(schema) for schema in tools if permitted(schema)]
 
 
     def create_catalog_snapshot(self, session: AgentSession) -> ToolCatalogSnapshot:
@@ -1255,6 +1257,61 @@ class ToolService:
         catalog_snapshot: ToolCatalogSnapshot | None = None,
     ) -> ToolExecutionResult:
         """执行指定工具。"""
+        timeout_seconds, timeout_error = self._extract_timeout_seconds(arguments)
+        if timeout_error is not None:
+            return ToolExecutionResult.failure(
+                "tool.execution",
+                "工具超时参数无效",
+                code="TOOL_TIMEOUT_INVALID",
+                message=timeout_error,
+                retryable=True,
+                next_action="请传入 1 到 "
+                f"{settings.tool_timeout_max_seconds} 之间的整数 timeout_seconds 后重试。",
+            )
+
+        try:
+            if timeout_seconds is None:
+                return await self._execute_tool(
+                    session,
+                    tool_name,
+                    arguments,
+                    run_id=run_id,
+                    tool_call_id=tool_call_id,
+                    output_event_callback=output_event_callback,
+                    catalog_snapshot=catalog_snapshot,
+                    timeout_seconds=timeout_seconds,
+                )
+            async with asyncio.timeout(timeout_seconds):
+                return await self._execute_tool(
+                    session,
+                    tool_name,
+                    arguments,
+                    run_id=run_id,
+                    tool_call_id=tool_call_id,
+                    output_event_callback=output_event_callback,
+                    catalog_snapshot=catalog_snapshot,
+                    timeout_seconds=timeout_seconds,
+                )
+        except TimeoutError:
+            return self._timeout_failure(tool_name, timeout_seconds)
+        except httpx.TimeoutException:
+            if timeout_seconds is None:
+                raise
+            return self._timeout_failure(tool_name, timeout_seconds)
+
+    async def _execute_tool(
+        self,
+        session: AgentSession,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        run_id: str | None,
+        tool_call_id: str | None,
+        output_event_callback: Callable[[ToolOutputEvent], Awaitable[None]] | None,
+        catalog_snapshot: ToolCatalogSnapshot | None,
+        timeout_seconds: int | None,
+    ) -> ToolExecutionResult:
+        """在统一超时预算内分发工具调用。"""
         # 检查注册表中的内置工具
         handler = self._registry.get_handler(tool_name)
         if handler:
@@ -1322,18 +1379,45 @@ class ToolService:
             else tool_catalog_service.snapshot(session).descriptors_by_name.get(tool_name)
         )
         if descriptor:
+            business_arguments = {
+                key: value
+                for key, value in arguments.items()
+                if key != TIMEOUT_SECONDS_PROPERTY
+            }
             if descriptor.get("kind") == "mcp":
                 from app.services.mcp_runtime_service import mcp_runtime_service
                 config = mcp_runtime_service.resolve_config(session, str(descriptor["mcp_config_id"]))
-                payload = await mcp_runtime_service.invoke(session, config, str(descriptor["mcp_tool"]), arguments)
+                payload = await mcp_runtime_service.invoke(
+                    session,
+                    config,
+                    str(descriptor["mcp_tool"]),
+                    business_arguments,
+                )
                 return ToolExecutionResult.success(
                     "mcp_tool.completed",
                     f"MCP 工具 {tool_name} 执行完成",
                     payload,
                 )
-            return await self._invoke_host_tool(session, descriptor, arguments)
+            return await self._invoke_host_tool(
+                session,
+                descriptor,
+                business_arguments,
+                timeout_seconds=timeout_seconds,
+            )
 
         raise RuntimeError(f"未知工具: {tool_name}")
+
+    def _timeout_failure(self, tool_name: str, timeout_seconds: int) -> ToolExecutionResult:
+        """构造可恢复的工具超时结果。"""
+        return ToolExecutionResult.failure(
+            "tool.execution",
+            "工具执行超时",
+            code="TOOL_EXECUTION_TIMEOUT",
+            message=f"工具 {tool_name} 执行超过 {timeout_seconds} 秒",
+            retryable=True,
+            next_action="超时不代表业务操作失败；请先查询业务状态，确认幂等后再决定是否重试。",
+            data={"timeout_seconds": timeout_seconds},
+        )
 
     async def _handle_subagent_tool(
         self,
@@ -1399,6 +1483,8 @@ class ToolService:
         session: AgentSession,
         descriptor: dict[str, Any],
         arguments: dict[str, Any],
+        *,
+        timeout_seconds: int | None = None,
     ) -> ToolExecutionResult:
         """调用宿主工具，自动注入认证并处理 token 刷新。"""
         endpoint = self._resolve_host_url(
@@ -1423,7 +1509,9 @@ class ToolService:
         }
 
         async with httpx.AsyncClient(
-            timeout=settings.host_tool_timeout_seconds,
+            timeout=timeout_seconds
+            if timeout_seconds is not None
+            else settings.host_tool_timeout_seconds,
             verify=settings.http_client_ssl_verify,
         ) as client:
             response = await client.request(
@@ -1606,6 +1694,49 @@ class ToolService:
             "type": "function",
             "function": {"name": name, "description": description, "parameters": parameters},
         }
+
+    def _with_timeout_parameter(self, schema: dict[str, Any]) -> dict[str, Any]:
+        """为所有模型可见工具补充统一的引擎级超时参数。"""
+        normalized = copy.deepcopy(schema)
+        function = normalized.setdefault("function", {})
+        if not isinstance(function, dict):
+            return normalized
+        parameters = function.setdefault("parameters", {})
+        if not isinstance(parameters, dict):
+            parameters = {"type": "object", "properties": {}}
+            function["parameters"] = parameters
+        properties = parameters.setdefault("properties", {})
+        if not isinstance(properties, dict):
+            return normalized
+        if TIMEOUT_SECONDS_PROPERTY not in properties:
+            properties[TIMEOUT_SECONDS_PROPERTY] = {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": settings.tool_timeout_max_seconds,
+                "description": "本次工具调用的引擎级超时时间；超时后工具调用失败，但不会自动停止整个 Agent run。",
+            }
+        return normalized
+
+    def _extract_timeout_seconds(self, arguments: dict[str, Any]) -> tuple[int | None, str | None]:
+        """解析并校验统一的工具超时预算。"""
+        raw_value = arguments.get(TIMEOUT_SECONDS_PROPERTY)
+        if raw_value is None:
+            return None, None
+        if isinstance(raw_value, bool):
+            return None, "timeout_seconds 必须是整数。"
+        if isinstance(raw_value, float) and not raw_value.is_integer():
+            return None, "timeout_seconds 必须是整数。"
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return None, "timeout_seconds 必须是整数。"
+        if value < 1:
+            return None, "timeout_seconds 必须大于 0。"
+        if value > settings.tool_timeout_max_seconds:
+            return None, (
+                f"timeout_seconds 不能超过 {settings.tool_timeout_max_seconds} 秒。"
+            )
+        return value, None
 
     def _parse_int(self, value: Any) -> int | None:
         """安全解析整数。"""

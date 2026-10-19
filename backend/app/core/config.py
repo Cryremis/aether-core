@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     agent_waiting_input_timeout_seconds: int = Field(default=1800, ge=1)
     agent_waiting_input_sweep_interval_seconds: int = Field(default=60, ge=1)
     host_tool_timeout_seconds: int = 120
+    tool_timeout_max_seconds: int = Field(default=1800, ge=1)
 
     storage_root: Path = Path("storage")
     sessions_dir_name: str = "sessions"
