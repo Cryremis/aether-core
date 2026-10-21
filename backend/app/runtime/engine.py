@@ -141,8 +141,13 @@ class AgentEngine:
         patterns = [
             "prompt is too long",
             "prompt_too_long",
+            "prompt too long",
+            "context_length_exceeded",
             "context length exceeded",
             "maximum context length",
+            "maximum input tokens",
+            "input too long",
+            "request too large",
             "too many tokens",
             "context window",
         ]
@@ -552,14 +557,22 @@ class AgentEngine:
                 ),
                 *visible_messages,
             ]
+            context_compact_schema = tool_service.get_context_compact_schema()
+            context_compact_allowed = (
+                session.allowed_tools is None or "context_compact" in set(session.allowed_tools)
+            )
+            tools_for_estimation = [*tools, context_compact_schema] if context_compact_allowed else tools
             try:
                 prepared = context_pipeline.prepare_for_llm(
                     session=session,
                     llm_runtime=llm_runtime,
                     messages=raw_messages,
                     turn_index=request_turn_index,
+                    tools=tools_for_estimation,
+                    max_output_tokens=settings.llm_max_tokens,
                 )
             except ContextOverflowError as exc:
+                # prepare_for_llm 已尝试强制压缩；只有压缩后仍不可缩减时才真正阻断。
                 yield self._emit_context_event(
                     session,
                     ContextEventType.Blocked,
@@ -591,6 +604,8 @@ class AgentEngine:
             for context_event in prepared.events:
                 yield self._emit_context_event(session, context_event.type, context_event.payload)
             messages = prepared.messages
+            # 正常状态隐藏 context_compact schema；警戒区动态暴露，节省常规请求预算。
+            tools = tools_for_estimation if prepared.ephemeral_warning else tools
 
             assistant_content = ""
             tool_calls: dict[int, dict[str, str]] = {}
@@ -744,6 +759,8 @@ class AgentEngine:
                             messages=raw_messages,
                             turn_index=request_turn_index,
                             error_message=error_message,
+                            tools=tools_for_estimation,
+                            max_output_tokens=settings.llm_max_tokens,
                         )
                     except ContextOverflowError as recovery_exc:
                         yield self._emit_context_event(
@@ -1067,6 +1084,8 @@ class AgentEngine:
                         output=tool_result_text,
                         result=result.public_payload(),
                     )
+                    if tool_name == "context_compact" and result.status == "success":
+                        yield self._emit_context_event(session, ContextEventType.Compacted, result.data)
                     self._update_assistant_block(
                         persisted_assistant_blocks,
                         tool_block_id,

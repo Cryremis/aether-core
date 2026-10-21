@@ -1143,7 +1143,10 @@ export function ChatTimeline({
         ) : message.role === "system_event" ? (
           <div key={message.id} className="timeline-system-event msg-anim" aria-live="polite">
             <div className="timeline-system-event__line" />
-            <div className="timeline-system-event__label">{message.title}</div>
+            <div className="timeline-system-event__content">
+              <div className="timeline-system-event__label">{message.title}</div>
+              {message.detail ? <div className="timeline-system-event__detail">{message.detail}</div> : null}
+            </div>
             <div className="timeline-system-event__line" />
           </div>
         ) : message.role === "elicitation_response" ? (

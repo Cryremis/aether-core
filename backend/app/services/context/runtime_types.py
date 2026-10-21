@@ -47,6 +47,7 @@ class ContextSessionState:
     context_window: int = 200_000
     effective_window: int = 180_000
     target_input_tokens: int = 144_000
+    compact_target_tokens: int = 117_000
     warning_threshold: int = 147_000
     error_threshold: int = 147_000
     blocking_limit: int = 177_000
@@ -59,6 +60,8 @@ class ContextSessionState:
     last_compaction_strategy: str | None = None
     last_boundary_message_id: str | None = None
     reactive_retry_count: int = 0
+    token_calibration_factor: float = 1.0
+    last_heuristic_token_estimate: int = 0
     version: int = 1
 
     @classmethod
@@ -77,6 +80,7 @@ class ContextSessionState:
             "context_window": self.context_window,
             "effective_window": self.effective_window,
             "target_input_tokens": self.target_input_tokens,
+            "compact_target_tokens": self.compact_target_tokens,
             "warning_threshold": self.warning_threshold,
             "error_threshold": self.error_threshold,
             "blocking_limit": self.blocking_limit,
@@ -89,6 +93,8 @@ class ContextSessionState:
             "last_compaction_strategy": self.last_compaction_strategy,
             "last_boundary_message_id": self.last_boundary_message_id,
             "reactive_retry_count": self.reactive_retry_count,
+            "token_calibration_factor": self.token_calibration_factor,
+            "last_heuristic_token_estimate": self.last_heuristic_token_estimate,
             "version": self.version,
         }
 
@@ -118,6 +124,7 @@ class PreparedContext:
     state: ContextSessionState
     events: list[ContextEvent] = field(default_factory=list)
     compacted: bool = False
+    ephemeral_warning: bool = False
     plan: CompactionPlan | None = None
 
 

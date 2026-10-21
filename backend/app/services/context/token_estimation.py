@@ -46,11 +46,18 @@ class TokenEstimator:
         self.config = config or TokenEstimationConfig()
 
     def rough_token_count(self, content: str, bytes_per_token: int | None = None) -> int:
-        """基于字符长度的粗略Token估算。"""
+        """基于字符类型的保守Token估算。
+
+        ASCII 文本沿用每 4 字符约 1 token；CJK 与其他多字节字符按每字符 1 token
+        估算，避免中文输入被明显低估。调用方可继续传入更保守的密集 JSON 比例。
+        """
         if not content:
             return 0
-        ratio = bytes_per_token or self.config.bytes_per_token_default
-        return int(len(content) / ratio)
+        if bytes_per_token is None:
+            ascii_chars = sum(1 for char in content if ord(char) < 128)
+            multibyte_chars = len(content) - ascii_chars
+            return int(ascii_chars / self.config.bytes_per_token_default + multibyte_chars)
+        return int(len(content) / bytes_per_token)
 
     def bytes_per_token_for_file_type(self, file_extension: str) -> int:
         """
@@ -158,6 +165,19 @@ class TokenEstimator:
     def estimate_messages_tokens(self, messages: list[dict[str, Any]]) -> int:
         """估算消息列表的总Token数量。应用填充因子进行保守估算。"""
         total = sum(self.estimate_message_tokens(msg) for msg in messages)
+        return int(total * self.config.padding_factor)
+
+    def estimate_tools_tokens(self, tools: list[dict[str, Any]] | None) -> int:
+        """估算函数工具 schema 的请求开销，避免只统计消息导致预算失真。"""
+        if not tools:
+            return 0
+        total = 0
+        for tool in tools:
+            try:
+                serialized = json.dumps(tool, ensure_ascii=False, separators=(",", ":"))
+                total += 8 + self.rough_token_count(serialized, self.config.bytes_per_token_json)
+            except (TypeError, ValueError):
+                total += self.config.image_token_estimate
         return int(total * self.config.padding_factor)
 
     def count_from_usage(self, usage: dict[str, int]) -> int:

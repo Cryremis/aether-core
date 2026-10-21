@@ -203,25 +203,25 @@ class TestContextBudget:
         # 验证有效窗口小于完整窗口（因为预留了输出tokens）
         full_window = budget.get_context_window_for_model("test-model-200k")
         assert effective < full_window
-        assert effective == full_window - budget.config.max_output_tokens_for_summary
+        assert effective == full_window - budget.config.max_output_tokens_for_summary - budget.config.provider_safety_tokens
 
     def test_get_auto_compact_threshold(self):
         budget = ContextBudget()
         threshold = budget.get_auto_compact_threshold("test-model-200k")
         effective = budget.get_effective_context_window("test-model-200k")
-        assert threshold == effective - budget.config.auto_compact_buffer_tokens
+        assert threshold == int(effective * budget.config.hard_limit_ratio)
 
     def test_get_warning_threshold(self):
         budget = ContextBudget()
         warning = budget.get_warning_threshold("test-model-200k")
-        threshold = budget.get_auto_compact_threshold("test-model-200k")
-        assert warning == threshold - budget.config.warning_threshold_buffer_tokens
+        effective = budget.get_effective_context_window("test-model-200k")
+        assert warning == int(effective * budget.config.warning_ratio)
 
     def test_get_blocking_limit(self):
         budget = ContextBudget()
         blocking = budget.get_blocking_limit("test-model-200k")
         effective = budget.get_effective_context_window("test-model-200k")
-        assert blocking == effective - budget.config.manual_compact_buffer_tokens
+        assert blocking == int(effective * budget.config.hard_limit_ratio)
 
     def test_calculate_token_warning_state_normal(self):
         budget = ContextBudget()

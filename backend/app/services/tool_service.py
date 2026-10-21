@@ -101,6 +101,10 @@ class ToolRegistry:
         })
         self._handlers[name] = handler
 
+    def register_handler(self, name: str, handler: ToolHandler) -> None:
+        """只注册执行器，不暴露 schema；用于条件启用的运行时工具。"""
+        self._handlers[name] = handler
+
     def get_schemas(self) -> list[dict[str, Any]]:
         """返回所有已注册工具的 schema。"""
         return self._schemas.copy()
@@ -119,6 +123,7 @@ class ToolService:
 
     def _register_builtin_tools(self) -> None:
         """注册所有内置工具。"""
+        self._registry.register_handler("context_compact", self._handle_context_compact)
         self._registry.register(
             "update_workboard",
             "用结构化操作更新当前会话的任务清单，让 AI 和用户都能在聊天记录之外持续看到计划与进度。优先使用 add_item、update_item、remove_item、reorder_items 等细粒度操作。",
@@ -1205,6 +1210,98 @@ class ToolService:
             return allowed_tools is None or name in allowed_tools
 
         return [self._with_timeout_parameter(schema) for schema in tools if permitted(schema)]
+
+    def get_context_compact_schema(self) -> dict[str, Any]:
+        """返回 Agent 主动压缩工具 schema；仅在上下文警戒区附加到请求。"""
+        return self._with_timeout_parameter(self._make_schema(
+            "context_compact",
+            "压缩当前会话上下文。上下文接近上限时可选；若当前任务能在剩余预算内完成，也可以继续执行而不压缩。",
+            {
+                "type": "object",
+                "properties": {
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["balanced", "aggressive"],
+                        "description": "balanced 保留更多近期上下文；aggressive 更快释放预算",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "maxLength": 500,
+                        "description": "简短说明压缩原因，便于审计",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        ))
+
+    async def _handle_context_compact(
+        self,
+        session: AgentSession,
+        arguments: dict[str, Any],
+    ) -> ToolExecutionResult:
+        """执行 Agent 主动请求的确定性本地压缩，不额外调用 LLM 生成摘要。"""
+        from app.services.context.context_pipeline import context_pipeline
+        from app.services.context.runtime_types import ContextOverflowError
+        from app.services.prompt_service import prompt_service
+
+        strategy = str(arguments.get("strategy") or "balanced")
+        if strategy not in {"balanced", "aggressive"}:
+            return ToolExecutionResult.failure(
+                "context.compact_failed",
+                "无效的上下文压缩策略",
+                code="CONTEXT_STRATEGY_INVALID",
+                message=f"不支持的压缩策略: {strategy}",
+            )
+
+        conversation = store_service.get_conversation_by_session(session.session_id)
+        raw_messages = prompt_service.build_system_messages(
+            session,
+            conversation=conversation,
+            runtime_sections=runtime_state_service.build_runtime_context_sections(session),
+        )
+        try:
+            request_tools = [*self.list_tool_schemas(session), self.get_context_compact_schema()]
+            prepared = context_pipeline.compact_session(
+                session=session,
+                llm_runtime=self._resolve_runtime_config(session),
+                messages=raw_messages,
+                turn_index=max([int(message.get("turn_index", 0)) for message in session.messages] or [0]),
+                tools=request_tools,
+                max_output_tokens=settings.llm_max_tokens,
+                cause="agent",
+                aggressive=strategy == "aggressive",
+            )
+        except ContextOverflowError as exc:
+            return ToolExecutionResult.failure(
+                "context.compact_failed",
+                "上下文压缩后仍超出限制",
+                code="CONTEXT_COMPACT_FAILED",
+                message=str(exc),
+                data={"estimated_tokens": exc.token_estimate},
+            )
+
+        plan = prepared.plan
+        assert plan is not None
+        return ToolExecutionResult.success(
+            "context.compacted",
+            "上下文已压缩",
+            {
+                "compacted": True,
+                "cause": "agent",
+                "strategy": plan.strategy.value,
+                "tokens_before": plan.estimated_tokens_before,
+                "tokens_after": plan.estimated_tokens_after,
+                "tokens_saved": plan.estimated_tokens_saved,
+                "summary_message_id": next(
+                    (
+                        str(message.get("message_id"))
+                        for message in session.messages
+                        if message.get("is_compact_summary")
+                    ),
+                    None,
+                ),
+            },
+        )
 
 
     def create_catalog_snapshot(self, session: AgentSession) -> ToolCatalogSnapshot:

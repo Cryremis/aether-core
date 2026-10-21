@@ -27,15 +27,24 @@ class WarningLevel(Enum):
 
 @dataclass
 class ContextBudgetConfig:
-    """上下文窗口预算管理配置。基于生产环境的调优经验设定默认值。"""
-    max_output_tokens_for_summary: int = 20_000  # 压缩操作的最大输出tokens
+    """上下文窗口预算管理配置。
+
+    输入预算先扣除真实输出预留和服务商安全余量，再按比例划分：
+    75% 进入 Agent 可见的警戒区，95% 触发平台强制压缩，65% 是压缩目标。
+    """
+    max_output_tokens_for_summary: int = 32_000  # 兼容旧配置；实际调用会传入真实值
+    provider_safety_tokens: int = 4_000
+    warning_ratio: float = 0.75
+    hard_limit_ratio: float = 0.95
+    compact_target_ratio: float = 0.65
+    # 兼容旧配置构造参数；新阈值计算不再使用这些缓冲值。
     auto_compact_buffer_tokens: int = 13_000
     warning_threshold_buffer_tokens: int = 20_000
     error_threshold_buffer_tokens: int = 20_000
     manual_compact_buffer_tokens: int = 3_000
     max_consecutive_compact_failures: int = 3
     auto_compact_enabled: bool = True
-    compact_max_output_tokens: int = 20_000
+    compact_max_output_tokens: int = 32_000
 
 
 @dataclass
@@ -78,15 +87,10 @@ class ContextBudget:
         max_output_tokens: int | None = None,
         betas: list[str] | None = None,
     ) -> int:
-        """返回模型的默认和上限最大输出tokens。"""
+        """返回模型可安全使用的输入预算。"""
         full_window = self.get_context_window_for_model(model, betas)
-        
-        reserved_output = min(
-            max_output_tokens or self.config.max_output_tokens_for_summary,
-            self.config.max_output_tokens_for_summary,
-        )
-        
-        return full_window - reserved_output
+        reserved_output = max(1, max_output_tokens or self.config.max_output_tokens_for_summary)
+        return max(1, full_window - reserved_output - self.config.provider_safety_tokens)
     
     def get_auto_compact_threshold(
         self,
@@ -94,9 +98,9 @@ class ContextBudget:
         max_output_tokens: int | None = None,
         betas: list[str] | None = None,
     ) -> int:
-        """计算自动压缩触发阈值。"""
+        """计算自动压缩触发阈值（硬上限）。"""
         effective_window = self.get_effective_context_window(model, max_output_tokens, betas)
-        return effective_window - self.config.auto_compact_buffer_tokens
+        return self.get_hard_limit(model, max_output_tokens, betas)
     
     def get_warning_threshold(
         self,
@@ -104,9 +108,9 @@ class ContextBudget:
         max_output_tokens: int | None = None,
         betas: list[str] | None = None,
     ) -> int:
-        """计算警告阈值。"""
-        threshold = self.get_auto_compact_threshold(model, max_output_tokens, betas)
-        return threshold - self.config.warning_threshold_buffer_tokens
+        """计算警戒阈值；到达后仅提示 Agent，不自动压缩。"""
+        usable_input = self.get_effective_context_window(model, max_output_tokens, betas)
+        return int(usable_input * self.config.warning_ratio)
     
     def get_error_threshold(
         self,
@@ -114,9 +118,8 @@ class ContextBudget:
         max_output_tokens: int | None = None,
         betas: list[str] | None = None,
     ) -> int:
-        """计算错误阈值。"""
-        threshold = self.get_auto_compact_threshold(model, max_output_tokens, betas)
-        return threshold - self.config.error_threshold_buffer_tokens
+        """兼容旧 API：错误阈值等价于硬上限。"""
+        return self.get_hard_limit(model, max_output_tokens, betas)
     
     def get_blocking_limit(
         self,
@@ -124,9 +127,28 @@ class ContextBudget:
         max_output_tokens: int | None = None,
         betas: list[str] | None = None,
     ) -> int:
-        """计算阻断限制。"""
-        effective_window = self.get_effective_context_window(model, max_output_tokens, betas)
-        return effective_window - self.config.manual_compact_buffer_tokens
+        """计算阻断限制；达到后必须先强制压缩。"""
+        usable_input = self.get_effective_context_window(model, max_output_tokens, betas)
+        return int(usable_input * self.config.hard_limit_ratio)
+
+    def get_compact_target(
+        self,
+        model: str,
+        max_output_tokens: int | None = None,
+        betas: list[str] | None = None,
+    ) -> int:
+        """计算压缩后的目标输入预算。"""
+        usable_input = self.get_effective_context_window(model, max_output_tokens, betas)
+        return int(usable_input * self.config.compact_target_ratio)
+
+    def get_hard_limit(
+        self,
+        model: str,
+        max_output_tokens: int | None = None,
+        betas: list[str] | None = None,
+    ) -> int:
+        """显式暴露硬限制，供管线和引擎共享同一语义。"""
+        return self.get_blocking_limit(model, max_output_tokens, betas)
     
     def calculate_token_warning_state(
         self,

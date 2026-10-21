@@ -227,6 +227,19 @@
   box-shadow: 0 6px 18px -18px rgba(15, 23, 42, 0.5);
 }
 
+.timeline-system-event__content {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+}
+
+.timeline-system-event__detail {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .elapsed-badge {
   display: inline-flex;
   align-items: center;

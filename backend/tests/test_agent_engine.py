@@ -762,7 +762,7 @@ def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     monkeypatch.setattr(context_pipeline.budget, "get_effective_context_window", lambda model, max_output_tokens=None, betas=None: 10000)
     monkeypatch.setattr(context_pipeline.budget, "get_warning_threshold", lambda model, max_output_tokens=None, betas=None: 6000)
     monkeypatch.setattr(context_pipeline.budget, "get_error_threshold", lambda model, max_output_tokens=None, betas=None: 8000)
-    monkeypatch.setattr(context_pipeline.budget, "get_blocking_limit", lambda model, max_output_tokens=None, betas=None: 12000)
+    monkeypatch.setattr(context_pipeline.budget, "get_blocking_limit", lambda model, max_output_tokens=None, betas=None: 8000)
     monkeypatch.setattr(context_pipeline.budget, "get_auto_compact_threshold", lambda model, max_output_tokens=None, betas=None: 7000)
 
     events = asyncio.run(collect_stream(session, "new task"))

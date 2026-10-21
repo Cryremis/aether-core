@@ -98,7 +98,12 @@ function buildSystemEventMessage(
     context_warning: "上下文接近上限",
     context_blocked: "上下文已阻塞",
   };
-  const detail = reason ? `原因: ${reason}` : undefined;
+  let detail = reason ? `原因: ${reason}` : undefined;
+  if (eventType === "context_compacted") {
+    const strategy = typeof payload.strategy === "string" ? payload.strategy : "context";
+    const tokensSaved = Number(payload.tokens_saved ?? 0);
+    detail = `策略: ${strategy} · 节省 ${formatTokenCount(tokensSaved)} tokens`;
+  }
   return {
     id: `system-event-${eventType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role: "system_event",
@@ -1360,21 +1365,6 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         return;
       }
 
-      if (eventType === "context_warning") {
-        setContextStatus((current) => ({
-          model: current?.model ?? "",
-          estimatedTokens: Number(payload.estimated_tokens ?? current?.estimatedTokens ?? 0),
-          effectiveWindow: current?.effectiveWindow ?? 0,
-          contextWindow: current?.contextWindow ?? 0,
-          targetInputTokens: current?.targetInputTokens ?? 0,
-          warningThreshold: Number(payload.warning_threshold ?? current?.warningThreshold ?? 0),
-          blockingLimit: Number(payload.blocking_limit ?? current?.blockingLimit ?? 0),
-          percentUsed: Number(payload.percent_used ?? current?.percentUsed ?? 0),
-          state: "warning",
-          detail: "接近压缩阈值",
-        }));
-      }
-
       if (eventType === "context_compacted") {
         setContextStatus((current) => {
           const nextEstimated = Number(payload.tokens_after ?? current?.estimatedTokens ?? 0);
@@ -1436,7 +1426,6 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       if (
         eventType === "context_compacted" ||
         eventType === "context_recovered" ||
-        eventType === "context_warning" ||
         eventType === "context_blocked"
       ) {
         appendSystemEvent(eventType as Extract<ChatMessage, { role: "system_event" }>["eventType"], payload);

@@ -212,6 +212,7 @@ class ContextMessageAdapter:
         allowed_roles = {"system", "user", "assistant", "tool"}
         result: list[dict[str, Any]] = []
         system_contents: list[str] = []
+        runtime_notices: list[dict[str, Any]] = []
         for message in messages:
             if message.get("ephemeral") or message.get("is_boundary_marker"):
                 continue
@@ -222,11 +223,16 @@ class ContextMessageAdapter:
             if role == "system":
                 content = str(api_message.get("content") or "").strip()
                 if content:
-                    system_contents.append(content)
+                    # runtime_only 提示只属于本次请求，并且保留在消息尾部，确保模型可靠感知。
+                    if message.get("runtime_only"):
+                        runtime_notices.append({"role": "system", "content": content})
+                    else:
+                        system_contents.append(content)
                 continue
             result.append(api_message)
         if system_contents:
             result.insert(0, {"role": "system", "content": "\n\n".join(system_contents)})
+        result.extend(runtime_notices)
         return result
 
     def estimate_text_for_summary(self, message: dict[str, Any], max_chars: int = 800) -> str:
