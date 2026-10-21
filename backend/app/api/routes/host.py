@@ -1,7 +1,7 @@
 # backend/app/api/routes/host.py
 import asyncio
 import json
-import traceback
+import logging
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -31,6 +31,8 @@ from app.services.tool_catalog_service import (
 )
 
 router = APIRouter(prefix="/api/v1/host", tags=["host"])
+
+logger = logging.getLogger(__name__)
 
 
 def _host_session(session_id: str, platform: dict) -> object:
@@ -90,15 +92,16 @@ def bind_host(
     try:
         summary = host_registry.bind(request, platform=platform)
     except ValueError as exc:
+        logger.warning("[host/bind] rejected: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        print(f"[host/bind] RuntimeError: {exc}\n{traceback.format_exc()}")
+        logger.exception("[host/bind] runtime error: %s", exc)
         raise HTTPException(status_code=500, detail=f"运行时错误: {str(exc)}") from exc
     except FileNotFoundError as exc:
-        print(f"[host/bind] FileNotFoundError: {exc}\n{traceback.format_exc()}")
+        logger.exception("[host/bind] file not found: %s", exc)
         raise HTTPException(status_code=500, detail=f"文件不存在: {str(exc)}") from exc
     except Exception as exc:
-        print(f"[host/bind] Unexpected error: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
+        logger.exception("[host/bind] unexpected error: %s", exc)
         raise HTTPException(status_code=500, detail=f"绑定失败: {type(exc).__name__}: {str(exc)}") from exc
     summary["workbench_url"] = (
         f"{settings.resolved_manage_frontend_public_base_url}"
@@ -116,6 +119,7 @@ def create_host_conversation(
     try:
         result = host_control_service.create_conversation(platform=platform, request=request)
     except ValueError as exc:
+        logger.warning("[host/conversations/create] rejected: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ApiResponse(message="宿主会话已创建", data=result)
 

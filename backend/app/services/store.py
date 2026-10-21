@@ -2436,6 +2436,21 @@ class StoreService:
             )
         return self.get_agent_run(run_id)
 
+    def resume_waiting_agent_run(self, run_id: str) -> dict[str, Any] | None:
+        """原子恢复等待用户输入的 run，避免与超时回收或重复应答竞争。"""
+        with self._connect() as conn:
+            updated = conn.execute(
+                """
+                UPDATE agent_runs
+                SET status = 'running'
+                WHERE run_id = ? AND status = 'waiting_input'
+                """,
+                (run_id,),
+            )
+            if updated.rowcount == 0:
+                return self.get_agent_run(run_id)
+        return self.get_agent_run(run_id)
+
     def fail_agent_run(self, run_id: str, *, message: str, interrupt_point: str = "run_finalize_failed") -> dict[str, Any] | None:
         """兜底收敛 active run，用于正常事件发布失败时的终态保障。"""
         placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)

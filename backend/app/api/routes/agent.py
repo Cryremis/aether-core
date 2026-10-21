@@ -5,10 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import AuthContext, get_auth_context
-from app.runtime.engine import agent_engine
 from app.schemas.agent import AgentChatRequest, AgentElicitationResponseRequest, AgentEvent
 from app.schemas.session import TimelineEditRequest, TimelineForkRequest, TimelineRerunRequest
-from app.services.agent_run_service import agent_run_service
+from app.services.agent_run_service import ElicitationResumeConflict, agent_run_service
 from app.services.context.message_adapter import context_message_adapter
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
@@ -132,11 +131,15 @@ async def respond_to_elicitation(
     auth: AuthContext = Depends(get_auth_context),
 ) -> StreamingResponse:
     session = _ensure_session_access(session_id, auth)
-    elicitation_state, resume_message = runtime_state_service.resolve_elicitation(
-        session,
-        request_id,
-        [item.model_dump(mode="json") for item in request.responses],
-    )
+    try:
+        elicitation_state, resume_message = runtime_state_service.resolve_elicitation(
+            session,
+            request_id,
+            [item.model_dump(mode="json") for item in request.responses],
+        )
+    except RuntimeError as exc:
+        status_code = 409 if "pending elicitation not found" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     # 将用户对 request_user_input 的结构化回答持久化到会话消息，保证刷新后仍按同样样式渲染。
     resolved_request = next((item for item in reversed(elicitation_state.history) if item.id == request_id), None)
     if resolved_request is not None:
@@ -181,6 +184,16 @@ async def respond_to_elicitation(
     else:
         committed_message = None
 
+    try:
+        run_id, resume_seq = await agent_run_service.resume_elicitation_run(
+            session,
+            resume_message,
+            request_id=request_id,
+            client_message_id=request.client_message_id,
+        )
+    except ElicitationResumeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     async def event_stream():
         yield _sse(AgentEvent(type="session_created", session_id=session.session_id))
         if committed_message is not None:
@@ -217,14 +230,37 @@ async def respond_to_elicitation(
             + "\n\n"
         )
         try:
-            async for event in agent_engine.stream_chat(
-                session,
-                resume_message,
-                persist_user_message=True,
-                visible_user_message=False,
-                user_message_kind="elicitation_resume",
-            ):
+            if resume_seq == 0:
+                started_event = AgentEvent(
+                    type="run_started",
+                    session_id=session.session_id,
+                    payload={"run_id": run_id},
+                )
+                await agent_run_service.publish_event(run_id, started_event)
+                yield _sse(started_event)
+            queue, live = await agent_run_service.subscribe_from(run_id, after_seq=0)
+            try:
+                replay_events = agent_run_service.list_events_after(run_id, 0)
+                seen_seqs = {int(event.seq or 0) for event in replay_events}
+                for event in replay_events:
                     yield _sse(event)
+                    if event.type == "completed":
+                        return
+                if not live:
+                    return
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    seq = int(event.seq or 0)
+                    if seq in seen_seqs:
+                        continue
+                    seen_seqs.add(seq)
+                    yield _sse(event)
+                    if event.type == "completed":
+                        break
+            finally:
+                await agent_run_service.unsubscribe(run_id, queue)
         except Exception as exc:  # noqa: BLE001
             error_event = AgentEvent(
                 type="error",

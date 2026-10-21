@@ -6,6 +6,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.runtime.event_protocol import make_event
 from app.services.agent_run_service import agent_run_service
+from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
@@ -154,3 +155,185 @@ def test_agent_run_service_cancel_run_clears_active_state(tmp_path, monkeypatch)
     assert agent_run_service.get_session_run_id(session.session_id) is None
     assert session.current_run_id() is None
     assert run_id not in agent_run_service._runs
+
+
+def test_resume_elicitation_run_completes_without_sse_consumer(tmp_path, monkeypatch):
+    """回归: 提问应答后的恢复不能依赖 SSE 客户端继续消费。"""
+    initialize_store(tmp_path)
+    agent_run_service._runs.clear()
+    agent_run_service._session_runs.clear()
+    session = session_service.get_or_create("sess_resume_without_sse")
+    runtime_state_service.request_user_input(
+        session,
+        {
+            "id": "question",
+            "title": "等待确认",
+            "blocking": True,
+            "questions": [
+                {
+                    "id": "question",
+                    "header": "确认",
+                    "question": "是否继续？",
+                    "options": [{"label": "继续"}],
+                }
+            ],
+        },
+    )
+    run = store_service.create_agent_run(
+        run_id="run_waiting_resume",
+        session_id=session.session_id,
+        status="waiting_input",
+    )
+    store_service.append_agent_run_event(
+        run_id=run["run_id"],
+        event_type="completed",
+        payload={"subtype": "awaiting_user_input"},
+        status="waiting_input",
+    )
+    _, resume_message = runtime_state_service.resolve_elicitation(
+        session,
+        "question",
+        [{"question_id": "question", "selected_options": ["继续"]}],
+    )
+
+    from app.runtime.engine import agent_engine
+
+    observed_kwargs: dict = {}
+
+    async def fake_stream_chat(stream_session, message, **kwargs):
+        observed_kwargs.update(kwargs)
+        assert message == resume_message
+        yield make_event(stream_session, "result", subtype="success", is_error=False, result="done")
+        yield make_event(stream_session, "completed", subtype="success", elapsed_ms=1)
+
+    monkeypatch.setattr(agent_engine, "stream_chat", fake_stream_chat)
+
+    async def resume_without_subscribing():
+        run_id, resume_seq = await agent_run_service.resume_elicitation_run(
+            session,
+            resume_message,
+            request_id="question",
+        )
+        await agent_run_service.wait_for_run(run_id)
+        return run_id, resume_seq
+
+    run_id, resume_seq = asyncio.run(resume_without_subscribing())
+
+    assert run_id == run["run_id"]
+    assert resume_seq > 0
+    assert observed_kwargs["visible_user_message"] is False
+    assert observed_kwargs["user_message_kind"] == "elicitation_resume"
+    assert store_service.get_agent_run(run_id)["status"] == "completed"
+    assert store_service.get_active_agent_run_for_session(session.session_id) is None
+    assert agent_run_service.get_session_run_id(session.session_id) is None
+    event_types = [item["type"] for item in store_service.list_agent_run_events(run_id)]
+    resumed_events = [
+        item
+        for item in store_service.list_agent_run_events(run_id)
+        if item["type"] == "run_status_changed"
+        and item["payload"].get("reason") == "elicitation_resumed"
+    ]
+    assert resumed_events
+
+
+def test_resume_elicitation_run_finalizes_engine_failure(tmp_path, monkeypatch):
+    """恢复执行失败时必须收敛为 failed，不能回到 waiting_input。"""
+    initialize_store(tmp_path)
+    agent_run_service._runs.clear()
+    agent_run_service._session_runs.clear()
+    session = session_service.get_or_create("sess_resume_failure")
+    runtime_state_service.request_user_input(
+        session,
+        {
+            "id": "question",
+            "title": "等待确认",
+            "blocking": True,
+            "questions": [{"id": "question", "header": "确认", "question": "是否继续？"}],
+        },
+    )
+    run = store_service.create_agent_run(
+        run_id="run_waiting_resume_failure",
+        session_id=session.session_id,
+        status="waiting_input",
+    )
+    store_service.append_agent_run_event(
+        run_id=run["run_id"],
+        event_type="completed",
+        payload={"subtype": "awaiting_user_input"},
+        status="waiting_input",
+    )
+    _, resume_message = runtime_state_service.resolve_elicitation(
+        session,
+        "question",
+        [{"question_id": "question", "selected_options": []}],
+    )
+
+    from app.runtime.engine import agent_engine
+
+    async def fake_stream_chat(stream_session, message, **kwargs):
+        raise RuntimeError("resume failed")
+        yield
+
+    monkeypatch.setattr(agent_engine, "stream_chat", fake_stream_chat)
+
+    async def resume_and_wait():
+        run_id, _ = await agent_run_service.resume_elicitation_run(
+            session,
+            resume_message,
+            request_id="question",
+        )
+        await agent_run_service.wait_for_run(run_id)
+        return run_id
+
+    run_id = asyncio.run(resume_and_wait())
+
+    assert store_service.get_agent_run(run_id)["status"] == "failed"
+    assert store_service.get_active_agent_run_for_session(session.session_id) is None
+
+
+def test_subscribe_from_does_not_replay_history_into_bounded_queue(tmp_path, monkeypatch):
+    initialize_store(tmp_path)
+    agent_run_service._runs.clear()
+    agent_run_service._session_runs.clear()
+    session = session_service.get_or_create("sess_subscribe_no_replay")
+    run = store_service.create_agent_run(
+        run_id="run_subscribe_no_replay",
+        session_id=session.session_id,
+        status="running",
+    )
+    for index in range(5000):
+        store_service.append_agent_run_event(
+            run_id=run["run_id"],
+            event_type="content_delta",
+            payload={"delta": str(index)},
+            status=None,
+        )
+
+    async def subscribe_and_stop():
+        from app.services.agent_run_service import AgentRunService, LiveRunState
+
+        monkeypatch.setattr("app.services.agent_run_service.HOST_EVENT_QUEUE_LIMIT", 1)
+        service = AgentRunService()
+        task = asyncio.create_task(asyncio.sleep(3600))
+        service._runs[run["run_id"]] = LiveRunState(
+            run_id=run["run_id"],
+            session_id=session.session_id,
+            task=task,
+        )
+        try:
+            queue, live = await asyncio.wait_for(
+                service.subscribe_from(run["run_id"], after_seq=0),
+                timeout=0.5,
+            )
+            assert live is True
+            assert queue.empty()
+            assert len(service.list_events_after(run["run_id"], 0)) == 5000
+            await service.unsubscribe(run["run_id"], queue)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(subscribe_and_stop())
