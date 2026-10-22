@@ -19,6 +19,7 @@ type ChatTimelineProps = {
   onOpenSubagent?: (childSessionId: string) => void;
   subagents?: SubagentRunSummary[];
   actionsDisabled?: boolean;
+  showMessageTimestamps?: boolean;
 };
 
 type SummaryResult = {
@@ -74,8 +75,9 @@ function LiveElapsedBadge({ startTime }: { startTime: number }) {
   return <div className="elapsed-badge">{formatElapsedMs(elapsed)}</div>;
 }
 
-function TimestampBadge({ timestamp }: { timestamp: number }) {
-  const formatted = formatTimestamp(timestamp);
+function TimestampBadge({ timestamp }: { timestamp: number | string }) {
+  const parsedTimestamp = typeof timestamp === "number" ? timestamp : Date.parse(timestamp);
+  const formatted = formatTimestamp(parsedTimestamp);
   if (!formatted) return null;
   return <time className="timestamp-badge" title={formatted.title}>{formatted.label}</time>;
 }
@@ -968,6 +970,7 @@ function UserMessageBubble({
   onForkUserMessage,
   onRerunFromMessage,
   onEditUserMessage,
+  showTimestamp = false,
 }: {
   message: Extract<ChatMessage, { role: "user" }>;
   actionsDisabled: boolean;
@@ -976,6 +979,7 @@ function UserMessageBubble({
   onForkUserMessage?: (messageId: string) => void;
   onRerunFromMessage?: (messageId: string) => void;
   onEditUserMessage?: (messageId: string, content: string) => void;
+  showTimestamp?: boolean;
 }) {
   const [localEditingContent, setLocalEditingContent] = useState(message.content);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1087,6 +1091,7 @@ function UserMessageBubble({
         ) : (
           <MemoizedMarkdown content={message.content} />
         )}
+        {showTimestamp && message.timestamp ? <TimestampBadge timestamp={message.timestamp} /> : null}
       </div>
     </div>
   );
@@ -1102,6 +1107,7 @@ export function ChatTimeline({
   onOpenSubagent,
   subagents,
   actionsDisabled = false,
+  showMessageTimestamps = false,
 }: ChatTimelineProps) {
   const { hideReasoning } = useAppPreferences();
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -1139,6 +1145,7 @@ export function ChatTimeline({
             onForkUserMessage={onForkUserMessage}
             onRerunFromMessage={onRerunFromMessage}
             onEditUserMessage={onEditUserMessage}
+            showTimestamp={showMessageTimestamps}
           />
         ) : message.role === "system_event" ? (
           <div key={message.id} className="timeline-system-event msg-anim" aria-live="polite">
@@ -1199,6 +1206,9 @@ export function ChatTimeline({
               )}
             </div>
             <div className="assistant-sidecar">
+              {showMessageTimestamps && message.timestamp ? (
+                <TimestampBadge timestamp={message.timestamp} />
+              ) : null}
               {!message.streaming && message.responseStartedAt ? (
                 <TimestampBadge timestamp={message.responseStartedAt} />
               ) : null}

@@ -124,6 +124,18 @@ export function convertAuditDetailToChatMessages(detail: AuditConversationDetail
           id: `audit-${detail.session_id}-t-${index}`,
           role: "user",
           content: msg.content || "",
+          timestamp: msg.timestamp ?? null,
+        };
+      }
+
+      if (msg.role === "system_event") {
+        return {
+          id: `audit-${detail.session_id}-t-${index}`,
+          role: "system_event",
+          title: msg.title,
+          detail: msg.detail,
+          eventType: msg.eventType,
+          timestamp: msg.timestamp ?? null,
         };
       }
       
@@ -134,6 +146,7 @@ export function convertAuditDetailToChatMessages(detail: AuditConversationDetail
           title: msg.title,
           summary: msg.summary,
           answers: msg.answers,
+          timestamp: msg.timestamp ?? null,
         };
       }
       
@@ -189,6 +202,7 @@ export function convertAuditDetailToChatMessages(detail: AuditConversationDetail
         blocks,
         elapsedMs: null,
         streaming: false,
+        timestamp: msg.timestamp ?? null,
       };
     });
   }
@@ -200,6 +214,7 @@ export function convertAuditDetailToChatMessages(detail: AuditConversationDetail
         id: `audit-${detail.session_id}-m-${index}`,
         role: "user",
         content: msg.content || "",
+        timestamp: msg.timestamp ?? null,
       };
     }
     
@@ -258,6 +273,7 @@ export function convertAuditDetailToChatMessages(detail: AuditConversationDetail
       blocks,
       elapsedMs: null,
       streaming: false,
+      timestamp: msg.timestamp ?? null,
     };
   });
 }
@@ -1150,6 +1166,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                         loading={auditBusy}
                         messages={convertAuditDetailToChatMessages(selectedAuditDetail)}
                         actionsDisabled={true}
+                        showMessageTimestamps={true}
                       />
                     </div>
                   </>

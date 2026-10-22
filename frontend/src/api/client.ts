@@ -408,6 +408,7 @@ export type AuditSessionMessage = {
   role: "user" | "assistant" | "tool";
   content: string;
   blocks?: Array<Record<string, unknown>>;
+  timestamp?: string | null;
 };
 
 export type TranscriptAssistantBlock =
@@ -418,7 +419,15 @@ export type TranscriptAssistantBlock =
   | { id: string; kind: "tool"; title: string; meta: string; argumentsText: string; outputText: string; liveOutputText?: string; status: "running" | "done" | "aborted" };
 
 export type TranscriptChatMessage =
-  | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "system_event";
+      title: string;
+      detail?: string;
+      eventType: "runtime_created" | "runtime_recreated" | "context_compacted" | "context_recovered" | "context_warning" | "context_blocked";
+      timestamp?: string | null;
+    }
+  | { id: string; role: "user"; content: string; timestamp?: string | null }
   | {
       id: string;
       role: "elicitation_response";
@@ -426,6 +435,7 @@ export type TranscriptChatMessage =
       title: string;
       summary: string;
       answers: Array<{ id: string; header: string; value: string }>;
+      timestamp?: string | null;
     }
   | {
       id: string;
@@ -434,6 +444,7 @@ export type TranscriptChatMessage =
       elapsedMs: number | null;
       streaming: boolean;
       responseStartedAt?: string | null;
+      timestamp?: string | null;
     };
 
 export type TimelineRerunResponse = {

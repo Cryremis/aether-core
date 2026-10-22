@@ -137,7 +137,12 @@ export default function PlatformAuditPage() {
                   </div>
                 </div>
                 <div className="management-console__audit-timeline-wrapper">
-                  <ChatTimeline loading={busy} messages={convertAuditDetailToChatMessages(selectedDetail)} actionsDisabled={true} />
+                  <ChatTimeline
+                    loading={busy}
+                    messages={convertAuditDetailToChatMessages(selectedDetail)}
+                    actionsDisabled={true}
+                    showMessageTimestamps={true}
+                  />
                 </div>
               </>
             ) : (

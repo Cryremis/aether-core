@@ -44,13 +44,14 @@ export type AssistantSegment =
   | { id: string; kind: "tool"; block: Extract<AssistantBlock, { kind: "tool" }> };
 
 export type TranscriptMessage =
-  | { id: string; role: "user"; content: string }
+  | { id: string; role: "user"; content: string; timestamp?: string | null }
   | {
       id: string;
       role: "system_event";
       title: string;
       detail?: string;
       eventType: "runtime_created" | "runtime_recreated" | "context_compacted" | "context_recovered" | "context_warning" | "context_blocked";
+      timestamp?: string | null;
     }
   | {
       id: string;
@@ -59,6 +60,7 @@ export type TranscriptMessage =
       summary: string;
       answers: Array<{ id: string; header: string; value: string }>;
       request_id?: string;
+      timestamp?: string | null;
     }
   | {
       id: string;
@@ -67,6 +69,7 @@ export type TranscriptMessage =
       elapsedMs: number | null;
       streaming: boolean;
       responseStartedAt?: number;
+      timestamp?: string | null;
     };
 
 export type PendingUserEcho =
