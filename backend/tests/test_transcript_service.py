@@ -259,6 +259,37 @@ def test_transcript_service_keeps_committed_message_identity_stable():
     assert transcript[0]["content"] == "first"
 
 
+def test_transcript_service_preserves_message_timestamps():
+    messages = [
+        {
+            "role": "user",
+            "content": "hello",
+            "message_id": "m_user",
+            "timestamp": "2026-10-22T07:36:29.049440+00:00",
+            "visible_in_transcript": True,
+        },
+        {
+            "role": "assistant",
+            "content": "hi",
+            "message_id": "m_assistant",
+            "timestamp": "2026-10-22T07:36:31.049440+00:00",
+            "visible_in_transcript": True,
+        },
+        {
+            "role": "user",
+            "content": "legacy",
+            "message_id": "m_legacy_user",
+            "visible_in_transcript": True,
+        },
+    ]
+
+    transcript = transcript_service.build_chat_transcript(messages)
+
+    assert transcript[0]["timestamp"] == "2026-10-22T07:36:29.049440+00:00"
+    assert transcript[1]["timestamp"] == "2026-10-22T07:36:31.049440+00:00"
+    assert transcript[2]["timestamp"] is None
+
+
 def test_transcript_service_builds_assistant_item_from_blocks():
     item = transcript_service.assistant_item_from_blocks(
         message_id="assistant_live_1",

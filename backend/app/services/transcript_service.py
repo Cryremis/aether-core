@@ -35,6 +35,7 @@ class TranscriptService:
                         "id": str(message.get("message_id") or f"user-{index}"),
                         "role": "user",
                         "content": str(message.get("content") or ""),
+                        "timestamp": self._message_timestamp(message),
                     }
                 )
                 continue
@@ -99,6 +100,7 @@ class TranscriptService:
                         ],
                         "elapsedMs": None,
                         "streaming": False,
+                        "timestamp": self._message_timestamp(message),
                     }
                 )
 
@@ -142,12 +144,14 @@ class TranscriptService:
                     for answer_index, item in enumerate(answers_list)
                     if isinstance(item, dict)
                 ],
+                "timestamp": self._message_timestamp(message),
             }
 
         return {
             "id": str(message.get("message_id") or f"user-{index}"),
             "role": "user",
             "content": str(message.get("content") or ""),
+            "timestamp": self._message_timestamp(message),
         }
 
     def assistant_item_from_blocks(
@@ -158,6 +162,7 @@ class TranscriptService:
         elapsed_ms: int | None,
         streaming: bool = False,
         response_started_at: str | None = None,
+        timestamp: str | None = None,
     ) -> dict[str, Any]:
         normalized_blocks: list[dict[str, Any]] = []
         normalized_elapsed = elapsed_ms
@@ -234,6 +239,7 @@ class TranscriptService:
             "elapsedMs": normalized_elapsed,
             "streaming": streaming,
             "responseStartedAt": response_started_at or normalized_started_at,
+            "timestamp": timestamp,
         }
 
     def system_event_item(
@@ -242,6 +248,7 @@ class TranscriptService:
         event_type: str,
         detail: str | None = None,
         item_id: str | None = None,
+        timestamp: str | None = None,
     ) -> dict[str, Any]:
         return {
             "id": item_id or f"system-event-{event_type}",
@@ -249,6 +256,7 @@ class TranscriptService:
             "title": self._SYSTEM_EVENT_TITLES.get(event_type, event_type),
             "detail": detail,
             "eventType": event_type,
+            "timestamp": timestamp,
         }
 
     def append_item(self, transcript: list[dict[str, Any]], item: dict[str, Any]) -> list[dict[str, Any]]:
@@ -379,7 +387,12 @@ class TranscriptService:
             "elapsedMs": elapsed_ms,
             "streaming": False,
             "responseStartedAt": started_at,
+            "timestamp": self._message_timestamp(message),
         }
+
+    def _message_timestamp(self, message: dict[str, Any]) -> str | None:
+        timestamp = message.get("timestamp")
+        return timestamp if isinstance(timestamp, str) else None
 
     def _index_open_tool_blocks(
         self,
