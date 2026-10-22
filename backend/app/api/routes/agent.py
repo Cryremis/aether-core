@@ -131,6 +131,36 @@ async def respond_to_elicitation(
     auth: AuthContext = Depends(get_auth_context),
 ) -> StreamingResponse:
     session = _ensure_session_access(session_id, auth)
+    current_elicitation = runtime_state_service.get_elicitation(session)
+    resolved_history_request = next(
+        (
+            item
+            for item in reversed(current_elicitation.history)
+            if item.id == request_id and item.status == "resolved"
+        ),
+        None,
+    )
+    if resolved_history_request is not None:
+        async def duplicate_event_stream():
+            yield _sse(AgentEvent(type="session_created", session_id=session.session_id))
+            yield _sse(
+                AgentEvent(
+                    type="ask_resolved",
+                    session_id=session.session_id,
+                    payload={
+                        "request_id": request_id,
+                        "snapshot": current_elicitation.model_dump(mode="json"),
+                        "resume_message": "",
+                    },
+                )
+            )
+
+        return StreamingResponse(
+            duplicate_event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+
     try:
         elicitation_state, resume_message = runtime_state_service.resolve_elicitation(
             session,
@@ -138,7 +168,8 @@ async def respond_to_elicitation(
             [item.model_dump(mode="json") for item in request.responses],
         )
     except RuntimeError as exc:
-        status_code = 409 if "pending elicitation not found" in str(exc) else 400
+        known_request = any(item.id == request_id for item in current_elicitation.history)
+        status_code = 409 if known_request else 404
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     # 将用户对 request_user_input 的结构化回答持久化到会话消息，保证刷新后仍按同样样式渲染。
     resolved_request = next((item for item in reversed(elicitation_state.history) if item.id == request_id), None)
@@ -238,9 +269,10 @@ async def respond_to_elicitation(
                 )
                 await agent_run_service.publish_event(run_id, started_event)
                 yield _sse(started_event)
-            queue, live = await agent_run_service.subscribe_from(run_id, after_seq=0)
+            replay_after_seq = 0 if resume_seq == 0 else resume_seq - 1
+            queue, live = await agent_run_service.subscribe_from(run_id, after_seq=replay_after_seq)
             try:
-                replay_events = agent_run_service.list_events_after(run_id, 0)
+                replay_events = agent_run_service.list_events_after(run_id, replay_after_seq)
                 seen_seqs = {int(event.seq or 0) for event in replay_events}
                 for event in replay_events:
                     yield _sse(event)
