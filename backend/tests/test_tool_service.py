@@ -242,6 +242,13 @@ def test_request_user_input_tool_returns_control_payload(tmp_path):
         (
             {
                 "title": "确认",
+                "questions": [{"header": "环境", "question": ""}],
+            },
+            "questions[0].question 必须为非空字符串",
+        ),
+        (
+            {
+                "title": "确认",
                 "questions": [{"header": "环境", "question": "选择哪个环境？"}],
             },
             "questions[0].options 必须为对象数组，而不是字符串",
@@ -274,6 +281,36 @@ def test_request_user_input_rejects_invalid_payloads(tmp_path, arguments, expect
     assert result.error is not None
     assert expected_message in result.error.message
     assert runtime_state_service.get_elicitation(session).pending is None
+
+
+def test_request_user_input_schema_documents_required_text_fields():
+    session = AgentSession(session_id="sess_request_user_input_schema")
+    schemas = tool_service.list_tool_schemas(session)
+    schema = next(item for item in schemas if item["function"]["name"] == "request_user_input")
+    properties = schema["function"]["parameters"]["properties"]
+    question_properties = properties["questions"]["items"]["properties"]
+
+    assert properties["title"]["minLength"] == 1
+    assert question_properties["header"]["minLength"] == 1
+    assert question_properties["question"]["minLength"] == 1
+    assert "description" in question_properties["header"]
+    assert "description" in question_properties["question"]
+
+
+def test_request_user_input_validation_error_includes_field_and_example(tmp_path):
+    settings.storage_root = tmp_path / "storage"
+    session = AgentSession(session_id="sess_request_user_input_example")
+    arguments = {
+        "title": "确认",
+        "questions": [{"header": "环境", "question": " "}],
+    }
+
+    result = asyncio.run(tool_service.execute(session, "request_user_input", arguments))
+
+    assert result.error is not None
+    assert result.error.message == "questions[0].question 必须为非空字符串"
+    assert "questions[0].question" in result.error.next_action
+    assert '"question":"请选择本次执行方式？"' in result.error.next_action
 
 
 def test_update_workboard_tool_supports_ops(tmp_path):

@@ -61,6 +61,11 @@ class ToolCatalogService:
         if not name:
             raise ToolCatalogValidationError("工具名称不能为空")
         normalized["name"] = name
+        for field, default in (("headers", {}), ("tags", [])):
+            if normalized.get(field) is None:
+                normalized[field] = copy.deepcopy(default)
+            else:
+                normalized.setdefault(field, copy.deepcopy(default))
         input_schema = normalized.get("input_schema") or {}
         try:
             Draft202012Validator.check_schema(input_schema)
@@ -71,7 +76,10 @@ class ToolCatalogService:
     @staticmethod
     def _fingerprint(collections: dict[str, list[dict[str, Any]]]) -> str:
         payload = {
-            source_id: sorted(descriptors, key=lambda item: str(item.get("name") or ""))
+            source_id: sorted(
+                (ToolCatalogService._canonical_descriptor(item) for item in descriptors),
+                key=lambda item: str(item.get("name") or ""),
+            )
             for source_id, descriptors in sorted(collections.items())
         }
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -135,14 +143,15 @@ class ToolCatalogService:
         sources: dict[str, list[str]] = {}
         for source_id, descriptors in sorted(collections.items()):
             for descriptor in descriptors:
-                name = str(descriptor.get("name") or "")
+                canonical = ToolCatalogService._canonical_descriptor(descriptor)
+                name = str(canonical["name"])
                 existing = by_name.get(name)
-                if existing is not None and existing != descriptor:
+                if existing is not None and existing != canonical:
                     owners = "、".join(sources.get(name, []))
                     raise ToolCatalogValidationError(
                         f"工具 {name} 在来源 {owners} 与 {source_id} 中定义不一致"
                     )
-                by_name[name] = copy.deepcopy(descriptor)
+                by_name[name] = canonical
                 sources.setdefault(name, []).append(source_id)
         return (
             [by_name[name] for name in sorted(by_name)],

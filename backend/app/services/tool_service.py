@@ -224,7 +224,12 @@ class ToolService:
                         "type": "string",
                         "enum": ["clarification", "confirmation", "decision", "missing_info", "approval"],
                     },
-                    "title": {"type": "string"},
+                    "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": "提问卡片的整体标题，必填非空。",
+                    },
                     "blocking": {"type": "boolean"},
                     "source_agent": {"type": "string"},
                     "related_work_items": {"type": "array", "items": {"type": "string"}},
@@ -235,8 +240,17 @@ class ToolService:
                             "type": "object",
                             "properties": {
                                 "id": {"type": "string"},
-                                "header": {"type": "string"},
-                                "question": {"type": "string"},
+                                "header": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 20,
+                                    "description": "问题的短标题，建议不超过 10 个字。",
+                                },
+                                "question": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "要向用户提出的完整问题文本，必填非空。",
+                                },
                                 "multi_select": {"type": "boolean"},
                                 "allow_other": {"type": "boolean"},
                                 "allow_notes": {"type": "boolean"},
@@ -245,8 +259,15 @@ class ToolService:
                                     "items": {
                                         "type": "object",
                                         "properties": {
-                                            "label": {"type": "string"},
-                                            "description": {"type": "string"},
+                                            "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "description": "选项的展示文案。",
+                                            },
+                                            "description": {
+                                                "type": "string",
+                                                "description": "选项的补充说明。",
+                                            },
                                         },
                                         "required": ["label"],
                                         "additionalProperties": False,
@@ -788,6 +809,16 @@ class ToolService:
     async def _handle_request_user_input(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         validation_error = self._validate_request_user_input(arguments)
         if validation_error is not None:
+            example = {
+                "title": "请确认执行方式",
+                "questions": [
+                    {
+                        "header": "执行方式",
+                        "question": "请选择本次执行方式？",
+                        "options": [{"label": "继续"}, {"label": "停止"}],
+                    }
+                ],
+            }
             return ToolExecutionResult.failure(
                 "elicitation.request_failed",
                 "用户提问参数无效",
@@ -795,9 +826,8 @@ class ToolService:
                 message=validation_error,
                 retryable=True,
                 next_action=(
-                    "请按工具 schema 重新调用 request_user_input："
-                    "questions 必须为非空数组，每项包含 header/question/options 字段，"
-                    "options 为对象数组而非字符串。"
+                    f"{validation_error}。请按 schema 重新调用 request_user_input，"
+                    f"合法最小示例：{json.dumps(example, ensure_ascii=False, separators=(',', ':'))}"
                 ),
             )
 
