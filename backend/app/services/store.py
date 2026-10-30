@@ -468,6 +468,23 @@ class StoreService:
                 ON subagents(parent_session_id, created_at DESC);
                 """
             )
+            # 旧市场条目保留但不自动猜测平台归属；新发布必须绑定平台及作者。
+            conn.execute("BEGIN IMMEDIATE")
+            for column, definition in {
+                "platform_id": "INTEGER", "author_key": "TEXT", "maintenance_policy": "TEXT NOT NULL DEFAULT 'creator_only'",
+                "revision": "INTEGER NOT NULL DEFAULT 1", "status": "TEXT NOT NULL DEFAULT 'active'",
+            }.items():
+                self._ensure_column(conn, "extension_entries", column, definition)
+            entry_sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='extension_entries'").fetchone()[0]
+            if "UNIQUE(kind, name)" in entry_sql:
+                conn.execute("DROP TABLE IF EXISTS extension_entries_migrated")
+                columns = ",".join(row[1] for row in conn.execute("PRAGMA table_info(extension_entries)"))
+                conn.execute(entry_sql.replace("extension_entries", "extension_entries_migrated", 1).replace("UNIQUE(kind, name)", "UNIQUE(platform_id, author_key, kind, name)"))
+                conn.execute(f"INSERT INTO extension_entries_migrated ({columns}) SELECT {columns} FROM extension_entries")
+                conn.execute("DROP TABLE extension_entries")
+                conn.execute("ALTER TABLE extension_entries_migrated RENAME TO extension_entries")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_extensions_platform ON extension_entries(platform_id, status)")
+            conn.execute("CREATE TABLE IF NOT EXISTS extension_audit_events (event_id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, revision INTEGER NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL)")
             self._ensure_column(conn, "conversations", "visibility", "TEXT NOT NULL DEFAULT 'normal'")
             self._ensure_column(conn, "conversations", "workspace_id", "TEXT")
             self._ensure_column(conn, "conversations", "archived_at", "TEXT")

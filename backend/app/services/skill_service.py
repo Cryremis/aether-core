@@ -1,9 +1,7 @@
 # backend/app/services/skill_service.py
 from __future__ import annotations
 
-import io
 import re
-import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +101,7 @@ class SkillService:
         *,
         filename: str,
         raw_bytes: bytes,
+        isolated: bool = False,
     ) -> list[SkillCard]:
         if session.workspace is None:
             raise RuntimeError("会话工作区未初始化。")
@@ -110,19 +109,31 @@ class SkillService:
             raise RuntimeError("上传的技能文件为空。")
 
         suffix = Path(filename).suffix.lower()
+        target_root = self.session_skill_root(session) if isolated else session.workspace.skills_dir
         if suffix == ".zip":
-            self._install_skill_zip(session.workspace.skills_dir, raw_bytes)
+            self._install_skill_zip(target_root, raw_bytes)
         else:
-            self._install_single_skill_file(session.workspace.skills_dir, filename, raw_bytes)
+            self._install_single_skill_file(target_root, filename, raw_bytes)
 
-        uploaded_skills = self._load_skills_from_disk(session.workspace.skills_dir, source="upload")
+        uploaded_skills = self._load_skills_from_disk(target_root, source="upload")
         session_service.replace_uploaded_skills(session, uploaded_skills)
         return [self._to_card(item) for item in uploaded_skills]
+
+    def session_skill_root(self, session: AgentSession) -> Path:
+        import hashlib
+        key = hashlib.sha256(session.session_id.encode()).hexdigest()[:32]
+        return session.workspace.skills_dir / ".sessions" / key
 
     def delete_uploaded_skill(self, session: AgentSession, skill_name: str) -> bool:
         if session.workspace is None:
             return False
         normalized = self._slugify(skill_name)
+        isolated_root = self.session_skill_root(session)
+        for item in self._load_skills_from_disk(isolated_root, source="upload"):
+            if self._slugify(item["name"]) == normalized:
+                import shutil
+                shutil.rmtree(Path(item["path"]).parent)
+                return True
         loaded_by_dir = {
             Path(item["path"]).parent.resolve(): self._slugify(str(item.get("name") or ""))
             for item in self._load_skills_from_disk(session.workspace.skills_dir, source="upload")
@@ -142,6 +153,22 @@ class SkillService:
             available = ", ".join(item["name"] for item in self._all_skill_definitions(session))
             raise RuntimeError(f"技能 {skill_name} 不存在。当前可用技能: {available}")
 
+        # 用户/内置技能原件位于 API 主机目录，调用时把完整资源放入当前沙箱。
+        if session.workspace and skill.get("path"):
+            source = Path(skill["path"]).parent.resolve()
+            if session.workspace.root.resolve() not in source.parents:
+                import hashlib
+                import shutil
+                resources = sorted(source.rglob("*"))
+                if any(path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()) for path in resources):
+                    raise RuntimeError("技能资源不能包含符号链接")
+                signature = repr([(str(path.relative_to(source)), path.stat().st_mtime_ns, path.stat().st_size) for path in resources if path.is_file()])
+                digest = hashlib.sha256((str(source) + signature).encode()).hexdigest()[:32]
+                destination = session.workspace.skills_dir / ".available" / digest
+                from app.sandbox.manager import sandbox_manager
+                sandbox_manager.ensure_within_workspace(session.workspace, destination)
+                shutil.copytree(source, destination, dirs_exist_ok=True)
+                skill = dict(skill, path=str(destination / "SKILL.md"), base_dir=str(destination))
         final_content = self._render_skill_content(session, skill)
         return {
             "skill": {
@@ -186,6 +213,7 @@ class SkillService:
         platform_skill_names = {self._slugify(s.get("name", "")) for s in session.platform_skills}
         if session.workspace is not None:
             workspace_skills = self._load_skills_from_disk(session.workspace.skills_dir, source="upload")
+            workspace_skills.extend(self._load_skills_from_disk(self.session_skill_root(session), source="upload"))
             workspace_skills = [s for s in workspace_skills if self._slugify(s.get("name", "")) not in platform_skill_names]
             if workspace_skills != session.uploaded_skills:
                 session.uploaded_skills = workspace_skills
@@ -301,6 +329,12 @@ class SkillService:
             or (Path(skill["path"]).parent if skill.get("path") else session.workspace.skills_dir if session.workspace else "")
         )
         normalized_dir = base_dir.replace("\\", "/")
+        if session.workspace and settings.sandbox_executor == "docker":
+            try:
+                relative = Path(base_dir).resolve().relative_to(session.workspace.root.resolve())
+                normalized_dir = settings.sandbox_docker_workspace_mount.rstrip("/") + "/" + relative.as_posix()
+            except ValueError:
+                pass
         body = str(skill.get("content", "")).strip()
         body = body.replace("${AETHER_SKILL_DIR}", normalized_dir)
         body = body.replace("${AETHER_WORKSPACE_ID}", session.workspace_id)
@@ -324,36 +358,12 @@ class SkillService:
         return "\n".join(lines)
 
     def _install_single_skill_file(self, target_root: Path, filename: str, raw_bytes: bytes) -> None:
-        source_name = Path(filename).name
-        if source_name.lower() == "skill.md":
-            slug = self._slugify(Path(filename).parent.name or "uploaded-skill")
-        else:
-            slug = self._slugify(Path(filename).stem)
-
-        skill_dir = target_root / slug
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_bytes(raw_bytes)
+        from app.services.skill_package import install_package
+        install_package(target_root, filename, raw_bytes)
 
     def _install_skill_zip(self, target_root: Path, raw_bytes: bytes) -> None:
-        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
-            members = [member for member in archive.infolist() if not member.is_dir()]
-            if not members:
-                raise RuntimeError("技能压缩包中没有可提取文件。")
-            if len(members) > 1000 or sum(member.file_size for member in members) > 50 * 1024 * 1024:
-                raise RuntimeError("技能压缩包解压后不能超过 1000 个文件或 50 MiB。")
-
-            for member in members:
-                member_path = Path(member.filename)
-                if member_path.is_absolute() or ".." in member_path.parts:
-                    raise RuntimeError(f"非法技能压缩包路径: {member.filename}")
-                target_path = target_root / member_path
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as src:
-                    target_path.write_bytes(src.read())
-
-        loaded = self._load_skills_from_disk(target_root, source="upload")
-        if not loaded:
-            raise RuntimeError("技能压缩包中未发现任何 skill-name/SKILL.md 结构。")
+        from app.services.skill_package import install_package
+        install_package(target_root, "skills.zip", raw_bytes)
 
     def _to_card(self, item: dict[str, Any]) -> SkillCard:
         return SkillCard(

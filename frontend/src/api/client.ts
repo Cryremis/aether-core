@@ -1035,10 +1035,13 @@ export async function revokeMcpOAuth(name: string, sessionId: string) {
   return response.json();
 }
 
-export type ExtensionEntry = { entry_id: string; kind: "skill" | "mcp"; name: string; description: string; submitter_user_id: number; submitter_name: string; current_version: string; usage_count: number; updated_at: string };
+export type ExtensionEntry = { maintenance_policy?: "creator_only" | "platform_members"; revision?: number; entry_id: string; kind: "skill" | "mcp"; name: string; description: string; submitter_user_id: number; submitter_name: string; current_version: string; usage_count: number; updated_at: string };
 
-export async function listExtensions() {
-  const response = await apiFetch("/extensions");
+export async function listExtensions(options: { sessionId?: string; platformId?: number } = {}) {
+  const query = new URLSearchParams();
+  if (options.sessionId) query.set("session_id", options.sessionId);
+  if (options.platformId) query.set("platform_id", String(options.platformId));
+  const response = await apiFetch(`/extensions?${query}`);
   if (!response.ok) throw new Error(await readErrorMessage(response, `获取拓展市场失败: ${response.status}`));
   return response.json() as Promise<{ data: ExtensionEntry[] }>;
 }
@@ -1052,10 +1055,14 @@ export async function installExtension(entryId: string, scope: "user" | "session
   return response.json();
 }
 
-export async function publishExtension(payload: { kind: "skill" | "mcp"; name: string; description: string; version: string; artifact: File }) {
+export async function publishExtension(payload: { kind: "skill" | "mcp"; name: string; description: string; version: string; artifact: File; sessionId?: string; platformId?: number; maintenancePolicy?: "creator_only" | "platform_members" }) {
   const form = new FormData();
   form.append("kind", payload.kind); form.append("name", payload.name); form.append("description", payload.description); form.append("version", payload.version); form.append("artifact", payload.artifact);
-  const response = await apiFetch("/extensions", { method: "POST", body: form });
+  form.append("maintenance_policy", payload.maintenancePolicy || "creator_only");
+  const query = new URLSearchParams();
+  if (payload.sessionId) query.set("session_id", payload.sessionId);
+  if (payload.platformId) query.set("platform_id", String(payload.platformId));
+  const response = await apiFetch(`/extensions?${query}`, { method: "POST", body: form });
   if (!response.ok) throw new Error(await readErrorMessage(response, `发布拓展失败: ${response.status}`));
   return response.json();
 }

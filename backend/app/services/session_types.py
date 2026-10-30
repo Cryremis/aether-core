@@ -72,6 +72,7 @@ class AgentSession:
     allow_network: bool = True
     disabled_capability_ids: list[str] = field(default_factory=list)
     allowed_tools: list[str] | None = None
+    loaded_skill_tools: list[str] = field(default_factory=list)
     subagent_tools_enabled: bool = True
     created_at: float = field(default_factory=time.time)
     last_access: float = field(default_factory=time.time)

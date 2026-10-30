@@ -47,7 +47,7 @@ export function PlatformMcpManager({ platformId }: { platformId: number }) {
     setStoreLoading(true);
     setStoreOpen(true);
     try {
-      setExtensions((await listExtensions()).data || []);
+      setExtensions((await listExtensions({ platformId })).data || []);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "商店加载失败");
       setStoreOpen(false);

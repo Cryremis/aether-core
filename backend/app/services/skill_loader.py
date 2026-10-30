@@ -129,17 +129,23 @@ class SkillLoader:
         if frontmatter_start is not None:
             frontmatter_lines: list[str] = []
             end_index = frontmatter_start + 1
+            closed = False
             for index in range(frontmatter_start + 1, len(lines)):
                 line = lines[index]
                 if line.strip() == "---":
                     end_index = index
+                    closed = True
                     break
                 frontmatter_lines.append(line)
+            if not closed:
+                raise SkillValidationError("技能 YAML 文件头缺少结束分隔符")
             metadata = self._parse_frontmatter(frontmatter_lines)
             body = "\n".join(lines[end_index + 1 :]).strip()
 
         name = str(metadata.get("name") or fallback_name or path.parent.name)
         description = str(metadata.get("description") or f"{name} 技能")
+        if not isinstance(metadata.get("name", ""), str) or not isinstance(metadata.get("description", ""), str):
+            raise SkillValidationError("name 和 description 必须是字符串")
         allowed_tools = metadata.get("allowed_tools") or []
         tags = metadata.get("tags") or [source]
         return {
@@ -153,27 +159,16 @@ class SkillLoader:
         }
 
     def _parse_frontmatter(self, lines: list[str]) -> dict[str, Any]:
-        metadata: dict[str, Any] = {}
-        current_list_key: str | None = None
-        for raw_line in lines:
-            line = raw_line.rstrip()
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if stripped.startswith("- ") and current_list_key:
-                metadata.setdefault(current_list_key, []).append(stripped[2:].strip())
-                continue
-            current_list_key = None
-            if ":" not in stripped:
-                continue
-            key, value = stripped.split(":", 1)
-            key = key.strip()
-            value = value.strip()
-            if value:
-                metadata[key] = value
-            else:
-                metadata[key] = []
-                current_list_key = key
+        import yaml
+        try:
+            metadata = yaml.safe_load("\n".join(lines)) or {}
+        except yaml.YAMLError as exc:
+            raise SkillValidationError(f"技能 YAML 无效: {exc}") from exc
+        if not isinstance(metadata, dict):
+            raise SkillValidationError("技能文件头必须是对象")
+        for key in ("allowed_tools", "tags"):
+            if key in metadata and (not isinstance(metadata[key], list) or not all(isinstance(v, str) for v in metadata[key])):
+                raise SkillValidationError(f"{key} 必须是字符串数组")
         return metadata
 
     def _find_owner_skill_dir(self, path: Path, *, root: Path, skill_dirs: set[Path]) -> Path | None:

@@ -372,54 +372,12 @@ class PlatformBaselineService:
         return section  # type: ignore[return-value]
 
     def _install_single_skill_file(self, target_root: Path, filename: str, raw_bytes: bytes) -> None:
-        source_name = Path(filename).name
-        fallback_name = Path(filename).parent.name or Path(filename).stem or "uploaded-skill"
-        loaded = skill_loader.load_bytes(
-            raw_bytes,
-            source="platform",
-            path_label=source_name,
-            fallback_name=fallback_name,
-        )
-        if loaded is None:
-            raise SkillValidationError("上传的技能文件为空，请补充技能说明后再上传。")
-
-        if source_name.lower() == "skill.md":
-            slug = self._slugify(Path(filename).parent.name or "uploaded-skill")
-        else:
-            slug = self._slugify(str(loaded.get("name") or Path(filename).stem))
-
-        skill_dir = target_root / slug
-        if skill_dir.exists():
-            shutil.rmtree(skill_dir)
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_bytes(raw_bytes)
+        from app.services.skill_package import install_package
+        install_package(target_root, filename, raw_bytes)
 
     def _install_skill_zip(self, target_root: Path, raw_bytes: bytes) -> None:
-        with tempfile.TemporaryDirectory(prefix="platform-skill-upload-") as temp_dir:
-            staging_root = Path(temp_dir)
-            with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
-                members = [member for member in archive.infolist() if not member.is_dir()]
-                if not members:
-                    raise RuntimeError("技能压缩包中没有可提取文件。")
-
-                for member in members:
-                    member_path = Path(member.filename)
-                    if member_path.is_absolute() or ".." in member_path.parts:
-                        raise RuntimeError(f"非法技能压缩包路径: {member.filename}")
-                    target_path = self._ensure_within_root(staging_root, staging_root / member_path)
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    with archive.open(member) as src:
-                        target_path.write_bytes(src.read())
-
-            package_root = self._resolve_skill_package_root(staging_root)
-            discovered = skill_loader.discover_uploaded_skills(package_root, source="platform")
-            for skill in discovered:
-                relative_dir = skill.relative_dir
-                target_dir = target_root / relative_dir
-                target_dir = self._ensure_within_root(target_root, target_dir)
-                if target_dir.exists():
-                    shutil.rmtree(target_dir)
-                shutil.copytree(skill.directory, target_dir)
+        from app.services.skill_package import install_package
+        install_package(target_root, "skills.zip", raw_bytes)
 
     def _resolve_skill_package_root(self, staging_root: Path) -> Path:
         child_directories = [path for path in staging_root.iterdir() if path.is_dir() and path.name != "__MACOSX"]

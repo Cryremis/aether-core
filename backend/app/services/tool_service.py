@@ -120,6 +120,8 @@ class ToolService:
     def __init__(self) -> None:
         self._registry = ToolRegistry()
         self._register_builtin_tools()
+        from app.services.skill_tools import register_skill_tools
+        register_skill_tools(self._registry)
 
     def _register_builtin_tools(self) -> None:
         """注册所有内置工具。"""
@@ -1290,7 +1292,8 @@ class ToolService:
             runtime_sections=runtime_state_service.build_runtime_context_sections(session),
         )
         try:
-            request_tools = [*self.list_tool_schemas(session), self.get_context_compact_schema()]
+            from app.services.skill_tools import visible_schemas
+            request_tools = [*visible_schemas(session, self.list_tool_schemas(session)), self.get_context_compact_schema()]
             prepared = context_pipeline.compact_session(
                 session=session,
                 llm_runtime=self._resolve_runtime_config(session),
@@ -1439,6 +1442,11 @@ class ToolService:
         timeout_seconds: int | None,
     ) -> ToolExecutionResult:
         """在统一超时预算内分发工具调用。"""
+        from app.services.skill_tools import DEFINITIONS
+        if tool_name in DEFINITIONS:
+            visible = {schema["function"]["name"] for schema in catalog_snapshot.schemas} if catalog_snapshot else set(session.loaded_skill_tools)
+            if tool_name not in visible or (session.allowed_tools is not None and tool_name not in session.allowed_tools):
+                return ToolExecutionResult.failure("tool.execution", "请先发现该工具", code="TOOL_NOT_LOADED", message="先调用 discover_tools，下一轮再使用该工具")
         # 检查注册表中的内置工具
         handler = self._registry.get_handler(tool_name)
         if handler:

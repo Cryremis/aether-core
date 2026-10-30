@@ -7,6 +7,7 @@ import inspect
 import json
 import time
 import uuid
+from dataclasses import replace
 from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
@@ -475,7 +476,9 @@ class AgentEngine:
                     )
                 catalog_snapshot = refreshed_snapshot
 
-            tools = list(catalog_snapshot.schemas)
+            from app.services.skill_tools import visible_schemas
+            visible_catalog = replace(catalog_snapshot, schemas=tuple(visible_schemas(session, catalog_snapshot.schemas)))
+            tools = list(visible_catalog.schemas)
 
             if self._run_is_aborted(session, run_id):
                 if persisted_assistant_blocks or session.get_partial_content(run_id):
@@ -951,7 +954,7 @@ class AgentEngine:
                         run_id=run_id,
                         tool_call_id=tool_call["id"],
                         output_event_queue=tool_output_queue,
-                        catalog_snapshot=catalog_snapshot,
+                        catalog_snapshot=visible_catalog,
                     )
                     session.set_tool_task(run_id, execution_task)
                     try:

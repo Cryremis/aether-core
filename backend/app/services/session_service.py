@@ -253,6 +253,7 @@ class SessionService:
             message_schema_version=int(payload.get("message_schema_version", 1)),
             allow_network=bool(payload.get("allow_network", True)),
             disabled_capability_ids=[str(item) for item in payload.get("disabled_capability_ids", [])],
+            loaded_skill_tools=payload.get("loaded_skill_tools", []),
             allowed_tools=[str(item) for item in payload.get("allowed_tools", [])]
             if payload.get("allowed_tools") is not None
             else None,
@@ -310,6 +311,7 @@ class SessionService:
             "allow_network": session.allow_network,
             "disabled_capability_ids": session.disabled_capability_ids,
             "allowed_tools": session.allowed_tools,
+            "loaded_skill_tools": session.loaded_skill_tools,
             "subagent_tools_enabled": session.subagent_tools_enabled,
             "created_at": session.created_at,
             "last_access": session.last_access,

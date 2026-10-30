@@ -153,7 +153,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
 
   const loadExtensions = async () => {
     setStoreLoading(true);
-    try { setExtensions((await listExtensions()).data || []); }
+    try { setExtensions((await listExtensions({ sessionId })).data || []); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "加载失败"); }
     finally { setStoreLoading(false); }
   };
@@ -239,7 +239,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
 
     {/* 发布拓展：独立悬浮窗，叠加在市场窗之上 */}
     {dialog === "store" && publishOpen ? createPortal(
-      <PublishDialog publishForm={publishForm} setPublishForm={setPublishForm} error={error} onClose={() => setPublishOpen(false)} onPublished={handlePublished} setError={setError} />,
+      <PublishDialog sessionId={sessionId} publishForm={publishForm} setPublishForm={setPublishForm} error={error} onClose={() => setPublishOpen(false)} onPublished={handlePublished} setError={setError} />,
       document.body,
     ) : null}
 
@@ -436,7 +436,8 @@ function StoreDialog({ sessionId, extensions, loading, error, notice, onPublish,
               <p className="market-card__desc">{item.description || "暂无介绍"}</p>
               <div className="market-card__meta">
                 <span title="提交人"><Icons.User />{item.submitter_name}</span>
-                <span title="使用次数"><Icons.Zap />{item.usage_count} 次使用</span>
+                <span title="安装次数"><Icons.Zap />{item.usage_count} 次安装</span>
+                <span>{item.maintenance_policy === "platform_members" ? "共同维护" : "作者维护"}</span>
                 <span>{new Date(item.updated_at).toLocaleDateString()}</span>
               </div>
               <div className="market-card__foot">
@@ -456,7 +457,8 @@ function StoreDialog({ sessionId, extensions, loading, error, notice, onPublish,
   </div>;
 }
 
-function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublished, setError }: {
+function PublishDialog({ sessionId, publishForm, setPublishForm, error, onClose, onPublished, setError }: {
+  sessionId?: string;
   publishForm: PublishForm;
   setPublishForm: (value: PublishForm) => void;
   error: string;
@@ -465,6 +467,7 @@ function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublishe
   setError: (value: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [maintenancePolicy, setMaintenancePolicy] = useState<"creator_only" | "platform_members">("creator_only");
   const [mcpForm, setMcpForm] = useState(emptyMcpForm);
   const isSkill = publishForm.kind === "skill";
 
@@ -484,7 +487,7 @@ function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublishe
     try {
       if (isSkill) {
         if (!publishForm.artifact) return;
-        await publishExtension({ kind: "skill", name: publishForm.name, description: publishForm.description, version: publishForm.version, artifact: publishForm.artifact });
+        await publishExtension({ sessionId, maintenancePolicy, kind: "skill", name: publishForm.name, description: publishForm.description, version: publishForm.version, artifact: publishForm.artifact });
         setPublishForm({ ...emptyPublishForm });
       } else {
         // MCP：表单字段与“添加 MCP”一致，提交时序列化为规范 JSON 制品
@@ -492,7 +495,7 @@ function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublishe
         const name = String(config.name || "").trim();
         if (!name) throw new Error("请填写 MCP 名称");
         const artifact = new File([JSON.stringify(config, null, 2)], `${name}.json`, { type: "application/json" });
-        await publishExtension({ kind: "mcp", name, description: String(config.description || ""), version: publishForm.version, artifact });
+        await publishExtension({ sessionId, kind: "mcp", name, description: String(config.description || ""), version: publishForm.version, artifact });
         setMcpForm(emptyMcpForm);
         setPublishForm({ ...emptyPublishForm });
       }
@@ -547,6 +550,7 @@ function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublishe
           </label>
 
           <div className="publish-fields">
+            <label>维护方式<select value={maintenancePolicy} onChange={(event) => setMaintenancePolicy(event.target.value as "creator_only" | "platform_members")}><option value="creator_only">仅创作者维护</option><option value="platform_members">平台成员共同维护</option></select></label>
             <label>名称<input placeholder="拓展名称" value={publishForm.name} onChange={(event) => setPublishForm({ ...publishForm, name: event.target.value })} /></label>
             <label>版本<input placeholder="1.0.0" value={publishForm.version} onChange={(event) => setPublishForm({ ...publishForm, version: event.target.value })} /></label>
             <label className="full-width">介绍<textarea rows={3} placeholder="这个技能能做什么？什么时候会用到？" value={publishForm.description} onChange={(event) => setPublishForm({ ...publishForm, description: event.target.value })} /></label>
@@ -562,8 +566,8 @@ function PublishDialog({ publishForm, setPublishForm, error, onClose, onPublishe
 
       <footer className="market-publish-dialog__footer">
         {isSkill
-          ? <p>发布后将对市场中的所有用户可见，请勿包含敏感信息。</p>
-          : <p>发布后将对市场中的所有用户可见，凭据由安装者自行配置。</p>}
+          ? <p>发布后仅当前宿主平台用户可见，请勿包含敏感信息。</p>
+          : <p>发布后仅当前宿主平台用户可见，凭据由安装者自行配置。</p>}
         {isSkill ? <button type="button" className="market-publish-dialog__submit" disabled={!canSubmit || busy} onClick={() => void submit()}>{busy ? "发布中..." : "发布"}</button> : <div className="publish-footer__actions">
           <label className="publish-version">版本<input placeholder="1.0.0" value={publishForm.version} onChange={(event) => setPublishForm({ ...publishForm, version: event.target.value })} /></label>
           <button type="button" className="market-publish-dialog__submit" disabled={!canSubmit || busy} onClick={() => void submit()}>{busy ? "发布中..." : "发布"}</button>
