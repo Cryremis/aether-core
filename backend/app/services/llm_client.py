@@ -10,6 +10,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.llm_protocol import RUNTIME_CONTROL_FIELDS
+from app.core.model_errors import ModelStreamError
 from app.services.llm_config_service import RuntimeLlmConfig
 from app.services.context.provider_adapters import NativeStream, native_message, native_request
 
@@ -25,7 +26,8 @@ class LlmClient:
             return requested
         if not isinstance(requested, bool) and (isinstance(requested, int) or str(requested).isdecimal()) and 1 <= int(requested) <= 100:
             return int(requested)
-        raise ValueError(f"模型未声明支持 reasoning_effort={requested!r}，支持值为 {supported}")
+        # 目录可能落后于实际服务；明确的自定义名称交给服务判断，不在本地中断任务。
+        return requested if isinstance(requested, str) and requested.strip() else None
 
     def _endpoint(self, config: RuntimeLlmConfig) -> str:
         if not config.base_url:
@@ -109,18 +111,15 @@ class LlmClient:
         if config.api_format == "openai-compatible":
             supported = deployment.get("supported_parameters")
             can_request_usage = supported is None or "stream_usage" in supported or "stream_options" in supported
-            if stream and sampling.get("stream_usage") is True and not can_request_usage:
-                raise ValueError("部署未声明支持流式 usage，请关闭 stream_usage 或更新部署声明")
+            if not can_request_usage:
+                payload.pop("stream_options", None)
             if stream and sampling.get("stream_usage") is not False and can_request_usage:
                 stream_options = payload.setdefault("stream_options", {})
                 if not isinstance(stream_options, dict):
                     raise ValueError("stream_options 必须是 JSON 对象")
                 stream_options.setdefault("include_usage", True)
-            for message in payload["messages"]:
-                if sampling.get("reasoning_replay") == "disabled":
-                    message.pop("reasoning_content", None)
-                elif sampling.get("reasoning_field") == "reasoning" and "reasoning_content" in message:
-                    message["reasoning"] = message.pop("reasoning_content")
+            from app.services.context.model_profile import project_reasoning_replay
+            payload["messages"] = project_reasoning_replay(config, payload["messages"], payload.get("tools"))
             if "max_completion_tokens" in config.extra_body:
                 payload["max_completion_tokens"] = payload.pop("max_tokens")
         # reasoning_effort: per-message 优先,其次 config 级,注入在 extra_body 之后
@@ -132,21 +131,16 @@ class LlmClient:
         if effective_effort is not None:
             from app.services.context.model_profile import resolve_model_profile
             profile = resolve_model_profile(config)
-            if profile.effort_options and effective_effort not in profile.effort_options:
-                raise ValueError(f"{profile.profile_id} 未声明支持 reasoning_effort={effective_effort!r}，可选值为 {profile.effort_options}")
             resolved = self._resolve_effort(effective_effort, list(profile.effort_options) or config.reasoning_effort_options)
             if resolved:
                 payload["reasoning_effort"] = resolved
-        request = native_request(config, messages, self._strip_tool_fields_when_disabled(payload))
         supported = deployment.get("supported_parameters")
         if supported is not None:
             parameters = {"temperature", "frequency_penalty", "presence_penalty", "top_p", "repetition_penalty", "reasoning_effort", "stop", "seed", "parallel_tool_calls"}
             requested = parameters.intersection(payload)
-            if requested.difference(supported):
-                raise ValueError(f"部署未声明支持参数: {sorted(requested.difference(supported))}")
-        if config.api_format == "openai-compatible":
-            from app.services.context.model_profile import validate_reasoning_replay
-            validate_reasoning_replay(config, messages, request.get("tools"))
+            for key in requested.difference(supported):
+                payload.pop(key, None)  # 可选能力缺失时采用服务默认，不能变成 Agent 的故障。
+        request = native_request(config, messages, self._strip_tool_fields_when_disabled(payload))
         window = self.context_window(config)
         if window and check_budget:
             input_tokens = self.estimate_payload_tokens(config, request)
@@ -223,8 +217,8 @@ class LlmClient:
         if config.api_format == "openai-compatible":
             replay = next(item for item in request["messages"] if item["role"] == "assistant")
             actual = json.loads(replay["tool_calls"][0]["function"]["arguments"])["value"]
-            field = config.sampling.get("reasoning_field") or "reasoning_content"
-            if config.sampling.get("reasoning_replay") != "disabled" and replay.get(field) != "":
+            field = "reasoning_content" if profile.profile_id == "deepseek-thinking/v1" and profile.requires_reasoning(config, tools) else config.sampling.get("reasoning_field") or "reasoning_content"
+            if (profile.requires_reasoning(config, tools) or config.sampling.get("reasoning_replay") != "disabled") and replay.get(field) != "":
                 raise RuntimeError("离线空思考回传不一致")
         elif config.api_format == "openai-responses":
             actual = next(json.loads(item["arguments"])["value"] for item in request["input"] if item.get("type") == "function_call")
@@ -248,8 +242,7 @@ class LlmClient:
     def describe_replay(self, config, request: dict[str, Any]) -> dict[str, Any]:
         """统计真正发送的协议状态，不能把归档中的思考误报成已回传。"""
         if config.api_format == "openai-compatible":
-            field = config.sampling.get("reasoning_field") or "reasoning_content"
-            count = sum(message.get("role") == "assistant" and isinstance(message.get(field), str) for message in request["messages"])
+            count = sum(message.get("role") == "assistant" and any(isinstance(message.get(field), str) for field in ("reasoning_content", "reasoning")) for message in request["messages"])
             unit = "assistant_messages"
         elif config.api_format == "openai-responses":
             count = sum(item.get("type") in {"reasoning", "compaction"} for item in request["input"])
@@ -351,9 +344,12 @@ class LlmClient:
             async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
                 response = await client.post(endpoint or self._endpoint(config), headers=self._headers(config), json=payload)
                 self._raise_for_status_with_detail(response)
-                data = response.json()
+                try:
+                    data = response.json()
+                except ValueError as exc:
+                    raise ModelStreamError("模型返回了无法解析的 JSON 响应") from exc
                 if not isinstance(data, dict):
-                    raise RuntimeError("模型响应必须是 JSON 对象")
+                    raise ModelStreamError("模型响应必须是 JSON 对象")
             if attempt_id:
                 history_store.save_attempt(trace["session_id"], attempt_id,
                     {"usage": data.get("usage") or {}, "api_status": data.get("status"),
@@ -405,7 +401,7 @@ class LlmClient:
                         if finished and (config.api_format != "openai-compatible" or parsed.get("usage") is not None
                             or not (payload.get("stream_options") or {}).get("include_usage")):
                             return
-                except httpx.TransportError:
+                except (httpx.TransportError, RuntimeError, ValueError):
                     # 有效终态已提交时，HTTP 尾部中断不能把完整生成重新标成部分输出。
                     if finished:
                         return
@@ -430,8 +426,9 @@ class LlmClient:
         if not isinstance(parsed, dict) or parsed.get("error"):
             raise RuntimeError(f"模型流返回错误: {parsed.get('error') if isinstance(parsed, dict) else 'invalid frame'}")
         choices = parsed.get("choices") or []
-        if len(choices) > 1 or any(choice.get("index", 0) != 0 for choice in choices):
-            raise RuntimeError("模型流返回了不受支持的多 choice 响应")
+        if "choices" in parsed:
+            # 兼容网关返回额外候选时只消费主候选，绝不串接不同候选的正文或工具。
+            parsed["choices"] = [choice for choice in choices if choice.get("index", 0) == 0][:1]
         return parsed
 
     def _is_terminal_frame(self, parsed: dict) -> bool:
@@ -450,15 +447,14 @@ class LlmClient:
 
         if config.api_format != "openai-compatible":
             if data.get("status") in {"failed", "incomplete"} or data.get("stop_reason") == "max_tokens":
-                raise RuntimeError("模型生成未完整结束")
+                raise ModelStreamError("模型生成未完整结束")
             return native_message(config, data)
         choices = data.get("choices") or []
         if not choices:
-            raise RuntimeError("LLM 未返回有效结果。")
-        if len(choices) != 1 or choices[0].get("index", 0) != 0:
-            raise RuntimeError("模型返回了不受支持的多 choice 响应")
+            raise ModelStreamError("LLM 未返回有效结果。")
+        choices = [next((choice for choice in choices if choice.get("index", 0) == 0), choices[0])]
         if choices[0].get("finish_reason") == "length":
-            raise RuntimeError("模型生成达到输出上限，不能将部分内容当作完整结果")
+            raise ModelStreamError("模型生成达到输出上限，不能将部分内容当作完整结果")
         return choices[0].get("message") or {}
 
     async def stream_chat_completion(
@@ -472,12 +468,15 @@ class LlmClient:
     ) -> AsyncGenerator[dict[str, Any], None]:
         payload = prepared_payload if prepared_payload is not None else self._payload(config, messages, tools, stream=True, reasoning_effort=reasoning_effort)
         native_stream = NativeStream(config) if config.api_format != "openai-compatible" else None
-        async for item in self._stream_request(config, payload):
-            if native_stream:
-                for decoded in native_stream.decode(item):
-                    yield decoded
-            else:
-                yield item
+        try:
+            async for item in self._stream_request(config, payload):
+                if native_stream:
+                    for decoded in native_stream.decode(item):
+                        yield decoded
+                else:
+                    yield item
+        except (RuntimeError, ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise ModelStreamError(str(exc)) from exc
 
 
 llm_client = LlmClient()

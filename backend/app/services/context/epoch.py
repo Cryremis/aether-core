@@ -22,7 +22,7 @@ def rebase_context(session, *, current_user_id: str | None = None, reason: str) 
             rules.append(message)
         elif current_user_id and message.get("message_id") == current_user_id:
             current.append(message)
-        elif not message.get("is_boundary_marker") and not message.get("projection_only"):
+        elif not message.get("is_boundary_marker") and not message.get("projection_only") and message.get("kind") != "context_budget":
             prior.append({"source_message_id": message.get("message_id"), "role": message.get("role"),
                           "content": message.get("content"), "tool_calls": message.get("tool_calls"),
                           "tool_call_id": message.get("tool_call_id")})

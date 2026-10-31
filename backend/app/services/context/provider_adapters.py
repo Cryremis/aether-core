@@ -31,10 +31,8 @@ def native_request(config, messages: list[dict], chat: dict) -> dict:
         return chat
     unsupported = {"frequency_penalty", "presence_penalty", "repetition_penalty", "tool_stream"}.intersection(chat)
     unsupported.update({"seed", "stop"}.intersection(chat) if protocol == "openai-responses" else {"seed"}.intersection(chat))
-    if unsupported:
-        raise ValueError(f"当前原生协议未声明支持参数: {sorted(unsupported)}；请使用模型默认值")
     common = {key: value for key, value in chat.items()
-              if key not in {"messages", "tools", "tool_choice", "max_tokens", "frequency_penalty", "presence_penalty", "repetition_penalty", "reasoning_effort"}}
+              if key not in {"messages", "tools", "tool_choice", "max_tokens", "frequency_penalty", "presence_penalty", "repetition_penalty", "reasoning_effort"} | unsupported}
     converted = []
     system = []
     for message in messages:
@@ -240,6 +238,8 @@ class NativeStream:
                     block["signature"] = block.get("signature", "") + delta["signature"]
                 elif delta["type"] == "input_json_delta":
                     self.inputs[index] = self.inputs.get(index, "") + delta["partial_json"]
+                elif delta["type"] == "citations_delta":
+                    block.setdefault("citations", []).append(copy.deepcopy(delta["citation"]))
                 else:
                     raise RuntimeError(f"尚未支持的原生流增量: {delta['type']}")
             elif kind == "content_block_stop":

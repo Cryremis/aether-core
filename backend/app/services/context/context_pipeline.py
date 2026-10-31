@@ -86,22 +86,9 @@ class ContextPipeline:
             for message in messages
         ]
         self._validate_or_raise(context_message_adapter.to_api_messages(runtime_messages), state, 0)
-        heuristic_estimate = self._estimate_request(runtime_messages, tools, runtime=llm_runtime)
-        token_estimate = int(heuristic_estimate * state.token_calibration_factor)
-        state.last_heuristic_token_estimate = heuristic_estimate
-        state.last_known_token_estimate = token_estimate
-        state.percent_used = self._safe_percent(token_estimate, state.effective_window)
-
-        events = self._build_status_events(state, state.last_known_token_estimate)
-
-        # 警戒区不自动压缩：只给模型注入一次运行时提示，由 Agent 判断是否调用 context_compact。
-        if token_estimate >= state.warning_threshold and getattr(llm_runtime, "api_format", "openai-compatible") == "openai-compatible":
-            runtime_messages.append(self._make_runtime_warning())
-            heuristic_estimate = self._estimate_request(runtime_messages, tools, runtime=llm_runtime)
-            state.last_heuristic_token_estimate = heuristic_estimate
-            token_estimate = int(heuristic_estimate * state.token_calibration_factor)
-            state.last_known_token_estimate = token_estimate
-            state.percent_used = self._safe_percent(token_estimate, state.effective_window)
+        runtime_messages, warning, notice = self._with_budget_notice(
+            session, runtime_messages, state, llm_runtime, tools)
+        token_estimate = state.last_known_token_estimate
 
         if token_estimate >= state.blocking_limit:
             if not allow_compaction:
@@ -118,21 +105,22 @@ class ContextPipeline:
             )
 
         api_messages = context_message_adapter.to_api_messages(runtime_messages)
-        ephemeral_warning = any(message.get("runtime_only") for message in runtime_messages)
         self._validate_or_raise(api_messages, state, token_estimate)
+        if notice is not None:
+            session.messages.append(notice)
         self.state_store.save(session, state)
         return PreparedContext(
             messages=api_messages,
             state=state,
-            events=events,
-            ephemeral_warning=ephemeral_warning,
+            events=self._build_status_events(state, token_estimate),
+            ephemeral_warning=warning,
         )
 
     async def prepare_for_llm_async(self, **kwargs) -> PreparedContext:
         try:
             return self.prepare_for_llm(**kwargs, allow_compaction=False)
         except ContextOverflowError:
-            return await self.compact_session_async(**kwargs, cause="hard_limit")
+            return await self.compact_session_async(**kwargs, cause="hard_limit", aggressive=True)
 
     async def compact_session_async(self, *, session, llm_runtime, messages, turn_index,
                                     tools=None, max_output_tokens=None, cause="agent", aggressive=False) -> PreparedContext:
@@ -154,13 +142,30 @@ class ContextPipeline:
             if state.reactive_retry_count >= self.config.reactive_max_retries:
                 raise ContextOverflowError("上下文溢出恢复次数已达上限", state=state, token_estimate=before)
             state.reactive_retry_count += 1
-        candidate, affected = self._truncate_tool_results(working, keep_recent_turns=2, aggressive=True)
         used_native = bool((getattr(llm_runtime, "sampling", None) or {}).get("native_compaction"))
+        # 客户端检查点不把旧预算快照当作任务事实；原生 compact 的完整窗口交给服务处理。
+        source_window = working if used_native else [m for m in working if m.get("kind") != "context_budget"]
+        keep_recent = self.config.keep_recent_turns_reactive if aggressive else self.config.keep_recent_turns
+        candidate, affected = self._truncate_tool_results(source_window, keep_recent_turns=keep_recent, aggressive=aggressive)
+        affected += len(working) - len(source_window)
         used_summary = False
         if used_native:
             from app.services.llm_client import llm_client
             traced_runtime = replace(llm_runtime, trace_context={"session_id": session.session_id, "purpose": "native_compaction", "context_epoch": session.context_epoch})
-            payload = await llm_client.compact_native(traced_runtime, context_message_adapter.to_api_messages(prefix + working))
+            try:
+                payload = await llm_client.compact_native(traced_runtime, context_message_adapter.to_api_messages(prefix + working))
+            except Exception as exc:
+                import httpx
+                from app.core.model_errors import retryable_model_error
+                # 原生 compact 不可用或暂时失败时，用已归档来源走客户端检查点，不中断任务。
+                compatible_failure = isinstance(exc, (ValueError, RuntimeError)) or retryable_model_error(exc)
+                compatible_failure = compatible_failure or (isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {400, 404, 405, 422})
+                if not compatible_failure:
+                    raise
+                fallback = replace(llm_runtime, sampling={**llm_runtime.sampling, "native_compaction": False})
+                return await self.compact_session_async(session=session, llm_runtime=fallback,
+                    messages=messages, turn_index=turn_index, tools=tools, max_output_tokens=max_output_tokens,
+                    cause="native_compaction_fallback", aggressive=True)
             from app.services.context.provider_adapters import history_system_rules
             payload["system_rules"] = history_system_rules(working)
             checkpoint = context_message_adapter.make_assistant_message(content="原生上下文检查点", provider_payload=payload, turn_index=turn_index)
@@ -169,7 +174,9 @@ class ContextPipeline:
             checkpoint["compression_meta"] = {"source_message_ids": [m.get("message_id") for m in working]}
             candidate, affected = [checkpoint], len(working)
         elif not affected or self._estimate_request(prefix + candidate, tools, state, runtime=llm_runtime) > state.compact_target_tokens:
-            older, tail = split_checkpoint(candidate, self.estimator, max(1, min(12000, int(before * 0.35), int(state.effective_window * 0.35))))
+            tail_ratio, tail_cap = (0.20, 6000) if aggressive else (0.35, 12000)
+            older, tail = split_checkpoint(candidate, self.estimator,
+                max(1, min(tail_cap, int(before * tail_ratio), int(state.effective_window * tail_ratio))))
             pinned = [message for message in working if message.get("role") == "system" and message.get("kind") != "continuation_notice" and not message.get("is_boundary_marker")]
             older = [message for message in older if message not in pinned]
             tail = [message for message in tail if message not in pinned]
@@ -192,7 +199,7 @@ class ContextPipeline:
             facts = compaction_summarizer.exact_facts(summary_source)
             summary += "\n\n原文事实（逐字保留）:\n" + "\n".join(facts)
             checkpoint = context_message_adapter.make_summary_message(content=summary, turn_index=cut_turn - 1,
-                compression_meta={"strategy": "llm_checkpoint", "source_message_ids": [m.get("message_id") for m in older],
+                compression_meta={"strategy": "llm_checkpoint", "mode": "aggressive" if aggressive else "balanced", "source_message_ids": [m.get("message_id") for m in older],
                                   "first_kept_message_id": tail[0].get("message_id") if tail else None})
             candidate = [checkpoint, *pinned, *tail]
             affected = len(older)
@@ -609,18 +616,75 @@ class ContextPipeline:
             },
         )
 
-    def _make_runtime_warning(self) -> dict[str, Any]:
-        """构造仅进入本次 LLM 请求的上下文警戒提示。"""
+    def budget_snapshot(self, state: ContextSessionState, *, basis: str) -> dict[str, Any]:
+        """统一模型提醒与查询的口径：输入预算已扣除输出预留和安全余量。"""
+        used = state.last_known_token_estimate
+        return {
+            "available": True, "is_estimate": True, "snapshot_basis": basis,
+            "context_window_tokens": state.context_window, "input_budget_tokens": state.effective_window,
+            "estimated_input_tokens": used, "used_percent": self._safe_percent(used, state.effective_window),
+            "remaining_input_tokens": max(0, state.effective_window - used),
+            "tokens_left": max(0, state.blocking_limit - used),
+            "tokens_left_basis": "until_automatic_compaction",
+            "auto_compact_at_tokens": state.blocking_limit,
+            "output_reserved_tokens": max(0, state.context_window - state.effective_window - self.budget.config.provider_safety_tokens),
+            "safety_reserved_tokens": self.budget.config.provider_safety_tokens,
+            "budget_source": state.budget_source,
+            "estimate_source": "usage_calibrated" if state.last_api_usage else "heuristic",
+        }
+
+    def _make_runtime_warning(self, state: ContextSessionState, *, can_compact: bool, can_query: bool) -> dict[str, Any]:
+        import json
+        report = self.budget_snapshot(state, basis="before_this_notice")
+        report["context_compact_available"] = can_compact
+        action = ("可调用 context_compact 压缩；若当前任务能在剩余预算内完成，也可继续。" if can_compact
+                  else "当前授权未开放压缩工具；请控制输出，运行时达到限制会尝试自动压缩。")
         return {
             "role": "system",
             "content": (
-                "[runtime context] Context usage is high. You may call context_compact now. "
-                "If the current task can finish within the remaining budget, you may continue without compaction. "
-                "Do not mention this notice to the user."
+                "[runtime context] 上下文接近上限，以下是本条提醒加入前的预算估算，不是新增用户指令或任务授权。\n"
+                + json.dumps(report, ensure_ascii=False, separators=(",", ":")) + "\n"
+                + action + "输入预算已扣除输出与安全预留；数值随输出和工具结果变化，不是任务总 token 额度。"
+                + ("可用 get_context_remaining 查询最新余量。" if can_query else "") + "不必向用户复述此状态。"
             ),
             "runtime_only": True,
+            "kind": "context_budget",
+            "visible_in_transcript": False,
             "turn_index": 0,
         }
+
+    def _with_budget_notice(self, session, messages, state, runtime, tools):
+        def measure(items):
+            state.last_heuristic_token_estimate = self._estimate_request(items, tools, runtime=runtime)
+            state.last_known_token_estimate = int(state.last_heuristic_token_estimate * state.token_calibration_factor)
+            state.percent_used = self._safe_percent(state.last_known_token_estimate, state.effective_window)
+
+        measure(messages)
+        warning = state.last_known_token_estimate >= state.warning_threshold
+        if not warning:
+            return messages, False, None
+        names = {(tool.get("function") or {}).get("name") for tool in tools or []}
+        if (getattr(runtime, "extra_body", {}) or {}).get("tools") == []:
+            names.clear()
+        notice = self._make_runtime_warning(state, can_compact="context_compact" in names, can_query="get_context_remaining" in names)
+        native = getattr(runtime, "api_format", "openai-compatible") != "openai-compatible"
+        persisted = None
+        if native:
+            bucket = int(state.percent_used // 5)
+            previous = next((item.get("budget_notice", {}) for item in reversed(messages) if item.get("kind") == "context_budget"), {})
+            if (previous.get("epoch") == session.context_epoch and previous.get("compaction_count") == state.compaction_count
+                and previous.get("bucket", -1) >= bucket):
+                return messages, True, None
+            # 原生状态消息只在已闭合的历史末尾追加并保留回放，不能替换签名之前的旧前缀。
+            notice["role"] = "user"
+            notice["budget_notice"] = {"epoch": session.context_epoch, "compaction_count": state.compaction_count, "bucket": bucket}
+            notice = context_message_adapter.ensure_runtime_metadata(notice)
+            persisted = notice
+        messages = [*messages, notice]
+        measure(messages)  # 提醒本身也必须进入最终请求预算，不能挤占未计数空间。
+        if persisted is not None:
+            persisted["budget_notice"]["bucket"] = int(state.percent_used // 5)
+        return messages, True, persisted
 
     def _system_prefix(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         prefix: list[dict[str, Any]] = []
@@ -660,15 +724,9 @@ class ContextPipeline:
         llm_runtime: Any = None,
     ) -> PreparedContext:
         runtime_messages = [*system_prefix, *session.messages]
-        warning = self._estimate_request(runtime_messages, tools, state, runtime=llm_runtime) >= state.warning_threshold
-        if warning and getattr(llm_runtime, "api_format", "openai-compatible") == "openai-compatible":
-            runtime_messages.append(self._make_runtime_warning())
-
-        heuristic = self._estimate_request(runtime_messages, tools, runtime=llm_runtime)
-        token_estimate = int(heuristic * state.token_calibration_factor)
-        state.last_heuristic_token_estimate = heuristic
-        state.last_known_token_estimate = token_estimate
-        state.percent_used = self._safe_percent(token_estimate, state.effective_window)
+        runtime_messages, warning, notice = self._with_budget_notice(
+            session, runtime_messages, state, llm_runtime, tools)
+        token_estimate = state.last_known_token_estimate
         if token_estimate >= state.blocking_limit:
             self.state_store.save(session, state)
             raise ContextOverflowError(
@@ -684,6 +742,8 @@ class ContextPipeline:
         state.last_boundary_message_id = str(boundary.get("message_id")) if boundary else None
         api_messages = context_message_adapter.to_api_messages(runtime_messages)
         self._validate_or_raise(api_messages, state, token_estimate, allow_pending=True)
+        if notice is not None:
+            session.messages.append(notice)
         self.state_store.save(session, state)
         return PreparedContext(
             messages=api_messages,

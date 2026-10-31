@@ -36,6 +36,9 @@ class SessionRunContext:
     continuation_of: str | None = None
     reasoning_content: str | None = None
     provider_payload: dict[str, Any] | None = None
+    # 只在本次运行内保存实际系统前缀和工具投影，预算查询不重建一套不同的请求。
+    context_system_messages: list[dict[str, Any]] = field(default_factory=list)
+    context_tools: list[dict[str, Any]] = field(default_factory=list)
 
     def request_abort(self) -> None:
         self.abort_event.set()

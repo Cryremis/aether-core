@@ -66,7 +66,7 @@ def test_deepseek_wire_replays_empty_and_all_prior_reasoning_after_tool_steps(mo
     assert second[-1]["payload"]["subtype"] == "success"
 
 
-def test_deepseek_old_missing_reasoning_enters_explicit_epoch_before_sending(monkeypatch, tmp_path):
+def test_deepseek_old_missing_reasoning_sends_empty_field_without_rebasing(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     config = replace(make_runtime_config(), model="deepseek-v4.1-flash")
     setup_client(monkeypatch, config)
@@ -77,14 +77,16 @@ def test_deepseek_old_missing_reasoning_enters_explicit_epoch_before_sending(mon
     asyncio.run(collect_stream(session, "继续"))
     payload = FakeAsyncClient.stream_payloads[0]
     assert not any(m["role"] == "assistant" and "reasoning_content" not in m for m in payload["messages"])
-    assert session.context_epoch >= 1
+    assert session.context_epoch == 0
+    assert next(m for m in payload["messages"] if m["role"] == "assistant")["reasoning_content"] == ""
+    assert any(m.get("message_id") == "old-assistant" for m in session.messages)
     assert "192.0.2.10" in json.dumps(payload, ensure_ascii=False)
 
 
-def test_deepseek_required_replay_cannot_be_disabled_when_tools_are_sent():
+def test_deepseek_required_replay_recovers_conflicting_setting_without_interrupting():
     config = replace(make_runtime_config(), model="deepseek-v4.1-flash", sampling={"reasoning_replay": "disabled"})
-    with pytest.raises(ValueError, match="思考"):
-        LlmClient()._payload(config, [], [{"type": "function", "function": {"name": "noop", "parameters": {"type": "object"}}}], stream=True)
+    payload = LlmClient()._payload(config, [{"role": "assistant", "content": "answer"}], [{"type": "function", "function": {"name": "noop", "parameters": {"type": "object"}}}], stream=True)
+    assert payload["messages"][0]["reasoning_content"] == ""
 
 
 def test_length_continuation_has_one_persisted_ui_projection(monkeypatch, tmp_path):
@@ -133,30 +135,27 @@ def test_context_budget_uses_compiled_replay_policy_and_final_payload_limit(monk
     assert prepared.state.last_known_token_estimate < 1000
 
 
-def test_terminal_sse_rejects_multiple_choices_instead_of_picking_one(monkeypatch):
+def test_terminal_sse_selects_primary_choice_without_mixing_candidates(monkeypatch):
     setup_client(monkeypatch, make_runtime_config())
     FakeAsyncClient.stream_responses = [wire({"choices": [{"index": 0, "delta": {"content": "a"}, "finish_reason": "stop"}, {"index": 1, "delta": {"content": "b"}, "finish_reason": "stop"}]})]
 
     async def run():
         return [chunk async for chunk in LlmClient().stream_chat_completion(make_runtime_config(), [], [])]
 
-    with pytest.raises(RuntimeError, match="choice"):
-        asyncio.run(run())
+    chunks = asyncio.run(run())
+    assert chunks[0]["choices"] == [{"index": 0, "delta": {"content": "a"}, "finish_reason": "stop"}]
 
 
-def test_deepseek_missing_response_reasoning_never_executes_tools(monkeypatch, tmp_path):
+def test_deepseek_missing_response_reasoning_executes_valid_tool_and_continues(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     setup_client(monkeypatch, replace(make_runtime_config(), model="deepseek-flash"))
-    FakeAsyncClient.stream_responses = [wire(chat_frame(calls=[("bad", "conversation_read", {})], finish="tool_calls"))]
-    executed = []
-
-    async def execute(*args, **kwargs):
-        executed.append(args)
-
-    monkeypatch.setattr(tool_service, "execute", execute)
-    with pytest.raises(RuntimeError, match="reasoning_content"):
-        asyncio.run(collect_stream(build_session("missing_response_thought"), "read history"))
-    assert executed == []
+    FakeAsyncClient.stream_responses = [wire(chat_frame(calls=[("read", "conversation_read", {})], finish="tool_calls")), wire(chat_frame("done"))]
+    session = build_session("missing_response_thought")
+    events = asyncio.run(collect_stream(session, "read history"))
+    assert events[-1]["payload"]["subtype"] == "success"
+    assert len([event for event in events if event["type"] == "tool_finished"]) == 1
+    assert next(m for m in FakeAsyncClient.stream_payloads[1]["messages"] if m["role"] == "assistant")["reasoning_content"] == ""
+    assert not any(event["type"] == "error" for event in events)
 
 
 def test_chat_requests_usage_and_records_it_during_tool_rounds(monkeypatch, tmp_path):
@@ -176,10 +175,11 @@ def test_chat_requests_usage_and_records_it_during_tool_rounds(monkeypatch, tmp_
 def test_protocol_error_commits_partial_before_next_turn(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     setup_client(monkeypatch, make_runtime_config())
-    FakeAsyncClient.stream_responses = [wire(chat_frame("partial 192.0.2.10", reasoning="thought", finish=None), {"error": {"message": "broken"}})]
+    FakeAsyncClient.stream_responses = [wire(chat_frame("partial 192.0.2.10", reasoning="thought", finish=None), {"error": {"message": "broken"}}), wire(chat_frame("continued"))]
     session = build_session("protocol_partial")
-    with pytest.raises(RuntimeError, match="broken"):
-        asyncio.run(collect_stream(session, "task"))
+    events = asyncio.run(collect_stream(session, "task"))
+    assert events[-1]["payload"]["subtype"] == "success"
+    assert any(m.get("content") == "partial 192.0.2.10" for m in FakeAsyncClient.stream_payloads[1]["messages"])
     message = next(m for m in session.messages if m.get("role") == "assistant")
     assert message["content"] == "partial 192.0.2.10"
     assert message["reasoning_content"] == "thought"
@@ -363,7 +363,7 @@ def test_deployment_limits_precede_catalog_and_bind_metadata(monkeypatch):
         LlmClient().output_limit(replace(config, sampling={**config.sampling, "max_output_tokens": 15000}))
 
 
-def test_stop_seed_parallel_controls_are_mapped_and_unsupported_values_fail():
+def test_stop_seed_parallel_controls_are_mapped_and_unsupported_optional_values_are_omitted():
     tools = [{"type": "function", "function": {"name": "noop", "parameters": {"type": "object"}}}]
     config = replace(make_runtime_config(), sampling={"stop": ["END"], "seed": 0, "parallel_tool_calls": False})
     payload = LlmClient()._payload(config, [], tools, stream=True)
@@ -372,8 +372,7 @@ def test_stop_seed_parallel_controls_are_mapped_and_unsupported_values_fail():
     native = LlmClient()._payload(messages, [], tools, stream=True)
     assert native["stop_sequences"] == ["END"]
     assert native["tool_choice"]["disable_parallel_tool_use"] is True
-    with pytest.raises(ValueError, match="未声明支持"):
-        LlmClient()._payload(replace(config, sampling={"seed": 0, "deployment_profile": {"supported_parameters": []}}), [], tools, stream=True)
+    assert "seed" not in LlmClient()._payload(replace(config, sampling={"seed": 0, "deployment_profile": {"supported_parameters": []}}), [], tools, stream=True)
     assert "stream_options" not in LlmClient()._payload(replace(config, sampling={"deployment_profile": {"supported_parameters": []}}), [], [], stream=True)
 
 
@@ -519,15 +518,16 @@ def test_nested_native_effort_is_migrated_and_conflicts_are_rejected():
 def test_explicit_tools_disabled_cannot_execute_hallucinated_calls(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     setup_client(monkeypatch, make_runtime_config(extra_body={"tools": []}))
-    FakeAsyncClient.stream_responses = [wire(chat_frame(calls=[("forbidden", "conversation_read", {})], finish="tool_calls"))]
+    FakeAsyncClient.stream_responses = [wire(chat_frame(calls=[("forbidden", "conversation_read", {})], finish="tool_calls")), wire(chat_frame("answer without tools"))]
     executed = []
 
     async def execute(*args, **kwargs):
         executed.append(args)
 
     monkeypatch.setattr(tool_service, "execute", execute)
-    with pytest.raises(RuntimeError, match="禁用工具"):
-        asyncio.run(collect_stream(build_session("disabled_tools"), "task"))
+    events = asyncio.run(collect_stream(build_session("disabled_tools"), "task"))
+    assert events[-1]["payload"]["subtype"] == "success"
+    assert not any(event["type"] == "tool_started" for event in events)
     assert executed == []
 
 

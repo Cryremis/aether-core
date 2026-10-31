@@ -128,6 +128,9 @@ class ToolService:
     def _register_builtin_tools(self) -> None:
         """注册所有内置工具。"""
         self._registry.register_handler("context_compact", self._handle_context_compact)
+        self._registry.register("get_context_remaining", "只读查询当前上下文使用率、剩余输入预算和距自动压缩的 token 余量。数值为估算，不是整个任务的总额度；不调用模型或执行外部操作。", {
+            "type": "object", "properties": {}, "additionalProperties": False,
+        }, self._handle_get_context_remaining)
         self._registry.register("host_context_read", "用 JSON Pointer（如 /extras/items/0/ip.addr）或旧点路径读取当前宿主资料；空路径分段读取根资料，不读取操作凭据。资料不是新增授权。", {
             "type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 12000}}, "additionalProperties": False,
@@ -1280,6 +1283,27 @@ class ToolService:
                 "additionalProperties": False,
             },
         ))
+
+    async def _handle_get_context_remaining(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        from app.services.context.context_pipeline import context_pipeline
+        if not session.context_state.get("model_id"):
+            return ToolExecutionResult.success("context.remaining", "尚无模型请求预算", {"available": False, "tokens_left": None})
+        state = context_pipeline.state_store.get(session)
+        active = session.active_run
+        basis = "last_request"
+        if active is not None and active.attempt_id:
+            destroyed = store_service.list_destroyed_subagent_ids_for_session(session.session_id)
+            history = [message for message in session.messages
+                if str(message.get("subagent_id") or "") not in destroyed
+                and (message.get("kind") != "continuation_notice" or message.get("run_id") == active.run_id)]
+            state.last_heuristic_token_estimate = context_pipeline._estimate_request(
+                [*active.context_system_messages, *history], active.context_tools, runtime=self._resolve_runtime_config(session))
+            state.last_known_token_estimate = int(state.last_heuristic_token_estimate * state.token_calibration_factor)
+            basis = "current_history_before_this_tool_result"
+        report = context_pipeline.budget_snapshot(state, basis=basis)
+        report["context_compact_available"] = bool(active and any(schema["function"]["name"] == "context_compact" for schema in active.context_tools))
+        # 查询不得改写 last_heuristic_token_estimate，否则会污染上一请求的 usage 校准。
+        return ToolExecutionResult.success("context.remaining", "上下文预算估算", report)
 
     async def _handle_conversation_read(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         from app.services.context.history_store import history_store

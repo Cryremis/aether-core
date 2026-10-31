@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-import traceback
 import uuid
 import json
 from dataclasses import dataclass, field
@@ -13,6 +12,7 @@ from typing import Any
 from app.runtime.engine import agent_engine
 from app.runtime.event_protocol import make_event
 from app.core.config import settings
+from app.core.model_errors import public_run_error
 from app.schemas.agent import AgentEvent
 from app.services.session_service import session_service
 from app.services.runtime_state import runtime_state_service
@@ -450,6 +450,8 @@ class AgentRunService:
         run["result"] = json.loads(run["result_json"]) if run.get("result_json") else None
         run.pop("result_json", None)
         run["error"] = json.loads(run["error_json"]) if run.get("error_json") else None
+        if run["error"]:
+            run["error"] = {"message": public_run_error(), "error_id": run_id}
         run.pop("error_json", None)
         return run
 
@@ -513,11 +515,12 @@ class AgentRunService:
             )
             terminal_event = completed_event
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Agent run %s failed after recovery", run_id)
             error_event = make_event(
                 session,
                 "error",
-                message=str(exc),
-                traceback=traceback.format_exc(),
+                message=public_run_error(),
+                error_id=run_id,
             )
             self._apply_event_to_active_view(session, error_event)
             await self._publish(run_id, error_event)

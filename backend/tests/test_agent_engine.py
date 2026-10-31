@@ -1075,10 +1075,10 @@ def test_agent_engine_returns_partial_answer_when_stream_interrupted_after_conte
     events = asyncio.run(collect_stream(session, "say something"))
 
     retry_events = [item for item in events if item["type"] == "stream_retry"]
-    assert len(retry_events) == 0
+    assert len(retry_events) == 1
     result_event = next(item for item in events if item["type"] == "result")
-    assert result_event["payload"]["subtype"] == "incomplete"
-    assert result_event["payload"]["result"] == "partial answer"
+    assert result_event["payload"]["subtype"] == "success"
+    assert result_event["payload"]["result"] == "complete answer"
     assert not any(item["type"] == "error" for item in events)
 
 
@@ -1147,7 +1147,7 @@ def test_agent_engine_retries_transient_upstream_error(monkeypatch, tmp_path):
     retry_events = [item for item in events if item["type"] == "stream_retry"]
     assert len(retry_events) == 1
     assert retry_events[0]["payload"]["reason"] == "upstream_status"
-    assert "upstream error" in retry_events[0]["payload"]["message"]
+    assert "upstream error" not in str(retry_events[0]["payload"])
     result_event = next(item for item in events if item["type"] == "result")
     assert result_event["payload"]["subtype"] == "success"
     assert result_event["payload"]["result"] == "recovered answer"
@@ -1334,11 +1334,11 @@ def test_agent_engine_retries_on_transport_error(monkeypatch, tmp_path):
     events = asyncio.run(collect_stream(session, "hello"))
 
     retry_events = [item for item in events if item["type"] == "stream_retry"]
-    assert len(retry_events) == 0
+    assert len(retry_events) == 1
     result_event = next(item for item in events if item["type"] == "result")
-    assert result_event["payload"]["subtype"] == "incomplete"
-    assert result_event["payload"]["result"] == "partial"
-    assert call_count == 1
+    assert result_event["payload"]["subtype"] == "success"
+    assert result_event["payload"]["result"] == "complete answer"
+    assert call_count == 2
 
 
 def test_agent_engine_recovers_from_length_truncation_partial_content(monkeypatch, tmp_path):

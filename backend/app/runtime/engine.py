@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import inspect
 import json
+import logging
 import time
 import uuid
 from dataclasses import replace
@@ -15,10 +17,11 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.model_errors import ModelStreamError
 from app.runtime.event_protocol import make_event
 from app.services.context.context_pipeline import context_pipeline
 from app.services.context.message_adapter import context_message_adapter
-from app.services.context.model_profile import missing_reasoning_messages, resolve_model_profile
+from app.services.context.model_profile import model_text, recover_optional_parameter, resolve_model_profile
 from app.services.context.runtime_types import ContextEventType, ContextOverflowError
 from app.services.file_service import file_service
 from app.services.llm_client import llm_client
@@ -32,6 +35,8 @@ from app.services.tool_service import ToolCatalogSnapshot, tool_service
 from app.services.tool_display_service import tool_display_service
 from app.services.tool_result_service import ToolExecutionResult, tool_result_renderer
 from app.services.transcript_service import transcript_service
+
+logger = logging.getLogger(__name__)
 
 
 class _RunAborted(Exception):
@@ -568,13 +573,14 @@ class AgentEngine:
         next_continuation_of = None
         llm_retry_delays = [1, 3, 5, 10, 10, 10, 10, 10]
 
-        def take_llm_retry_delay() -> int | None:
+        def take_llm_retry_delay(minimum_delay: float = 0) -> float | None:
             nonlocal llm_retry_deadline, llm_retry_count
             if llm_retry_deadline == 0.0:
-                llm_retry_deadline = time.perf_counter() + 60
-            if time.perf_counter() >= llm_retry_deadline or llm_retry_count >= 3:
+                llm_retry_deadline = time.perf_counter() + settings.agent_model_retry_window_seconds
+            if time.perf_counter() >= llm_retry_deadline or llm_retry_count >= settings.agent_model_retry_attempts:
                 return None
-            delay = llm_retry_delays[min(llm_retry_count, len(llm_retry_delays) - 1)]
+            delay = max(llm_retry_delays[min(llm_retry_count, len(llm_retry_delays) - 1)], minimum_delay)
+            delay = min(delay, max(0, llm_retry_deadline - time.perf_counter()))
             llm_retry_count += 1
             return delay
 
@@ -702,14 +708,6 @@ class AgentEngine:
             effective_tools = [] if llm_runtime.extra_body.get("tools") == [] else tools_for_estimation
             if resolve_model_profile(llm_runtime).requires_reasoning(llm_runtime, effective_tools) and history_store.restore_reasoning(session, llm_runtime):
                 session_service.persist(session)
-            if missing_reasoning_messages(llm_runtime, visible_messages, effective_tools):
-                # 不能伪造旧思考或发出注定不合法的 DeepSeek 请求；原文先归档再明确交接。
-                session_service.persist(session)
-                rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
-                               reason="旧历史缺少模型要求的完整思考状态")
-                visible_messages = list(session.messages)
-                raw_messages = [*system_messages, *visible_messages]
-                session_service.persist(session)
             if llm_runtime.api_format != "openai-compatible" and any(
                 message.get("role") == "assistant" and message.get("status") == "incomplete"
                 and not message.get("provider_payload") and not message.get("projection_only") for message in visible_messages
@@ -788,6 +786,9 @@ class AgentEngine:
             last_usage_payload: dict[str, int] | None = None
             from app.services.context.history_store import history_store
             prepared_payload = llm_client._payload(llm_runtime, messages, tools, stream=True, reasoning_effort=reasoning_effort)
+            if active:
+                active.context_system_messages = copy.deepcopy(system_messages)
+                active.context_tools = copy.deepcopy(tools) if prepared_payload.get("tools") else []
             history_store.start_attempt(session.session_id, attempt_id, {
                 "purpose": "conversation",
                 "model": llm_runtime.model, "api_format": llm_runtime.api_format,
@@ -865,10 +866,8 @@ class AgentEngine:
                     if finish_reason:
                         last_stop_reason = str(finish_reason)
 
-                    reasoning_field = "reasoning_content" if isinstance(delta.get("reasoning_content"), str) else "reasoning"
-                    reasoning_delta = delta.get(reasoning_field)
-                    if reasoning_delta is not None and not isinstance(reasoning_delta, str):
-                        raise RuntimeError("模型思考增量必须是文本")
+                    reasoning_field = "reasoning_content" if delta.get("reasoning_content") is not None else "reasoning"
+                    reasoning_delta = model_text(delta.get(reasoning_field))
                     if isinstance(reasoning_delta, str):
                         assistant_reasoning = (assistant_reasoning or "") + reasoning_delta
                         if active:
@@ -899,9 +898,7 @@ class AgentEngine:
                         yield make_event(session, "reasoning_delta", round=turn_count, delta=reasoning_delta,
                                          attempt_id=attempt_id, part_id=active_reasoning_block_id)
 
-                    content_delta = delta.get("content") or ""
-                    if not isinstance(content_delta, str):
-                        raise RuntimeError("模型正文增量必须是文本")
+                    content_delta = model_text(delta.get("content")) or ""
                     if content_delta:
                         if active_reasoning_block_id:
                             self._update_assistant_block(
@@ -939,8 +936,13 @@ class AgentEngine:
                                          attempt_id=attempt_id, part_id=active_content_block_id)
 
                     for tool_call in delta.get("tool_calls") or []:
-                        index = int(tool_call.get("index", 0))
-                        function = tool_call.get("function") or {}
+                        try:
+                            index = int(tool_call.get("index", 0))
+                            function = tool_call.get("function") or {}
+                            if not isinstance(function, dict) or not isinstance(function.get("name", ""), str):
+                                raise ValueError("invalid tool function")
+                        except (ValueError, TypeError, AttributeError) as exc:
+                            raise ModelStreamError("模型工具片段不完整") from exc
                         current = tool_calls.setdefault(
                             index,
                             {
@@ -953,7 +955,7 @@ class AgentEngine:
                             current["id"] = tool_call["id"]
                         if function.get("name"):
                             current["name"] += function["name"]
-                        arguments_delta = function.get("arguments") or ""
+                        arguments_delta = model_text(function.get("arguments")) or ""
                         if arguments_delta:
                             current["arguments"] += arguments_delta
                         history_store.save_attempt(session.session_id, attempt_id,
@@ -969,7 +971,23 @@ class AgentEngine:
                             arguments=current["arguments"],
                         )
             except httpx.HTTPStatusError as exc:
+                history_store.save_attempt(session.session_id, attempt_id,
+                    {"error_type": type(exc).__name__, "http_status": exc.response.status_code}, "failed")
                 error_message = self._extract_llm_error_message(exc)
+                negotiation_config = replace(llm_runtime, sampling={**llm_runtime.sampling, "reasoning_effort": reasoning_effort}) if reasoning_effort is not None else llm_runtime
+                negotiated = recover_optional_parameter(negotiation_config, error_message) if exc.response.status_code in {400, 422} else None
+                if negotiated and not (assistant_content or assistant_reasoning or tool_calls):
+                    llm_runtime, parameter = negotiated
+                    logger.warning("Model parameter compatibility recovery: run=%s parameter=%s", run_id, parameter)
+                    if parameter == "reasoning_effort":
+                        reasoning_effort = None
+                    from app.services.context.provider_adapters import binding
+                    if llm_runtime.api_format != "openai-compatible":
+                        session_service.persist(session)
+                        rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None, reason="服务参数兼容恢复")
+                    session.provider_binding = binding(llm_runtime)
+                    session_service.persist(session)
+                    continue
                 if self._is_context_overflow_error(error_message):
                     try:
                         recovered = await self._await_operation(session, run_id, context_pipeline.compact_session_async(
@@ -1003,7 +1021,12 @@ class AgentEngine:
                     and not active_reasoning_block_id
                     and not active_content_block_id
                 ):
-                    delay = take_llm_retry_delay()
+                    retry_after = (getattr(exc.response, "headers", {}) or {}).get("retry-after", "0")
+                    try:
+                        cooldown = max(0, float(retry_after))
+                    except (TypeError, ValueError):
+                        cooldown = 0
+                    delay = take_llm_retry_delay(cooldown)
                     if delay is not None:
                         yield make_event(
                             session,
@@ -1012,22 +1035,40 @@ class AgentEngine:
                             attempt=llm_retry_count,
                             delay=delay,
                             reason="upstream_status",
-                            message=error_message,
                         )
                         await self._await_operation(session, run_id, asyncio.sleep(delay))
                         continue
                 raise RuntimeError(error_message) from exc
-            except httpx.TransportError:
-                # 已有输出不能重放同一请求；保留原文并明确告知不完整。
-                delay = take_llm_retry_delay() if not (assistant_content or assistant_reasoning or tool_calls) else None
+            except (httpx.TransportError, ModelStreamError) as exc:
+                # 保留已发布片段后续写；当前生成的工具尚未执行，不能把残缺参数当成调用。
+                history_store.save_attempt(session.session_id, attempt_id,
+                    {"content": assistant_content, "reasoning_content": assistant_reasoning,
+                     "provider_payload": provider_payload, "tool_calls": tool_calls, "error_type": type(exc).__name__}, "incomplete")
+                delay = take_llm_retry_delay()
                 if delay is not None:
+                    if assistant_content or assistant_reasoning:
+                        if active_content_block_id:
+                            self._update_assistant_block(persisted_assistant_blocks, active_content_block_id, status="incomplete")
+                            yield make_event(session, "content_completed", part_id=active_content_block_id, status="incomplete")
+                        self._persist_assistant_round(session, turn_index=request_turn_index,
+                            content=assistant_content or None, blocks=persisted_assistant_blocks, run_id=run_id,
+                            reasoning_content=assistant_reasoning, provider_payload=None, attempt_id=attempt_id,
+                            status="incomplete", visible_in_transcript=False)
+                    if assistant_content or assistant_reasoning or tool_calls:
+                        session.messages.append(context_message_adapter.make_internal_user_message(
+                            "[运行状态] 上次生成中断，该次提出的工具尚未执行。请基于已保留的正文和已完成工具回执继续当前任务，不要重复已完成操作；需要工具时重新生成完整调用。",
+                            turn_index=request_turn_index, kind="continuation_notice"))
+                        session.messages[-1]["run_id"] = run_id
+                        session_service.persist(session)
+                        next_continuation_of = attempt_id
+                    logger.warning("Recovering model stream: run=%s attempt=%s type=%s", run_id, attempt_id, type(exc).__name__)
                     yield make_event(
                         session,
                         "stream_retry",
                         round=turn_count,
                         attempt=llm_retry_count,
                         delay=delay,
-                        reason="transport",
+                        reason="transport" if isinstance(exc, httpx.TransportError) else "protocol_recovery",
                     )
                     await self._await_operation(session, run_id, asyncio.sleep(delay))
                     continue
@@ -1072,20 +1113,54 @@ class AgentEngine:
                 session.finish_run(run_id)
                 return
 
+            if llm_runtime.api_format == "openai-compatible" and tool_calls:
+                historical_ids = {str(call.get("id")) for item in session.messages for call in item.get("tool_calls", [])}
+                seen_calls = {}
+                for index, call in list(tool_calls.items()):
+                    call_id = str(call["id"])
+                    if call_id in seen_calls:
+                        previous = seen_calls[call_id]
+                        if (previous["name"], previous["arguments"]) != (call["name"], call["arguments"]):
+                            previous["protocol_error"] = "模型在同一批中复用了工具标识且参数不同；本次未执行，请重新生成完整调用。"
+                        del tool_calls[index]
+                        continue
+                    seen_calls[call_id] = call
+                    if call_id in historical_ids:
+                        call["id"] = f"call_{uuid.uuid4().hex}"
             history_store.save_attempt(session.session_id, attempt_id,
                 {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls,
                  "provider_payload": provider_payload, "stop_reason": last_stop_reason, "usage": last_usage_payload or {}},
                 "completed" if last_stop_reason in {"stop", "tool_calls"} else "incomplete")
-            if resolve_model_profile(llm_runtime).requires_reasoning(llm_runtime, prepared_payload.get("tools")) and assistant_reasoning is None:
-                history_store.save_attempt(session.session_id, attempt_id,
-                    {"content": assistant_content, "tool_calls": tool_calls, "stop_reason": "missing_reasoning"}, "invalid")
-                raise RuntimeError("DeepSeek 思考模式没有返回 reasoning_content；未执行工具，请检查 vLLM reasoning parser / chat template 或显式配置非思考模式")
-            if tool_calls and llm_runtime.extra_body.get("tools") == []:
+            if not (assistant_content.strip() or assistant_reasoning or tool_calls):
+                delay = take_llm_retry_delay()
+                if delay is not None:
+                    yield make_event(session, "stream_retry", round=turn_count, attempt=llm_retry_count, delay=delay, reason="empty_response")
+                    await self._await_operation(session, run_id, asyncio.sleep(delay))
+                    continue
+            invalid_calls = bool(tool_calls) and (llm_runtime.extra_body.get("tools") == [] or last_stop_reason not in {"tool_calls", "stop"})
+            if invalid_calls:
                 history_store.save_attempt(session.session_id, attempt_id,
                     {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls}, "invalid")
-                raise RuntimeError("本次请求已明确禁用工具，模型返回的工具调用未执行")
-            if tool_calls and last_stop_reason not in {"tool_calls", "stop"}:
-                raise RuntimeError("模型工具调用未完整结束，参数已归档且未执行")
+                delay = take_llm_retry_delay()
+                tool_calls, provider_payload = {}, None
+                if delay is not None:
+                    if assistant_content or assistant_reasoning:
+                        self._persist_assistant_round(session, turn_index=request_turn_index, content=assistant_content or None,
+                            blocks=persisted_assistant_blocks, run_id=run_id, reasoning_content=assistant_reasoning,
+                            provider_payload=None, attempt_id=attempt_id, status="incomplete", visible_in_transcript=False)
+                    notice = "本次工具提议未执行：当前请求未开放工具，请直接回答。" if llm_runtime.extra_body.get("tools") == [] else "上次工具调用未完整生成且尚未执行，请继续当前任务，需要工具时重新生成完整参数。"
+                    session.messages.append(context_message_adapter.make_internal_user_message(
+                        "[运行状态] " + notice + "不要重复已完成的工具操作。", turn_index=request_turn_index, kind="continuation_notice"))
+                    session.messages[-1]["run_id"] = run_id
+                    session_service.persist(session)
+                    next_continuation_of = attempt_id
+                    yield make_event(session, "stream_retry", round=turn_count, attempt=llm_retry_count, delay=delay, reason="tool_call_recovery")
+                    await self._await_operation(session, run_id, asyncio.sleep(delay))
+                    continue
+                last_stop_reason = "stream_interrupted"
+            elif last_stop_reason in {"stop", "tool_calls"} and (assistant_content.strip() or assistant_reasoning or tool_calls):
+                # 每个有效生成结束后重置瞬时故障预算，长任务不会耗尽全程共用的三次机会。
+                llm_retry_deadline, llm_retry_count = 0.0, 0
             if last_usage_payload:
                 context_pipeline.update_api_usage(session, last_usage_payload, runtime=llm_runtime)
             if active_reasoning_block_id:
@@ -1167,7 +1242,7 @@ class AgentEngine:
 
                 for _, tool_call in sorted(tool_calls.items()):
                     tool_name = tool_call["name"]
-                    validation_error = None
+                    validation_error = tool_call.get("protocol_error")
                     try:
                         tool_input = json.loads(tool_call["arguments"])
                         if not isinstance(tool_input, dict):
@@ -1442,8 +1517,9 @@ class AgentEngine:
                             aggressive=pending_compaction.get("strategy") == "aggressive"))
                     except (ContextOverflowError, RuntimeError, ValueError, httpx.HTTPError) as exc:
                         # 回执只承诺请求已收到。失败说明作为新的有序数据注入，不伪造成功。
+                        logger.warning("Deferred compaction failed: run=%s type=%s", run_id, type(exc).__name__)
                         session.messages.append(context_message_adapter.make_internal_user_message(
-                            "[运行状态] 本次上下文压缩未提交，原始上下文保留：" + str(exc),
+                            "[运行状态] 本次上下文整理未提交，原始资料保留；请继续当前任务，必要时稍后重试整理。",
                             turn_index=request_turn_index, kind="compaction_result"))
                         session_service.persist(session)
                     else:

@@ -170,6 +170,9 @@ class HistoryStore:
                     "content_chars": len(response.get("content") or ""),
                     "reasoning_chars": len(response.get("reasoning_content") or ""),
                     "has_native_state": bool(response.get("provider_payload"))})
+                for key in ("error_type", "http_status"):
+                    if key in response:
+                        items[-1][key] = response[key]
         return {"items": items, "next_before": items[-1]["cursor"] if items else None,
                 "real_service_verified": False}
 
@@ -280,6 +283,8 @@ class HistoryStore:
         known = {message.get("attempt_id") for message in session.messages}
         changed = False
         for row in rows:
+            if row["status"] == "invalid":
+                continue
             if row["attempt_id"] in known:
                 continue
             manifest = json.loads(row["manifest"])
@@ -299,6 +304,9 @@ class HistoryStore:
                          for _, call in sorted(response["tool_calls"].items(), key=lambda item: int(item[0]))]
             elif response.get("tool_calls"):
                 native = None
+            if not (response.get("content") or response.get("reasoning_content") or native or calls):
+                # 未结束的纯工具提议只留在诊断档案，不变成一个空 assistant 污染下一请求。
+                continue
             message = context_message_adapter.make_assistant_message(content=response.get("content"),
                 reasoning_content=response.get("reasoning_content") if manifest.get("api_format") == "openai-compatible" else None,
                 provider_payload=native, tool_calls=calls or None,

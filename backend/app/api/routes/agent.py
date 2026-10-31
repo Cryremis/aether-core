@@ -1,10 +1,11 @@
 # backend/app/api/routes/agent.py
-import traceback
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import AuthContext, get_auth_context
+from app.core.model_errors import public_run_error
 from app.schemas.agent import AgentChatRequest, AgentElicitationResponseRequest, AgentEvent
 from app.schemas.session import TimelineEditRequest, TimelineForkRequest, TimelineRerunRequest
 from app.services.agent_run_service import ElicitationResumeConflict, agent_run_service
@@ -16,9 +17,13 @@ from app.services.timeline_service import timeline_service
 from app.services.transcript_service import transcript_service
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+logger = logging.getLogger(__name__)
 
 
 def _sse(event: AgentEvent) -> str:
+    if event.type == "error":
+        # 历史错误事件也经过此边界，旧数据库中的堆栈不再透传给终端用户。
+        event = event.model_copy(update={"payload": {"message": public_run_error(), "error_id": event.run_id}})
     lines = [f"event: {event.type}"]
     if event.seq is not None:
         lines.append(f"id: {event.seq}")
@@ -112,10 +117,11 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
             finally:
                 await agent_run_service.unsubscribe(run_id, queue)
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to open agent stream: session=%s", session.session_id)
             error_event = AgentEvent(
                 type="error",
                 session_id=session.session_id,
-                payload={"message": str(exc), "traceback": traceback.format_exc()},
+                payload={"message": public_run_error()},
             )
             yield _sse(error_event)
 
@@ -310,7 +316,7 @@ async def respond_to_elicitation(
             error_event = AgentEvent(
                 type="error",
                 session_id=session.session_id,
-                payload={"message": str(exc), "traceback": traceback.format_exc()},
+                payload={"message": public_run_error()},
             )
             yield _sse(error_event)
 
@@ -442,7 +448,7 @@ async def stream_run_events(
             error_event = AgentEvent(
                 type="error",
                 session_id=session.session_id,
-                payload={"message": str(exc), "traceback": traceback.format_exc()},
+                payload={"message": public_run_error()},
             )
             yield _sse(error_event)
 

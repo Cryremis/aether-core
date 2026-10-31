@@ -1718,10 +1718,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           title: "执行错误",
           meta: "error",
           argumentsText: "",
-          outputText: `${String(payload.message ?? "执行失败")}${payload.traceback ? `\n\n${payload.traceback}` : ""}`,
+          outputText: "当前服务暂时无法完成请求，已保留已有进度，请稍后继续。",
           status: "done",
         });
-        setError(typeof payload.message === "string" ? payload.message : "执行失败");
+        setError("当前服务暂时无法完成请求，已保留已有进度，请稍后继续。");
       }
     };
   };

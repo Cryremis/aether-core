@@ -1,6 +1,7 @@
 """有界的真实摘要任务；摘要失败不提交活动上下文。"""
 from __future__ import annotations
 
+import asyncio
 import json
 import ipaddress
 import re
@@ -55,7 +56,7 @@ class CompactionSummarizer:
 
         source = []
         for message in messages:
-            if message.get("projection_only") or message.get("is_boundary_marker"):
+            if message.get("projection_only") or message.get("is_boundary_marker") or message.get("kind") == "context_budget":
                 continue
             source.append(json.dumps({"id": message.get("message_id"), "role": message.get("role"),
                                       "content": message.get("content"), "tool_calls": message.get("tool_calls")}, ensure_ascii=False))
@@ -66,16 +67,30 @@ class CompactionSummarizer:
         calls = 0
 
         async def summarize_part(part):
-            nonlocal calls
-            if calls >= max_calls:
-                raise RuntimeError("摘要合并达到调用上限，原始上下文保持不变")
-            calls += 1
-            result = await llm_client.create_chat_completion(summary_runtime,
-                [{"role": "system", "content": system}, {"role": "user", "content": part}], [])
-            text = str(result.get("content") or "").strip()
-            if not text or not all(label in text for label in labels):
-                raise RuntimeError("压缩模型未返回有效结构化摘要，原始上下文保持不变")
-            return text
+            nonlocal calls, summary_runtime
+            from app.core.model_errors import retryable_model_error
+            from app.services.context.model_profile import recover_optional_parameter
+            import httpx
+            for attempt in range(3):
+                if calls >= max_calls:
+                    raise RuntimeError("摘要合并达到调用上限，原始上下文保持不变")
+                calls += 1
+                try:
+                    result = await llm_client.create_chat_completion(summary_runtime,
+                        [{"role": "system", "content": system}, {"role": "user", "content": part}], [])
+                except Exception as exc:
+                    negotiated = recover_optional_parameter(summary_runtime, str(exc)) if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {400, 422} else None
+                    if negotiated:
+                        summary_runtime = negotiated[0]
+                    if (not negotiated and not retryable_model_error(exc)) or attempt == 2:
+                        raise
+                else:
+                    text = str(result.get("content") or "").strip()
+                    if text and all(label in text for label in labels):
+                        return text
+                    if attempt == 2:
+                        raise RuntimeError("压缩模型多次未返回有效摘要，原始上下文保持不变")
+                await asyncio.sleep(0.5 * (attempt + 1))
 
         summaries = [await summarize_part(part) for part in parts]
         target = min(2048, max(256, input_budget // 3))
@@ -100,6 +115,8 @@ class CompactionSummarizer:
                     strings(item)
 
         for message in messages:
+            if message.get("kind") == "context_budget":
+                continue
             strings(message.get("content"))
             for call in message.get("tool_calls") or []:
                 raw = (call.get("function") or {}).get("arguments", "")
