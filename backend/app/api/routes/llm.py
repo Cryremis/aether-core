@@ -12,6 +12,22 @@ from app.services.store import store_service
 router = APIRouter(prefix="/api/v1/llm", tags=["llm"])
 
 
+@router.post("/validate")
+def validate_llm_contract(request: LlmConfigUpdateRequest, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    from app.services.llm_client import llm_client
+    from app.services.llm_config_service import RuntimeLlmConfig
+    if auth.kind not in {"user", "embed"}:
+        raise HTTPException(status_code=401, detail="需要登录")
+    config = RuntimeLlmConfig(scope="user", provider_kind=request.provider_kind, api_format=request.api_format,
+        base_url=request.base_url, model=request.model, api_key="", extra_headers=request.extra_headers,
+        extra_body=request.extra_body, sampling=request.sampling.model_dump(exclude_none=True))
+    try:
+        report = llm_client.validate_config_contract(config)
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ApiResponse(message="离线协议检查通过；未调用真实服务", data=report)
+
+
 @router.get("/user")
 def get_user_llm_config(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
     if auth.kind == "user" and auth.user is not None:

@@ -263,7 +263,11 @@ export default function App() {
     messageId: string;
     contentId: string;
     content: string;
-    status: "streaming" | "completed";
+    status: "streaming" | "completed" | "incomplete";
+    runId?: string;
+    attemptId?: string;
+    seq?: number;
+    contextEpoch?: number;
   }) => {
     if (!isEmbedMode || window.parent === window) return;
     window.parent.postMessage(
@@ -274,6 +278,11 @@ export default function App() {
           session_id: preview.sessionId,
           message_id: preview.messageId,
           content_id: preview.contentId,
+          part_id: preview.contentId,
+          run_id: preview.runId,
+          attempt_id: preview.attemptId,
+          seq: preview.seq,
+          context_epoch_id: preview.contextEpoch,
           content: preview.content,
           status: preview.status,
         },
@@ -429,7 +438,6 @@ export default function App() {
       </section>
 
       <PersonalSettingsDialog
-        currentUser={currentUser}
         open={showPersonalSettingsDialog}
         onClose={() => setShowPersonalSettingsDialog(false)}
         onLogout={handleLogout}

@@ -212,7 +212,7 @@ def test_context_compact_accounts_for_active_tool_schemas(monkeypatch, tmp_path)
     }
     captured: dict[str, Any] = {}
 
-    def fake_compact_session(**kwargs: Any) -> PreparedContext:
+    async def fake_compact_session(**kwargs: Any) -> PreparedContext:
         captured["tools"] = kwargs["tools"]
         plan = CompactionPlan(
             strategy=CompactionStrategyName.ToolResultTruncate,
@@ -229,7 +229,7 @@ def test_context_compact_accounts_for_active_tool_schemas(monkeypatch, tmp_path)
         )
 
     monkeypatch.setattr(tool_service, "list_tool_schemas", lambda current_session: [active_tool])
-    monkeypatch.setattr(context_pipeline, "compact_session", fake_compact_session)
+    monkeypatch.setattr(context_pipeline, "compact_session_async", fake_compact_session)
 
     result = asyncio.run(tool_service._handle_context_compact(session, {"strategy": "balanced"}))
 
@@ -280,6 +280,7 @@ def test_engine_exposes_context_tool_only_in_warning_and_hides_warning_from_user
     assert any(event["type"] == "result" and event["payload"]["subtype"] == "success" for event in events)
 
 
+@pytest.mark.usefixtures("checkpoint_model")
 def test_agent_can_call_context_compact_and_run_continues(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     monkeypatch.setattr(settings, "llm_max_tokens", 1_000)

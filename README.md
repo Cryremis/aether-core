@@ -1,6 +1,10 @@
 # AetherCore
 
+The [context reliability audit](docs/context-runtime-audit.md) maps each design requirement to production code and regression coverage, including DeepSeek reasoning replay, native protocol state, bounded compaction, cancellation and event recovery. The settings panel provides an offline contract check; per-session context diagnostics expose metadata without prompt or reasoning content. Real model quality remains a deployment acceptance check.
+
 Capability scopes, MCP configuration, and the extension store are documented in [docs/capabilities.md](docs/capabilities.md).
+
+See [context runtime operations](docs/context-runtime-operations.md) for model configuration, v3 storage migration, recovery, rollback and an offline-network vLLM probe. This release retains reasoning and native protocol state, creates real checkpoints with retrievable source history, and leaves unspecified sampling parameters to the model. Explicit settings remain effective. Platform and personal settings support Chat Completions, Responses and Messages; set the actual deployment context limit. `AGENT_MAX_CONTINUATIONS=2` bounds automatic continuation. Storage upgrades require a coordinated database and session-directory backup for rollback. Default ports and sandbox settings are unchanged.
 
 [🌐 Live Demo](https://cryremis.github.io/aether-core) | [中文说明](./README.zh-CN.md)
 

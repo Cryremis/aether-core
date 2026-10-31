@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_timeout_seconds: int = 180
     llm_max_tokens: int = 32000
-    llm_temperature: float = 0.7
-    llm_frequency_penalty: float = 0.4
-    llm_presence_penalty: float = 0.3
+    llm_temperature: float | None = None
+    llm_frequency_penalty: float | None = None
+    llm_presence_penalty: float | None = None
     llm_network_enabled: bool = True
     llm_network_allowed_domains: list[str] = Field(default_factory=list)
     llm_network_blocked_domains: list[str] = Field(default_factory=list)
@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     agent_max_turns: int = 32
     agent_max_runtime_seconds: int = 3600
     agent_max_stall_rounds: int = 5
+    agent_max_continuations: int = Field(default=2, ge=0, le=16)
     agent_waiting_input_timeout_seconds: int = Field(default=1800, ge=1)
     agent_waiting_input_sweep_interval_seconds: int = Field(default=60, ge=1)
     host_tool_timeout_seconds: int = 120

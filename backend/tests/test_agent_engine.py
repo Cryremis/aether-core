@@ -738,6 +738,7 @@ def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tm
     assert any(item["type"] == "result" and item["payload"]["subtype"] == "success" for item in events)
 
 
+@pytest.mark.usefixtures("checkpoint_model")
 def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     session = build_session("sess_engine_proactive")
@@ -776,6 +777,7 @@ def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     assert session.context_state["compaction_count"] >= 1
 
 
+@pytest.mark.usefixtures("checkpoint_model")
 def test_agent_engine_recovers_from_prompt_too_long(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     session = build_session("sess_engine_reactive")
@@ -1073,10 +1075,10 @@ def test_agent_engine_returns_partial_answer_when_stream_interrupted_after_conte
     events = asyncio.run(collect_stream(session, "say something"))
 
     retry_events = [item for item in events if item["type"] == "stream_retry"]
-    assert len(retry_events) == 1
+    assert len(retry_events) == 0
     result_event = next(item for item in events if item["type"] == "result")
-    assert result_event["payload"]["subtype"] == "success"
-    assert result_event["payload"]["result"] == "complete answer"
+    assert result_event["payload"]["subtype"] == "incomplete"
+    assert result_event["payload"]["result"] == "partial answer"
     assert not any(item["type"] == "error" for item in events)
 
 
@@ -1332,11 +1334,11 @@ def test_agent_engine_retries_on_transport_error(monkeypatch, tmp_path):
     events = asyncio.run(collect_stream(session, "hello"))
 
     retry_events = [item for item in events if item["type"] == "stream_retry"]
-    assert len(retry_events) == 1
+    assert len(retry_events) == 0
     result_event = next(item for item in events if item["type"] == "result")
-    assert result_event["payload"]["subtype"] == "success"
-    assert result_event["payload"]["result"] == "complete answer"
-    assert call_count == 2
+    assert result_event["payload"]["subtype"] == "incomplete"
+    assert result_event["payload"]["result"] == "partial"
+    assert call_count == 1
 
 
 def test_agent_engine_recovers_from_length_truncation_partial_content(monkeypatch, tmp_path):

@@ -45,11 +45,22 @@ class ContextMessageAdapter:
         blocks: list[dict[str, Any]] | None = None,
         turn_index: int,
         run_id: str | None = None,
+        reasoning_content: str | None = None,
+        provider_payload: dict[str, Any] | None = None,
+        attempt_id: str | None = None,
+        status: str = "completed",
     ) -> dict[str, Any]:
         message: dict[str, Any] = {"role": "assistant"}
         if run_id:
             message["run_id"] = run_id
-        if content:
+        if reasoning_content is not None:
+            message["reasoning_content"] = reasoning_content
+        if provider_payload:
+            message["provider_payload"] = provider_payload
+        if attempt_id:
+            message["attempt_id"] = attempt_id
+        message["status"] = status
+        if content is not None:
             message["content"] = content
         if tool_calls:
             message["tool_calls"] = tool_calls
@@ -186,6 +197,14 @@ class ContextMessageAdapter:
         normalized_messages: list[dict[str, Any]] = []
         for index, message in enumerate(session.messages):
             normalized = self.ensure_runtime_metadata(message, turn_index=message.get("turn_index", index + 1))
+            if session.message_schema_version < 3 and normalized.get("role") == "assistant" and "reasoning_content" not in normalized:
+                blocks = normalized.get("blocks") or []
+                reasoning = [block for block in blocks if block.get("kind") == "reasoning"]
+                contents = [block for block in blocks if block.get("kind") == "content"]
+                if len(reasoning) == 1 and len(contents) == 1 and contents[0].get("content") == normalized.get("content") and all(block.get("kind") in {"elapsed", "reasoning", "content"} for block in blocks):
+                    normalized["reasoning_content"] = str(reasoning[0].get("content") or "")
+                else:
+                    normalized["legacy_incomplete"] = True
             if normalized != message:
                 changed = True
             normalized_messages.append(normalized)
@@ -198,7 +217,8 @@ class ContextMessageAdapter:
         return changed
 
     def strip_runtime_metadata(self, message: dict[str, Any]) -> dict[str, Any]:
-        api_message = {key: copy.deepcopy(value) for key, value in message.items() if key not in RUNTIME_META_KEYS}
+        allowed = {"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content", "provider_payload"}
+        api_message = {key: copy.deepcopy(value) for key, value in message.items() if key in allowed}
         api_message.pop("blocks", None)
         api_message.pop("visible_in_transcript", None)
         api_message.pop("is_boundary_marker", None)
@@ -211,28 +231,27 @@ class ContextMessageAdapter:
     def to_api_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         allowed_roles = {"system", "user", "assistant", "tool"}
         result: list[dict[str, Any]] = []
-        system_contents: list[str] = []
-        runtime_notices: list[dict[str, Any]] = []
+        pending: set[str] = set()
+        deferred: list[dict[str, Any]] = []
         for message in messages:
-            if message.get("ephemeral") or message.get("is_boundary_marker"):
+            if message.get("ephemeral") or message.get("is_boundary_marker") or message.get("projection_only"):
                 continue
             role = str(message.get("role") or "")
             if role not in allowed_roles:
                 continue
             api_message = self.strip_runtime_metadata(message)
-            if role == "system":
-                content = str(api_message.get("content") or "").strip()
-                if content:
-                    # runtime_only 提示只属于本次请求，并且保留在消息尾部，确保模型可靠感知。
-                    if message.get("runtime_only"):
-                        runtime_notices.append({"role": "system", "content": content})
-                    else:
-                        system_contents.append(content)
+            if pending and message.get("kind") == "subagent_result":
+                deferred.append(api_message)
                 continue
             result.append(api_message)
-        if system_contents:
-            result.insert(0, {"role": "system", "content": "\n\n".join(system_contents)})
-        result.extend(runtime_notices)
+            if role == "assistant":
+                pending.update(str(call.get("id")) for call in api_message.get("tool_calls", []))
+            elif role == "tool":
+                pending.discard(str(api_message.get("tool_call_id")))
+            if not pending and deferred:
+                result.extend(deferred)
+                deferred = []
+        result.extend(deferred)
         return result
 
     def estimate_text_for_summary(self, message: dict[str, Any], max_chars: int = 800) -> str:

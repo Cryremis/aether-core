@@ -9,6 +9,10 @@ from app.services.tool_display_service import tool_display_service
 class TranscriptService:
     """Manage persisted UI transcript projections."""
 
+    def build_session_transcript(self, session) -> list[dict[str, Any]]:
+        from app.services.context.history_store import history_store
+        return self.build_persisted_transcript(history_store.expand_history(session.session_id, session.messages))
+
     _SYSTEM_EVENT_TITLES: dict[str, str] = {
         "context_compacted": "上下文已压缩",
         "context_recovered": "上下文已恢复",
@@ -188,8 +192,8 @@ class TranscriptService:
                         "id": str(raw_block.get("id") or f"{message_id}-content-{len(normalized_blocks)}"),
                         "kind": "content",
                         "content": str(raw_block.get("content") or ""),
-                        "status": "aborted"
-                        if str(raw_block.get("status") or "") == "aborted"
+                        "status": str(raw_block["status"])
+                        if str(raw_block.get("status") or "") in {"aborted", "incomplete"}
                         else ("streaming" if streaming and str(raw_block.get("status") or "") == "streaming" else "done"),
                     }
                 )
@@ -296,8 +300,8 @@ class TranscriptService:
                             "id": str(raw_block.get("id") or f"content-{index}-{len(normalized_blocks)}"),
                             "kind": "content",
                             "content": str(raw_block.get("content") or ""),
-                            "status": "aborted"
-                            if str(raw_block.get("status") or "") == "aborted"
+                            "status": str(raw_block["status"])
+                            if str(raw_block.get("status") or "") in {"aborted", "incomplete"}
                             else "done",
                         }
                     )

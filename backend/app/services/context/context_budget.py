@@ -90,7 +90,10 @@ class ContextBudget:
         """返回模型可安全使用的输入预算。"""
         full_window = self.get_context_window_for_model(model, betas)
         reserved_output = max(1, max_output_tokens or self.config.max_output_tokens_for_summary)
-        return max(1, full_window - reserved_output - self.config.provider_safety_tokens)
+        budget = full_window - reserved_output - self.config.provider_safety_tokens
+        if budget <= 0:
+            raise ValueError("模型窗口不能容纳输出预留与安全余量，请调整部署限额或输出预算")
+        return budget
     
     def get_auto_compact_threshold(
         self,

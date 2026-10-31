@@ -45,6 +45,7 @@ class ContextSessionState:
     session_id: str
     model_id: str = ""
     context_window: int = 200_000
+    budget_source: str = "catalog_or_fallback"
     effective_window: int = 180_000
     target_input_tokens: int = 144_000
     compact_target_tokens: int = 117_000
@@ -54,6 +55,7 @@ class ContextSessionState:
     last_known_token_estimate: int = 0
     percent_used: float = 0.0
     last_api_usage: dict[str, int] = field(default_factory=dict)
+    last_usage_semantics: str = "auto"
     compaction_count: int = 0
     consecutive_compaction_failures: int = 0
     last_compaction_at: str | None = None
@@ -78,6 +80,7 @@ class ContextSessionState:
             "session_id": self.session_id,
             "model_id": self.model_id,
             "context_window": self.context_window,
+            "budget_source": self.budget_source,
             "effective_window": self.effective_window,
             "target_input_tokens": self.target_input_tokens,
             "compact_target_tokens": self.compact_target_tokens,
@@ -87,6 +90,7 @@ class ContextSessionState:
             "last_known_token_estimate": self.last_known_token_estimate,
             "percent_used": self.percent_used,
             "last_api_usage": dict(self.last_api_usage),
+            "last_usage_semantics": self.last_usage_semantics,
             "compaction_count": self.compaction_count,
             "consecutive_compaction_failures": self.consecutive_compaction_failures,
             "last_compaction_at": self.last_compaction_at,
@@ -126,6 +130,10 @@ class PreparedContext:
     compacted: bool = False
     ephemeral_warning: bool = False
     plan: CompactionPlan | None = None
+
+
+class ContextIntegrityError(RuntimeError):
+    """历史协议不合法；不能通过压缩或删除必要消息来修复。"""
 
 
 class ContextOverflowError(RuntimeError):

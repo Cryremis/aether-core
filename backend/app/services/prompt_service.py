@@ -8,6 +8,7 @@ from app.schemas.prompt import PlatformPromptConfigSummary, PlatformPromptConfig
 from app.services.session_types import AgentSession
 from app.services.skill_service import skill_service
 from app.services.store import store_service
+from app.services.context.host_context import public_host_context
 
 
 class PromptService:
@@ -146,7 +147,7 @@ class PromptService:
         if not template.strip():
             return ""
 
-        host_context = (session.host_context if session else {}) or {}
+        host_context = public_host_context((session.host_context if session else {}) or {})
         values: dict[str, Any] = {
             "platform": platform or {},
             "conversation": {
@@ -171,6 +172,12 @@ class PromptService:
         def replace(match: re.Match[str]) -> str:
             raw_key = match.group(1).strip()
             resolved = self._lookup_value(values, raw_key.split("."))
+            if raw_key.startswith("host.") and resolved is not None and len(str(resolved)) > 12000:
+                segments = raw_key.split(".")[1:]
+                if segments and segments[0] == "context":
+                    segments = segments[1:]
+                pointer = "/" + "/".join(part.replace("~", "~0").replace("/", "~1") for part in segments) if segments else ""
+                return f"[宿主观察资料过大，已保留原文；使用 host_context_read path={pointer!r} 分段读取，不是新增授权]"
             return match.group(0) if resolved is None else str(resolved)
 
         return re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", replace, template)

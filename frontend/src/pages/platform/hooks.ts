@@ -1,3 +1,4 @@
+import { samplingFromForm, loadAdvancedSampling } from "../../api/llmOptions";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 
@@ -29,12 +30,25 @@ type PlatformLlmConfigData = {
   enabled: boolean; base_url: string; model: string; has_api_key: boolean;
   extra_headers?: Record<string, string>; extra_body?: Record<string, unknown>;
   network?: { enabled?: boolean; allowed_domains?: string[]; blocked_domains?: string[]; max_search_results?: number; fetch_timeout_seconds?: number };
-  sampling?: { temperature?: number | null; frequency_penalty?: number | null; presence_penalty?: number | null; top_p?: number | null; repetition_penalty?: number | null } | null;
+  api_format?: LlmConfigFormState["api_format"];
+  sampling?: { context_window?: number | null; max_output_tokens?: number | null; model_defaults?: string[]; native_compaction?: boolean; model_profile?: LlmConfigFormState["model_profile"]; deployment_revision?: string; stream_usage?: boolean; reasoning_replay?: LlmConfigFormState["reasoning_replay"]; reasoning_field?: LlmConfigFormState["reasoning_field"]; reasoning_effort?: string | null; temperature?: number | null; frequency_penalty?: number | null; presence_penalty?: number | null; top_p?: number | null; repetition_penalty?: number | null } | null;
 };
 
 function llmFormFromData(data: PlatformLlmConfigData | null): LlmConfigFormState {
   const s = data?.sampling;
   return {
+    api_format: data?.api_format,
+    sampling_context_window: s?.context_window != null ? String(s.context_window) : "",
+    sampling_max_output_tokens: s?.max_output_tokens != null ? String(s.max_output_tokens) : "",
+    sampling_reasoning_effort: s?.reasoning_effort != null ? String(s.reasoning_effort) : "",
+    native_compaction: s?.native_compaction,
+    ...loadAdvancedSampling(s as Record<string, unknown> | undefined),
+    model_profile: s?.model_profile,
+    deployment_revision: s?.deployment_revision,
+    stream_usage: s?.stream_usage,
+    reasoning_replay: s?.reasoning_replay,
+    reasoning_field: s?.reasoning_field,
+    model_defaults: s?.model_defaults ?? [],
     enabled: data?.enabled ?? true,
     base_url: data?.base_url ?? "",
     model: data?.model ?? "",
@@ -106,6 +120,7 @@ export function usePlatformLlmConfig(platformId: number | null, enabled = true) 
       setError("");
       await updatePlatformLlmConfig(platformId, {
         enabled: form.enabled,
+        api_format: form.api_format,
         base_url: form.base_url.trim(),
         model: form.model.trim(),
         api_key: form.api_key.trim() || undefined,
@@ -118,13 +133,7 @@ export function usePlatformLlmConfig(platformId: number | null, enabled = true) 
           max_search_results: form.max_search_results,
           fetch_timeout_seconds: form.fetch_timeout_seconds,
         },
-        sampling: {
-          temperature: form.sampling_temperature.trim() ? Number(form.sampling_temperature) : null,
-          frequency_penalty: form.sampling_frequency_penalty.trim() ? Number(form.sampling_frequency_penalty) : null,
-          presence_penalty: form.sampling_presence_penalty.trim() ? Number(form.sampling_presence_penalty) : null,
-          top_p: form.sampling_top_p.trim() ? Number(form.sampling_top_p) : null,
-          repetition_penalty: form.sampling_repetition_penalty.trim() ? Number(form.sampling_repetition_penalty) : null,
-        },
+        sampling: samplingFromForm(form as unknown as Record<string, unknown>),
       });
       const latest = await getPlatformLlmConfig(platformId);
       setForm(llmFormFromData((latest.data ?? null) as PlatformLlmConfigData | null));

@@ -168,6 +168,8 @@ class TimelineService:
         session.active_run = None
         session.last_abort = None
         session.active_run_view = None
+        # 历史编辑改变签名前缀，下次生成必须建立新 epoch。
+        session.provider_binding = "timeline_changed"
         self._append_timeline_event(
             session,
             action=action,
@@ -198,6 +200,12 @@ class TimelineService:
         target = message_id.strip()
         if not target:
             raise ValueError("message_id 不能为空。")
+        from app.services.context.history_store import history_store
+        expanded = history_store.expand_history(session.session_id, session.messages)
+        if any(str(item.get("message_id") or "") == target for item in expanded):
+            if expanded != session.messages:
+                session.provider_binding = "timeline_changed"
+            session.messages = expanded
         for index, message in enumerate(session.messages):
             if str(message.get("message_id") or "") == target:
                 return index

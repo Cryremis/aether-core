@@ -142,6 +142,11 @@ class TokenEstimator:
         
         if role == "assistant":
             tokens = base_tokens
+            if message.get("provider_payload"):
+                # 原生请求以保存的 item 为准；展示正文/思考是其投影，不能重复计算。
+                return tokens + self.rough_token_count(json.dumps(message["provider_payload"].get("items", []), ensure_ascii=False))
+            tokens += self.rough_token_count(str(message.get("reasoning_content") or ""))
+            tokens += self.rough_token_count(str(message.get("reasoning") or ""))
             if isinstance(content, str):
                 tokens += self.rough_token_count(content)
             elif isinstance(content, list):

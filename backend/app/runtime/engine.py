@@ -8,7 +8,7 @@ import json
 import time
 import uuid
 from dataclasses import replace
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.runtime.event_protocol import make_event
 from app.services.context.context_pipeline import context_pipeline
 from app.services.context.message_adapter import context_message_adapter
+from app.services.context.model_profile import missing_reasoning_messages, resolve_model_profile
 from app.services.context.runtime_types import ContextEventType, ContextOverflowError
 from app.services.file_service import file_service
 from app.services.llm_client import llm_client
@@ -31,6 +32,14 @@ from app.services.tool_service import ToolCatalogSnapshot, tool_service
 from app.services.tool_display_service import tool_display_service
 from app.services.tool_result_service import ToolExecutionResult, tool_result_renderer
 from app.services.transcript_service import transcript_service
+
+
+class _RunAborted(Exception):
+    pass
+
+
+class _RunTimedOut(Exception):
+    pass
 
 
 class AgentEngine:
@@ -72,16 +81,45 @@ class AgentEngine:
         tool_calls: list[dict[str, Any]] | None = None,
         visible_in_transcript: bool = True,
         run_id: str | None = None,
+        reasoning_content: str | None = None,
+        provider_payload: dict[str, Any] | None = None,
+        attempt_id: str | None = None,
+        status: str = "completed",
     ) -> None:
+        active = session.get_run(run_id) if run_id else None
+        if active and attempt_id is None:
+            attempt_id = active.attempt_id
+            reasoning_content = active.reasoning_content
+            provider_payload = active.provider_payload
+        projection_only = bool(attempt_id and any(m.get("attempt_id") == attempt_id for m in session.messages))
         message = context_message_adapter.make_assistant_message(
-            content=content if content else None,
+            content=content,
             tool_calls=tool_calls,
             blocks=blocks if blocks and visible_in_transcript else None,
             turn_index=turn_index,
             run_id=run_id,
+            reasoning_content=reasoning_content,
+            provider_payload=provider_payload,
+            attempt_id=attempt_id,
+            status=status,
         )
         if not visible_in_transcript:
             message["visible_in_transcript"] = False
+        if projection_only:
+            message["projection_only"] = True
+        elif active and active.message_id:
+            message["message_id"] = active.message_id
+        if active and active.continuation_of:
+            message["continuation_of"] = active.continuation_of
+        message["provider_binding"] = session.provider_binding
+        if visible_in_transcript and run_id:
+            # 前端把同一运行的多个步骤聚合为一个回复；历史投影必须遵守相同契约。
+            replaced_ids = set()
+            for previous in session.messages:
+                if previous.get("run_id") == run_id and previous.get("role") == "assistant" and previous.get("visible_in_transcript") is not False:
+                    previous["visible_in_transcript"] = False
+                    replaced_ids.add(previous.get("message_id"))
+            session.transcript = [item for item in session.transcript if item.get("id") not in replaced_ids]
         session.messages.append(message)
         if visible_in_transcript:
             session.transcript = transcript_service.append_item(
@@ -160,6 +198,36 @@ class AgentEngine:
     def _run_is_aborted(self, session: AgentSession, run_id: str) -> bool:
         return not self._run_is_active(session, run_id) or session.is_aborted(run_id)
 
+    def _remaining_runtime(self, session: AgentSession, run_id: str) -> float | None:
+        run = session.get_run(run_id)
+        if not run or settings.agent_max_runtime_seconds <= 0:
+            return None
+        return max(0, run.started_at + settings.agent_max_runtime_seconds - time.time())
+
+    async def _await_operation(self, session: AgentSession, run_id: str, operation: Awaitable):
+        run = session.get_run(run_id)
+        if run is None:
+            return await operation
+        if run.abort_event.is_set() or self._remaining_runtime(session, run_id) == 0:
+            if inspect.iscoroutine(operation):
+                operation.close()
+            elif isinstance(operation, asyncio.Future):
+                operation.cancel()
+            if run.abort_event.is_set():
+                raise _RunAborted()
+            raise _RunTimedOut()
+        task = asyncio.ensure_future(operation)
+        abort = asyncio.create_task(run.abort_event.wait())
+        try:
+            done, _ = await asyncio.wait({task, abort}, timeout=self._remaining_runtime(session, run_id), return_when=asyncio.FIRST_COMPLETED)
+            if abort in done:
+                raise _RunAborted()
+            if not done:
+                raise _RunTimedOut()
+            return task.result()
+        finally:
+            await self._cancel_wait_tasks(task, abort)
+
     async def _emit_aborted(
         self,
         session: AgentSession,
@@ -196,15 +264,20 @@ class AgentEngine:
         except Exception:
             pass
 
-    async def _cancel_wait_task(self, wait_task: asyncio.Task[Any] | None) -> None:
-        """回收工具循环中的临时等待任务，避免取消路径留下 pending task。"""
-        if wait_task is None or wait_task.done():
+    async def _cancel_wait_tasks(self, *tasks: asyncio.Task[Any] | None) -> None:
+        pending = [task for task in tasks if task is not None]
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        if not pending:
             return
-        wait_task.cancel()
+        cleanup = asyncio.gather(*pending, return_exceptions=True)
         try:
-            await wait_task
+            await asyncio.shield(cleanup)
         except asyncio.CancelledError:
-            pass
+            # 清理子任务完成后必须继续传播外层取消，不能吞掉父任务的取消请求。
+            await cleanup
+            raise
 
     def _start_tool_execution(
         self,
@@ -216,7 +289,13 @@ class AgentEngine:
         tool_call_id: str,
         output_event_queue: asyncio.Queue[dict[str, Any]],
         catalog_snapshot: ToolCatalogSnapshot,
+        validation_error: str | None = None,
     ) -> asyncio.Task[ToolExecutionResult]:
+        if validation_error:
+            async def invalid_arguments():
+                return ToolExecutionResult.failure("tool.invalid_arguments", "工具参数无效，未执行调用", code="TOOL_ARGUMENTS_INVALID", message=validation_error,
+                                                   retryable=True, next_action="按工具 schema 生成完整 JSON 对象后，以新的调用重试")
+            return asyncio.create_task(invalid_arguments())
         execute_kwargs: dict[str, Any] = {}
         try:
             signature = inspect.signature(tool_service.execute)
@@ -258,39 +337,52 @@ class AgentEngine:
             return
 
         iterator = stream.__aiter__()
-        while True:
-            next_chunk_task = asyncio.create_task(iterator.__anext__())
-            abort_task = asyncio.create_task(run.abort_event.wait())
-            done, pending = await asyncio.wait(
-                {next_chunk_task, abort_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if abort_task in done:
-                next_chunk_task.cancel()
+        try:
+            while True:
+                next_chunk_task = asyncio.create_task(iterator.__anext__())
+                abort_task = asyncio.create_task(run.abort_event.wait())
                 try:
-                    await next_chunk_task
-                except (asyncio.CancelledError, StopAsyncIteration):
-                    pass
-                await iterator.aclose()
-                abort_task.cancel()
-                try:
-                    await abort_task
-                except asyncio.CancelledError:
-                    pass
-                return
-
-            abort_task.cancel()
-            try:
-                await abort_task
-            except asyncio.CancelledError:
-                pass
-            try:
-                chunk = next_chunk_task.result()
-            except StopAsyncIteration:
-                return
-            yield chunk
+                    done, _ = await asyncio.wait({next_chunk_task, abort_task}, timeout=self._remaining_runtime(session, run_id), return_when=asyncio.FIRST_COMPLETED)
+                    if not done:
+                        raise _RunTimedOut()
+                    if abort_task in done:
+                        return
+                    try:
+                        chunk = next_chunk_task.result()
+                    except StopAsyncIteration:
+                        return
+                    yield chunk
+                finally:
+                    await self._cancel_wait_tasks(next_chunk_task, abort_task)
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
 
     async def stream_chat(
+        self, session: AgentSession, message: str, *, run_id: str | None = None,
+        replace_last_user_message: bool = False, client_message_id: str | None = None,
+        persist_user_message: bool = True, visible_user_message: bool = True,
+        user_message_kind: str = "user", reasoning_effort: str | None = None,
+    ) -> AsyncGenerator:
+        started = time.perf_counter()
+        run_id = run_id or f"run_{uuid.uuid4().hex}"
+        try:
+            async for event in self._stream_chat(session, message, run_id=run_id,
+                replace_last_user_message=replace_last_user_message, client_message_id=client_message_id,
+                persist_user_message=persist_user_message, visible_user_message=visible_user_message,
+                user_message_kind=user_message_kind, reasoning_effort=reasoning_effort):
+                yield event
+        except _RunAborted:
+            async for event in self._emit_aborted(session, run_id=run_id, started_at=started, interrupt_point="context_operation"):
+                yield event
+            session.finish_run(run_id)
+        except _RunTimedOut:
+            yield make_event(session, "result", subtype="error_runtime_limit", is_error=True, stop_reason="runtime_limit")
+            yield make_event(session, "completed", subtype="error_runtime_limit", stop_reason="runtime_limit", elapsed_ms=int((time.perf_counter() - started) * 1000))
+            session.finish_run(run_id)
+
+    async def _stream_chat(
         self,
         session: AgentSession,
         message: str,
@@ -310,7 +402,24 @@ class AgentEngine:
         visible_started_emitted = False
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         session.begin_run(run_id)
+        from app.services.context.history_store import history_store
+        history_store.recover_attempts(session)
+        context_message_adapter.normalize_session(session)
+        # 上一轮取消/崩溃可能留下未闭合调用。补充明确的未知结果，而不是执行旧操作。
+        known_results = {str(m.get("tool_call_id")) for m in session.messages if m.get("role") == "tool"}
+        repaired = []
+        for previous in session.messages:
+            repaired.append(previous)
+            for call in previous.get("tool_calls", []) or []:
+                if str(call.get("id")) not in known_results:
+                    receipt = history_store.tool_receipt(session.session_id, str(previous.get("run_id") or ""), str(call["id"]))
+                    result_text = json.dumps(receipt, ensure_ascii=False) if receipt else '{"status":"unknown","message":"上一轮中断，缺少执行回执；先核对状态，禁止自动重复有副作用操作"}'
+                    repaired.append(context_message_adapter.make_tool_message(tool_call_id=str(call["id"]),
+                        content=result_text,
+                        tool_name=str(call.get("function", {}).get("name", "")), turn_index=int(previous.get("turn_index", 0))))
+        session.messages = repaired
         request_turn_index = self._next_turn_index(session)
+        session.get_run(run_id).turn_index = request_turn_index
         committed_user_message: dict[str, Any] | None = None
         if persist_user_message:
             if replace_last_user_message:
@@ -401,6 +510,16 @@ class AgentEngine:
             )
 
         llm_runtime = llm_config_service.resolve_for_conversation(conversation)
+        from app.services.context.provider_adapters import binding
+        from app.services.context.epoch import rebase_context
+        current_binding = binding(llm_runtime)
+        if session.provider_binding != current_binding:
+            if (session.provider_binding or llm_runtime.api_format != "openai-compatible") and any(m.get("role") == "assistant" for m in session.messages):
+                session_service.persist(session)
+                rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
+                               reason="模型、协议、账户或历史版本变化")
+            session.provider_binding = current_binding
+            session_service.persist(session)
         try:
             from app.services.mcp_runtime_service import mcp_runtime_service
             await mcp_runtime_service.ensure_catalog(session)
@@ -445,13 +564,15 @@ class AgentEngine:
 
         llm_retry_deadline = 0.0
         llm_retry_count = 0
+        continuation_count = 0
+        next_continuation_of = None
         llm_retry_delays = [1, 3, 5, 10, 10, 10, 10, 10]
 
         def take_llm_retry_delay() -> int | None:
             nonlocal llm_retry_deadline, llm_retry_count
             if llm_retry_deadline == 0.0:
                 llm_retry_deadline = time.perf_counter() + 60
-            if time.perf_counter() >= llm_retry_deadline:
+            if time.perf_counter() >= llm_retry_deadline or llm_retry_count >= 3:
                 return None
             delay = llm_retry_delays[min(llm_retry_count, len(llm_retry_delays) - 1)]
             llm_retry_count += 1
@@ -482,7 +603,7 @@ class AgentEngine:
 
             if self._run_is_aborted(session, run_id):
                 if persisted_assistant_blocks or session.get_partial_content(run_id):
-                    partial_text = session.get_partial_content(run_id).strip() or None
+                    partial_text = session.get_partial_content(run_id) or None
                     self._ensure_elapsed_block(
                         persisted_assistant_blocks,
                         int((time.perf_counter() - started_at) * 1000),
@@ -551,13 +672,26 @@ class AgentEngine:
                 message
                 for message in session.messages
                 if str(message.get("subagent_id") or "") not in destroyed_subagent_ids
+                and (message.get("kind") != "continuation_notice" or message.get("run_id") == run_id)
             ]
+            system_messages = self._build_system_messages(session, conversation=conversation,
+                runtime_sections=[] if llm_runtime.api_format != "openai-compatible" else self._build_runtime_state_sections(session))
+            if llm_runtime.api_format != "openai-compatible":
+                from app.services.context.provider_adapters import history_system_rules
+                history_prefix_hash = hashlib.sha256(json.dumps(history_system_rules(visible_messages), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                tools_hash = hashlib.sha256(json.dumps(tools, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+                if ((session.frozen_system_messages and session.frozen_system_messages != system_messages)
+                    or (session.frozen_tools_hash and session.frozen_tools_hash != tools_hash)
+                    or (session.frozen_history_prefix_hash and session.frozen_history_prefix_hash != history_prefix_hash)):
+                    session_service.persist(session)
+                    rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
+                                   reason="系统指令或工具目录前缀变化")
+                    visible_messages = list(session.messages)
+                session.frozen_system_messages = system_messages
+                session.frozen_tools_hash = tools_hash
+                session.frozen_history_prefix_hash = history_prefix_hash
             raw_messages: list[dict[str, Any]] = [
-                *self._build_system_messages(
-                    session,
-                    conversation=conversation,
-                    runtime_sections=self._build_runtime_state_sections(session),
-                ),
+                *system_messages,
                 *visible_messages,
             ]
             context_compact_schema = tool_service.get_context_compact_schema()
@@ -565,15 +699,36 @@ class AgentEngine:
                 session.allowed_tools is None or "context_compact" in set(session.allowed_tools)
             )
             tools_for_estimation = [*tools, context_compact_schema] if context_compact_allowed else tools
+            effective_tools = [] if llm_runtime.extra_body.get("tools") == [] else tools_for_estimation
+            if resolve_model_profile(llm_runtime).requires_reasoning(llm_runtime, effective_tools) and history_store.restore_reasoning(session, llm_runtime):
+                session_service.persist(session)
+            if missing_reasoning_messages(llm_runtime, visible_messages, effective_tools):
+                # 不能伪造旧思考或发出注定不合法的 DeepSeek 请求；原文先归档再明确交接。
+                session_service.persist(session)
+                rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
+                               reason="旧历史缺少模型要求的完整思考状态")
+                visible_messages = list(session.messages)
+                raw_messages = [*system_messages, *visible_messages]
+                session_service.persist(session)
+            if llm_runtime.api_format != "openai-compatible" and any(
+                message.get("role") == "assistant" and message.get("status") == "incomplete"
+                and not message.get("provider_payload") and not message.get("projection_only") for message in visible_messages
+            ):
+                session_service.persist(session)
+                rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
+                               reason="上次原生响应中断，尚未取得完整签名状态")
+                visible_messages = list(session.messages)
+                raw_messages = [*system_messages, *visible_messages]
+                session_service.persist(session)
             try:
-                prepared = context_pipeline.prepare_for_llm(
+                prepared = await self._await_operation(session, run_id, context_pipeline.prepare_for_llm_async(
                     session=session,
                     llm_runtime=llm_runtime,
                     messages=raw_messages,
                     turn_index=request_turn_index,
                     tools=tools_for_estimation,
-                    max_output_tokens=settings.llm_max_tokens,
-                )
+                    max_output_tokens=llm_client.output_limit(llm_runtime),
+                ))
             except ContextOverflowError as exc:
                 # prepare_for_llm 已尝试强制压缩；只有压缩后仍不可缩减时才真正阻断。
                 yield self._emit_context_event(
@@ -608,15 +763,56 @@ class AgentEngine:
                 yield self._emit_context_event(session, context_event.type, context_event.payload)
             messages = prepared.messages
             # 正常状态隐藏 context_compact schema；警戒区动态暴露，节省常规请求预算。
-            tools = tools_for_estimation if prepared.ephemeral_warning else tools
+            tools = tools_for_estimation if prepared.ephemeral_warning or llm_runtime.api_format != "openai-compatible" else tools
 
             assistant_content = ""
+            assistant_reasoning = None
+            provider_payload = None
+            attempt_id = f"attempt_{uuid.uuid4().hex}"
+            active = session.get_run(run_id)
+            if active:
+                active.attempt_id = attempt_id
+                active.step_id = f"{run_id}:step:{turn_count}"
+                active.message_id = f"msg_{uuid.uuid4().hex}"
+                active.continuation_of = next_continuation_of
+                next_continuation_of = None
+                active.reasoning_content = None
+                active.provider_payload = None
+                session.set_partial_content(run_id, "")
+            last_stop_reason = "missing_finish"
             tool_calls: dict[int, dict[str, str]] = {}
             finish_reason = ""
             active_reasoning_block_id = ""
             active_content_block_id = ""
             had_reasoning_output = False
             last_usage_payload: dict[str, int] | None = None
+            from app.services.context.history_store import history_store
+            prepared_payload = llm_client._payload(llm_runtime, messages, tools, stream=True, reasoning_effort=reasoning_effort)
+            history_store.start_attempt(session.session_id, attempt_id, {
+                "purpose": "conversation",
+                "model": llm_runtime.model, "api_format": llm_runtime.api_format,
+                "run_id": run_id, "turn_index": request_turn_index,
+                "message_id": active.message_id if active else None, "step_id": active.step_id if active else None,
+                "continuation_of": active.continuation_of if active else None,
+                "request_hash": hashlib.sha256(json.dumps(prepared_payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+                "message_count": len(messages), "output_limit": llm_client.output_limit(llm_runtime),
+                "context_epoch": session.context_epoch, "deployment_binding": session.provider_binding,
+                "sampling_sources": llm_runtime.sampling_sources,
+                "effective_parameters": llm_client.describe_parameters(llm_runtime, prepared_payload, reasoning_effort=reasoning_effort),
+                "budget": {key: getattr(prepared.state, key) for key in ("budget_source", "context_window", "effective_window", "target_input_tokens", "blocking_limit", "token_calibration_factor")},
+                "input_message_refs": [{"message_id": message.get("message_id"),
+                    "checkpoint_sources": (message.get("compression_meta") or {}).get("source_message_ids", [])}
+                    for message in session.messages if message.get("message_id") and not message.get("projection_only")
+                    and not message.get("is_boundary_marker") and str(message.get("subagent_id") or "") not in destroyed_subagent_ids],
+                "excluded_messages": [{"message_id": message.get("message_id"), "reason": "display_projection" if message.get("projection_only") else "boundary_marker" if message.get("is_boundary_marker") else "destroyed_subagent"}
+                    for message in session.messages if message.get("projection_only") or message.get("is_boundary_marker") or str(message.get("subagent_id") or "") in destroyed_subagent_ids],
+                "model_profile": resolve_model_profile(llm_runtime).profile_id,
+                "reasoning_effort_source": "request" if reasoning_effort is not None else llm_runtime.sampling_sources.get("reasoning_effort", "model_default"),
+                "estimated_input_tokens": prepared.state.last_known_token_estimate,
+                "tool_names": llm_client.describe_replay(llm_runtime, prepared_payload)["tool_names"],
+                "tool_catalog_revision": catalog_snapshot.revision,
+                "replay_projection": llm_client.describe_replay(llm_runtime, prepared_payload),
+            })
 
             try:
                 async for chunk in self._stream_llm_until_abort(
@@ -627,11 +823,16 @@ class AgentEngine:
                         messages,
                         tools,
                         reasoning_effort=reasoning_effort,
+                        prepared_payload=prepared_payload,
                     ),
                 ):
+                    if isinstance(chunk.get("provider_payload"), dict):
+                        provider_payload = chunk["provider_payload"]
+                        if active:
+                            active.provider_payload = provider_payload
                     if self._run_is_aborted(session, run_id):
                         if persisted_assistant_blocks or session.get_partial_content(run_id):
-                            partial_text = session.get_partial_content(run_id).strip() or None
+                            partial_text = session.get_partial_content(run_id) or None
                             self._ensure_elapsed_block(
                                 persisted_assistant_blocks,
                                 int((time.perf_counter() - started_at) * 1000),
@@ -664,8 +865,16 @@ class AgentEngine:
                     if finish_reason:
                         last_stop_reason = str(finish_reason)
 
-                    reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                    reasoning_field = "reasoning_content" if isinstance(delta.get("reasoning_content"), str) else "reasoning"
+                    reasoning_delta = delta.get(reasoning_field)
+                    if reasoning_delta is not None and not isinstance(reasoning_delta, str):
+                        raise RuntimeError("模型思考增量必须是文本")
+                    if isinstance(reasoning_delta, str):
+                        assistant_reasoning = (assistant_reasoning or "") + reasoning_delta
+                        if active:
+                            active.reasoning_content = assistant_reasoning
                     if reasoning_delta:
+                        history_store.save_attempt(session.session_id, attempt_id, {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls})
                         had_reasoning_output = True
                         visible_started_event = maybe_emit_visible_started()
                         if visible_started_event is not None:
@@ -687,9 +896,12 @@ class AgentEngine:
                                 if str(block.get("id")) == active_reasoning_block_id:
                                     block["content"] = f"{block.get('content', '')}{reasoning_delta}"
                                     break
-                        yield make_event(session, "reasoning_delta", round=turn_count, delta=reasoning_delta)
+                        yield make_event(session, "reasoning_delta", round=turn_count, delta=reasoning_delta,
+                                         attempt_id=attempt_id, part_id=active_reasoning_block_id)
 
                     content_delta = delta.get("content") or ""
+                    if not isinstance(content_delta, str):
+                        raise RuntimeError("模型正文增量必须是文本")
                     if content_delta:
                         if active_reasoning_block_id:
                             self._update_assistant_block(
@@ -703,6 +915,7 @@ class AgentEngine:
                         if visible_started_event is not None:
                             yield visible_started_event
                         assistant_content += content_delta
+                        history_store.save_attempt(session.session_id, attempt_id, {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls})
                         session.set_partial_content(run_id, assistant_content)
                         if not active_content_block_id:
                             active_content_block_id = f"content_{uuid.uuid4().hex}"
@@ -722,7 +935,8 @@ class AgentEngine:
                                 content=assistant_content,
                                 status="streaming",
                             )
-                        yield make_event(session, "content_delta", round=turn_count, delta=content_delta)
+                        yield make_event(session, "content_delta", round=turn_count, delta=content_delta,
+                                         attempt_id=attempt_id, part_id=active_content_block_id)
 
                     for tool_call in delta.get("tool_calls") or []:
                         index = int(tool_call.get("index", 0))
@@ -738,10 +952,12 @@ class AgentEngine:
                         if tool_call.get("id"):
                             current["id"] = tool_call["id"]
                         if function.get("name"):
-                            current["name"] = function["name"]
+                            current["name"] += function["name"]
                         arguments_delta = function.get("arguments") or ""
                         if arguments_delta:
                             current["arguments"] += arguments_delta
+                        history_store.save_attempt(session.session_id, attempt_id,
+                            {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls})
                         yield make_event(
                             session,
                             "tool_call_delta",
@@ -756,15 +972,15 @@ class AgentEngine:
                 error_message = self._extract_llm_error_message(exc)
                 if self._is_context_overflow_error(error_message):
                     try:
-                        recovered = context_pipeline.recover_from_overflow(
+                        recovered = await self._await_operation(session, run_id, context_pipeline.compact_session_async(
                             session=session,
                             llm_runtime=llm_runtime,
                             messages=raw_messages,
                             turn_index=request_turn_index,
-                            error_message=error_message,
+                            cause="provider_overflow",
                             tools=tools_for_estimation,
-                            max_output_tokens=settings.llm_max_tokens,
-                        )
+                            max_output_tokens=llm_client.output_limit(llm_runtime),
+                        ))
                     except ContextOverflowError as recovery_exc:
                         yield self._emit_context_event(
                             session,
@@ -798,11 +1014,12 @@ class AgentEngine:
                             reason="upstream_status",
                             message=error_message,
                         )
-                        await asyncio.sleep(delay)
+                        await self._await_operation(session, run_id, asyncio.sleep(delay))
                         continue
                 raise RuntimeError(error_message) from exc
             except httpx.TransportError:
-                delay = take_llm_retry_delay()
+                # 已有输出不能重放同一请求；保留原文并明确告知不完整。
+                delay = take_llm_retry_delay() if not (assistant_content or assistant_reasoning or tool_calls) else None
                 if delay is not None:
                     yield make_event(
                         session,
@@ -812,13 +1029,24 @@ class AgentEngine:
                         delay=delay,
                         reason="transport",
                     )
-                    await asyncio.sleep(delay)
+                    await self._await_operation(session, run_id, asyncio.sleep(delay))
                     continue
-                if assistant_content.strip():
+                if assistant_content.strip() or assistant_reasoning:
                     tool_calls = {}
                     last_stop_reason = "stream_interrupted"
                 else:
                     raise
+            except Exception:
+                # SSE 格式错误等非传输错误也必须保存已发布片段，不能等用户下一轮才恢复。
+                history_store.save_attempt(session.session_id, attempt_id,
+                    {"content": assistant_content, "reasoning_content": assistant_reasoning,
+                     "provider_payload": provider_payload, "tool_calls": tool_calls}, "incomplete")
+                if assistant_content or assistant_reasoning:
+                    self._persist_assistant_round(session, turn_index=request_turn_index,
+                        content=assistant_content, blocks=persisted_assistant_blocks, run_id=run_id,
+                        reasoning_content=assistant_reasoning, provider_payload=provider_payload,
+                        attempt_id=attempt_id, status="incomplete")
+                raise
 
             if self._run_is_aborted(session, run_id):
                 if persisted_assistant_blocks or session.get_partial_content(run_id):
@@ -830,7 +1058,7 @@ class AgentEngine:
                     self._persist_assistant_round(
                         session,
                         turn_index=request_turn_index,
-                        content=session.get_partial_content(run_id).strip() or None,
+                        content=session.get_partial_content(run_id) or None,
                         blocks=persisted_assistant_blocks,
                         run_id=run_id,
                     )
@@ -844,6 +1072,22 @@ class AgentEngine:
                 session.finish_run(run_id)
                 return
 
+            history_store.save_attempt(session.session_id, attempt_id,
+                {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls,
+                 "provider_payload": provider_payload, "stop_reason": last_stop_reason, "usage": last_usage_payload or {}},
+                "completed" if last_stop_reason in {"stop", "tool_calls"} else "incomplete")
+            if resolve_model_profile(llm_runtime).requires_reasoning(llm_runtime, prepared_payload.get("tools")) and assistant_reasoning is None:
+                history_store.save_attempt(session.session_id, attempt_id,
+                    {"content": assistant_content, "tool_calls": tool_calls, "stop_reason": "missing_reasoning"}, "invalid")
+                raise RuntimeError("DeepSeek 思考模式没有返回 reasoning_content；未执行工具，请检查 vLLM reasoning parser / chat template 或显式配置非思考模式")
+            if tool_calls and llm_runtime.extra_body.get("tools") == []:
+                history_store.save_attempt(session.session_id, attempt_id,
+                    {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls}, "invalid")
+                raise RuntimeError("本次请求已明确禁用工具，模型返回的工具调用未执行")
+            if tool_calls and last_stop_reason not in {"tool_calls", "stop"}:
+                raise RuntimeError("模型工具调用未完整结束，参数已归档且未执行")
+            if last_usage_payload:
+                context_pipeline.update_api_usage(session, last_usage_payload, runtime=llm_runtime)
             if active_reasoning_block_id:
                 self._update_assistant_block(
                     persisted_assistant_blocks,
@@ -858,9 +1102,11 @@ class AgentEngine:
                         persisted_assistant_blocks,
                         active_content_block_id,
                         content=assistant_content,
-                        status="done",
+                        status="done" if last_stop_reason in {"stop", "tool_calls"} else "incomplete",
                     )
-                yield make_event(session, "content_completed", round=turn_count)
+                yield make_event(session, "content_completed", round=turn_count,
+                    part_id=active_content_block_id,
+                    status="completed" if last_stop_reason in {"stop", "tool_calls"} else "incomplete", stop_reason=last_stop_reason)
             for index, tool_call in tool_calls.items():
                 yield make_event(
                     session,
@@ -877,6 +1123,7 @@ class AgentEngine:
                 assistant_message["content"] = assistant_content
 
             if tool_calls:
+                pending_compaction = None
                 tool_fingerprint = self._fingerprint_tool_calls(tool_calls)
                 if tool_fingerprint == last_tool_fingerprint:
                     stall_rounds += 1
@@ -913,11 +1160,21 @@ class AgentEngine:
                     tool_calls=assistant_message["tool_calls"],
                     visible_in_transcript=False,
                     run_id=run_id,
+                    reasoning_content=assistant_reasoning,
+                    provider_payload=provider_payload,
+                    attempt_id=attempt_id,
                 )
 
                 for _, tool_call in sorted(tool_calls.items()):
                     tool_name = tool_call["name"]
-                    tool_input = tool_service.parse_tool_arguments(tool_call["arguments"])
+                    validation_error = None
+                    try:
+                        tool_input = json.loads(tool_call["arguments"])
+                        if not isinstance(tool_input, dict):
+                            raise ValueError("工具参数必须为完整 JSON 对象")
+                    except (json.JSONDecodeError, ValueError) as exc:
+                        validation_error = str(exc)
+                        tool_input = {}
                     tool_display = tool_display_service.resolve(tool_name, tool_input)
                     tool_block_id = tool_call["id"]
                     session.mark_tool_running(run_id, tool_call_id=tool_block_id, tool_name=tool_name)
@@ -955,6 +1212,7 @@ class AgentEngine:
                         tool_call_id=tool_call["id"],
                         output_event_queue=tool_output_queue,
                         catalog_snapshot=visible_catalog,
+                        validation_error=validation_error,
                     )
                     session.set_tool_task(run_id, execution_task)
                     try:
@@ -984,7 +1242,7 @@ class AgentEngine:
                                 self._persist_assistant_round(
                                     session,
                                     turn_index=request_turn_index,
-                                    content=session.get_partial_content(run_id).strip() or None,
+                                    content=session.get_partial_content(run_id) or None,
                                     blocks=persisted_assistant_blocks,
                                     run_id=run_id,
                                 )
@@ -1011,8 +1269,11 @@ class AgentEngine:
                                         wait_set.add(abort_wait_task)
                                     done, _pending = await asyncio.wait(
                                         wait_set,
+                                        timeout=self._remaining_runtime(session, run_id),
                                         return_when=asyncio.FIRST_COMPLETED,
                                     )
+                                    if not done:
+                                        raise _RunTimedOut()
                                     if execution_task in done:
                                         result = execution_task.result()
                                         while not tool_output_queue.empty():
@@ -1051,12 +1312,12 @@ class AgentEngine:
                                         elapsed_ms=int((time.perf_counter() - tool_started_at) * 1000),
                                     )
                                 finally:
-                                    await self._cancel_wait_task(wait_task)
-                                    await self._cancel_wait_task(abort_wait_task)
-                                    await self._cancel_wait_task(output_wait_task)
+                                    await self._cancel_wait_tasks(wait_task, abort_wait_task, output_wait_task)
                             except asyncio.CancelledError:
                                 result = ToolExecutionResult.aborted()
                                 raise
+                    except (_RunAborted, _RunTimedOut):
+                        raise
                     except Exception as exc:  # noqa: BLE001
                         result = ToolExecutionResult.failure(
                             "tool.execution",
@@ -1087,7 +1348,7 @@ class AgentEngine:
                         output=tool_result_text,
                         result=result.public_payload(),
                     )
-                    if tool_name == "context_compact" and result.status == "success":
+                    if tool_name == "context_compact" and result.status == "success" and result.data.get("compacted"):
                         yield self._emit_context_event(session, ContextEventType.Compacted, result.data)
                     self._update_assistant_block(
                         persisted_assistant_blocks,
@@ -1124,6 +1385,8 @@ class AgentEngine:
                         session_service.persist(session)
 
                     control = result.control or {}
+                    if control.get("type") == "compact_context":
+                        pending_compaction = control
                     if control.get("type") == "await_user_input" and control.get("blocking", True):
                         self._ensure_elapsed_block(
                             persisted_assistant_blocks,
@@ -1133,7 +1396,7 @@ class AgentEngine:
                         self._persist_assistant_round(
                             session,
                             turn_index=request_turn_index,
-                            content=session.get_partial_content(run_id).strip() or None,
+                            content=session.get_partial_content(run_id) or None,
                             blocks=persisted_assistant_blocks,
                             run_id=run_id,
                         )
@@ -1156,7 +1419,7 @@ class AgentEngine:
                         self._persist_assistant_round(
                             session,
                             turn_index=request_turn_index,
-                            content=session.get_partial_content(run_id).strip() or None,
+                            content=session.get_partial_content(run_id) or None,
                             blocks=persisted_assistant_blocks,
                             run_id=run_id,
                         )
@@ -1170,26 +1433,40 @@ class AgentEngine:
                         session.finish_run(run_id)
                         return
                     
+                if pending_compaction:
+                    compact_messages = [*system_messages, *session.messages]
+                    try:
+                        compacted = await self._await_operation(session, run_id, context_pipeline.compact_session_async(session=session, llm_runtime=llm_runtime,
+                            messages=compact_messages, turn_index=request_turn_index, tools=tools_for_estimation,
+                            max_output_tokens=llm_client.output_limit(llm_runtime), cause="agent",
+                            aggressive=pending_compaction.get("strategy") == "aggressive"))
+                    except (ContextOverflowError, RuntimeError, ValueError, httpx.HTTPError) as exc:
+                        # 回执只承诺请求已收到。失败说明作为新的有序数据注入，不伪造成功。
+                        session.messages.append(context_message_adapter.make_internal_user_message(
+                            "[运行状态] 本次上下文压缩未提交，原始上下文保留：" + str(exc),
+                            turn_index=request_turn_index, kind="compaction_result"))
+                        session_service.persist(session)
+                    else:
+                        for context_event in compacted.events:
+                            yield self._emit_context_event(session, context_event.type, context_event.payload)
                 context_pipeline.reset_reactive_retry(session)
                 continue
 
             last_tool_fingerprint = None
             stall_rounds = 0
-            if last_usage_payload:
-                context_pipeline.update_api_usage(session, last_usage_payload)
             context_pipeline.reset_reactive_retry(session)
 
             # 恢复逻辑: 模型产出了内容(思考或正文)但被截断或未给出可见正文时,
-            # 持久化已有内容后继续对话。不设次数上限,靠 max_turns / max_runtime 自然兜底。
+            # 持久化已有内容后进行有界续写；不重放已发布的输出。
             # error_empty_response 仅在模型完全未产出任何内容时触发。
-            # 注意: stream_interrupted 有部分正文时不算截断,直接走 success 返回部分内容。
+            # stream_interrupted 返回明确的 incomplete 终态。
             has_output = bool(
                 had_reasoning_output
                 or active_reasoning_block_id
                 or active_content_block_id
                 or assistant_content.strip()
             )
-            if not tool_calls and (
+            if not tool_calls and continuation_count < settings.agent_max_continuations and last_stop_reason in {"length", "stop"} and (
                 last_stop_reason == "length"
                 or (not assistant_content.strip() and has_output)
             ):
@@ -1201,9 +1478,13 @@ class AgentEngine:
                 self._persist_assistant_round(
                     session,
                     turn_index=request_turn_index,
-                    content=None,
+                    content=assistant_content or None,
                     blocks=persisted_assistant_blocks,
                     run_id=run_id,
+                    reasoning_content=assistant_reasoning,
+                    provider_payload=provider_payload,
+                    attempt_id=attempt_id,
+                    status="incomplete",
                 )
                 store_service.touch_conversation(
                     session.session_id,
@@ -1215,12 +1496,15 @@ class AgentEngine:
                     recovery_msg = "[系统提示] 该回复因网络中断被截断,请基于已有内容继续完成回答。"
                 else:
                     recovery_msg = "[系统提示] 你已完成思考但未给出可见回答,请直接给出回答或调用工具。"
-                session.messages.append({"role": "system", "content": recovery_msg})
+                session.messages.append({"role": "system" if llm_runtime.api_format == "openai-compatible" else "user", "content": recovery_msg,
+                                         "kind": "continuation_notice", "run_id": run_id})
+                continuation_count += 1
+                next_continuation_of = attempt_id
                 context_pipeline.reset_reactive_retry(session)
                 continue
 
-            final_answer = assistant_content.strip()
-            if final_answer:
+            final_answer = assistant_content
+            if final_answer.strip():
                 visible_started_event = maybe_emit_visible_started()
                 if visible_started_event is not None:
                     yield visible_started_event
@@ -1236,6 +1520,10 @@ class AgentEngine:
                     content=final_answer,
                     blocks=persisted_assistant_blocks,
                     run_id=run_id,
+                    reasoning_content=assistant_reasoning,
+                    provider_payload=provider_payload,
+                    attempt_id=attempt_id,
+                    status="completed" if last_stop_reason == "stop" else "incomplete",
                 )
                 store_service.touch_conversation(
                     session.session_id,
@@ -1244,7 +1532,7 @@ class AgentEngine:
                 yield make_event(
                     session,
                     "result",
-                    subtype="success",
+                    subtype="success" if last_stop_reason == "stop" else "incomplete",
                     is_error=False,
                     turn_count=turn_count,
                     stop_reason=last_stop_reason,
@@ -1254,7 +1542,7 @@ class AgentEngine:
                     session,
                     "completed",
                     elapsed_ms=int((time.perf_counter() - started_at) * 1000),
-                    subtype="success",
+                    subtype="success" if last_stop_reason == "stop" else "incomplete",
                     stop_reason=last_stop_reason,
                 )
                 session.finish_run(run_id)

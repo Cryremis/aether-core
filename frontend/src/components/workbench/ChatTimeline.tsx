@@ -4,7 +4,7 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs, formatTimestamp } from "../../pages/workbench/markdown";
-import type { ChatMessage } from "../../pages/workbench/types";
+import type { AssistantBlock, ChatMessage } from "../../pages/workbench/types";
 import { useAppPreferences } from "../../i18n";
 import type { SubagentRunSummary } from "../../api/client";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
@@ -153,6 +153,10 @@ function getAssistantStreamingStatus(message: Extract<ChatMessage, { role: "assi
 
 function AssistantStatusBadge({ message }: { message: Extract<ChatMessage, { role: "assistant" }> }) {
   const status = getAssistantStreamingStatus(message);
+  const lastContent = [...message.blocks].reverse().find((block) => block.kind === "content");
+  if (!message.streaming && lastContent?.status === "incomplete") {
+    return <div className="assistant-status-badge" title="已保留收到的内容，可继续追问"><span>回复未完整生成</span></div>;
+  }
   if (!status) return null;
 
   return (

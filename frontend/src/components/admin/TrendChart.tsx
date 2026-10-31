@@ -183,7 +183,7 @@ export function PlatformStackedChart({
 }) {
   const { points, chartSeries } = useMemo(() => {
     if (series.length === 0) return { points: [] as TrendPoint[], chartSeries: [] as TrendSeries[] };
-    const valueKey = cumulative ? `total_${metric}` : `new_${metric}`;
+    const valueKey = (cumulative ? `total_${metric}` : `new_${metric}`) as keyof PlatformSeriesInput["points"][number];
     const dates = series[0].points.map((p) => p.date);
     const merged: TrendPoint[] = dates.map((date) => {
       const row: TrendPoint = { date };

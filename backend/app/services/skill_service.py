@@ -10,6 +10,7 @@ from app.schemas.agent import SkillCard
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.skill_loader import skill_loader
+from app.services.context.host_context import bounded_host_context
 
 
 class SkillService:
@@ -30,14 +31,14 @@ class SkillService:
         return [self._to_card(item) for item in self._all_skill_definitions(session)]
 
     def build_system_prompt(self, session: AgentSession) -> str:
-        context = session.host_context or {}
+        context = bounded_host_context(session.host_context or {})
         skill_listing = self._format_skill_listing(session)
         sandbox_paths = self._sandbox_path_map()
         return (
             "你是 AetherCore 的生产级工作台 Agent。\n"
             "你运行在服务端受限沙箱中，必须优先通过工具读取文件、执行脚本、生成产物，并保持过程可追踪。\n"
             "要求：\n"
-            "1. 始终使用中文回答。\n"
+            "1. 默认使用中文，用户明确要求其他语言时遵循其要求。IP、URL、路径、命令与标识符必须保持原样。\n"
             "2. 处理文件前优先使用 list、read、glob、grep 等工具确认路径和内容，不要臆测。\n"
             "3. 如需运行命令，优先使用 sandbox_shell，并把最终可下载结果写入工作目录。\n"
             "4. 当宿主工具可直接提供更可靠的数据时，优先调用宿主工具。\n"
@@ -61,7 +62,7 @@ class SkillService:
             "你是 AetherCore 的生产级工作台 Agent。\n"
             "你运行在服务端受限沙箱中，必须优先通过工具读取文件、执行脚本、生成产物，并保持过程可追踪。\n"
             "要求：\n"
-            "1. 始终使用中文回答。\n"
+            "1. 默认使用中文，用户明确要求其他语言时遵循其要求。IP、URL、路径、命令与标识符必须保持原样。\n"
             "2. 处理文件前优先使用 list、read、glob、grep 等工具确认路径和内容，不要臆测。\n"
             "3. 如需运行命令，优先使用 sandbox_shell，并把最终可下载结果写入工作目录。\n"
             "4. 当宿主工具可直接提供更可靠的数据时，优先调用宿主工具。\n"
@@ -71,7 +72,7 @@ class SkillService:
         )
 
     def build_environment_prompt(self, session: AgentSession) -> str:
-        context = session.host_context or {}
+        context = bounded_host_context(session.host_context or {})
         skill_listing = self._format_skill_listing(session)
         sandbox_paths = self._sandbox_path_map()
         return (

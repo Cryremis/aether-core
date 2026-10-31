@@ -1,6 +1,6 @@
 # backend/app/services/context/context_manager.py
 """
-上下文管理服务
+旧上下文组件兼容入口（聊天生产路径使用 ContextPipeline）
 
 AetherCore上下文窗口管理的主协调器。
 协调Token估算、预算管理、优先级处理和压缩策略，

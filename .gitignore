@@ -13,6 +13,12 @@ backend/.env
 node_modules/
 dist/
 docs/
+!/docs/
+/docs/*
+!/docs/agent-context-reliability-design.md
+!/docs/context_management_mechanism.md
+!/docs/context-runtime-operations.md
+!/docs/context-runtime-audit.md
 .DS_Store
 Thumbs.db
 storage/sessions/

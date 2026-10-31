@@ -1,7 +1,7 @@
 # backend/app/api/routes/agent.py
 import traceback
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import AuthContext, get_auth_context
@@ -58,6 +58,15 @@ def _ensure_session_mutable(session_id: str) -> None:
         raise HTTPException(status_code=409, detail="当前会话正在执行，请等待当前任务结束后再操作。")
 
 
+@router.get("/{session_id}/context/diagnostics")
+async def context_diagnostics(session_id: str, limit: int = Query(50, ge=1, le=100),
+                              before: int | None = Query(None, ge=1),
+                              auth: AuthContext = Depends(get_auth_context)) -> dict:
+    _ensure_session_access(session_id, auth)
+    from app.services.context.history_store import history_store
+    return history_store.diagnostics(session_id, limit=limit, before=before)
+
+
 @router.post("/chat")
 async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_context)) -> StreamingResponse:
     """AetherCore 对话入口。"""
@@ -65,6 +74,10 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
     if not request.session_id:
         raise HTTPException(status_code=400, detail="缺少 session_id")
     session = _ensure_session_access(request.session_id, auth)
+    if request.run_id:
+        existing_run = store_service.get_agent_run(request.run_id)
+        if existing_run is None or str(existing_run["session_id"]) != session.session_id:
+            raise HTTPException(status_code=404, detail="运行不存在于当前会话")
     session.disabled_capability_ids = list(dict.fromkeys(request.disabled_capability_ids))[:512]
     if request.allow_network is not None:
         session_service.set_allow_network(session, request.allow_network)
@@ -392,19 +405,37 @@ async def stream_run_events(
     session_id: str,
     run_id: str,
     auth: AuthContext = Depends(get_auth_context),
+    after_seq: int = Query(default=0, ge=0),
 ) -> StreamingResponse:
     session = _ensure_session_access(session_id, auth)
+    run = store_service.get_agent_run(run_id)
+    if run is None or str(run["session_id"]) != session_id:
+        raise HTTPException(status_code=404, detail="运行不存在于当前会话")
 
     async def event_stream():
         yield _sse(AgentEvent(type="session_created", session_id=session.session_id))
         try:
-            queue = await agent_run_service.subscribe(run_id, replay_history=False)
+            # 先订阅再读取持久化历史，消除快照与订阅之间的竞态；两路按 seq 去重。
+            queue, live = await agent_run_service.subscribe_from(run_id, after_seq=after_seq)
             try:
+                cursor = after_seq
+                for event in agent_run_service.list_events_after(run_id, after_seq):
+                    yield _sse(event)
+                    cursor = int(event.seq or cursor)
+                    if event.type == "completed":
+                        return
+                if not live:
+                    return
                 while True:
                     event = await queue.get()
                     if event is None:
                         break
+                    if int(event.seq or 0) <= cursor:
+                        continue
+                    cursor = int(event.seq or cursor)
                     yield _sse(event)
+                    if event.type == "completed":
+                        break
             finally:
                 await agent_run_service.unsubscribe(run_id, queue)
         except Exception as exc:  # noqa: BLE001

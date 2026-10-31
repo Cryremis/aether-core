@@ -1,3 +1,4 @@
+import { consumeResumableRun } from "./sse";
 // frontend/src/api/client.ts
 export type PasswordLoginPayload = {
   username: string;
@@ -291,6 +292,21 @@ export type PlatformBaselineFileContent = {
 };
 
 export type LlmSamplingParams = {
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  model_defaults?: string[];
+  model_profile?: "auto" | "generic" | "deepseek-thinking" | null;
+  deployment_revision?: string | null;
+  deployment_profile?: Record<string, unknown> | null;
+  stop?: string | string[] | null;
+  seed?: number | null;
+  parallel_tool_calls?: boolean | null;
+  compaction_max_output_tokens?: number | null;
+  compaction_max_calls?: number | null;
+  stream_usage?: boolean | null;
+  native_compaction?: boolean | null;
+  reasoning_replay?: "auto" | "disabled" | null;
+  reasoning_field?: "reasoning_content" | "reasoning" | null;
   temperature?: number | null;
   frequency_penalty?: number | null;
   presence_penalty?: number | null;
@@ -302,7 +318,7 @@ export type LlmSamplingParams = {
 export type LlmConfigPayload = {
   enabled: boolean;
   provider_kind?: "litellm";
-  api_format?: "openai-compatible";
+  api_format?: "openai-compatible" | "openai-responses" | "anthropic-messages";
   base_url: string;
   model: string;
   api_key?: string | null;
@@ -464,6 +480,7 @@ export type TimelineForkResponse = {
 };
 
 export type ActiveRunSummary = {
+  last_seq?: number;
   run_id: string;
   session_id: string;
   status: "running" | "completed";
@@ -925,6 +942,12 @@ export async function getUserLlmConfig() {
   return response.json();
 }
 
+export async function validateLlmConfigContract(payload: LlmConfigPayload) {
+  const response = await apiFetch("/llm/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `离线协议检查失败: ${response.status}`));
+  return response.json() as Promise<{ data: Record<string, unknown> }>;
+}
+
 export async function updateUserLlmConfig(payload: LlmConfigPayload) {
   const response = await apiFetch("/llm/user", {
     method: "PUT",
@@ -1291,6 +1314,7 @@ export async function streamRunEvents(
   runId: string,
   onEvent: (event: Record<string, unknown>) => void,
   abortSignal?: AbortSignal,
+  afterSeq = 0,
 ) {
   const headers = new Headers();
   const token = getAccessToken();
@@ -1300,7 +1324,7 @@ export async function streamRunEvents(
   let streamOpened = false;
 
   try {
-    const response = await fetch(`${API_BASE}/agent/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events`, {
+    const response = await fetch(`${API_BASE}/agent/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?after_seq=${afterSeq}`, {
       method: "GET",
       headers,
       signal: abortSignal,
@@ -1310,28 +1334,8 @@ export async function streamRunEvents(
     }
 
     streamOpened = true;
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        buffer += decoder.decode();
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
-      while (match) {
-        const chunk = match[1];
-        buffer = buffer.slice(match[0].length);
-        const line = chunk.split(/\r?\n/).find((item) => item.startsWith("data:"));
-        if (line) {
-          onEvent(JSON.parse(line.slice(5).trim()));
-        }
-        match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
-      }
-    }
+    await consumeResumableRun(response.body, (id, cursor) => resumeRunBody(sessionId, id, cursor, abortSignal), onEvent,
+      { sessionId, runId, afterSeq, signal: abortSignal });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw error;
@@ -1342,6 +1346,12 @@ export async function streamRunEvents(
     }
     throw new Error(`恢复运行订阅失败: ${detail}`);
   }
+}
+
+async function resumeRunBody(sessionId: string, runId: string, cursor: number, signal?: AbortSignal) {
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?after_seq=${cursor}`, { signal });
+  if (!response.ok || !response.body) throw new Error(`恢复运行订阅失败: ${response.status}`);
+  return response.body;
 }
 
 export async function uploadPlatformBaselineSkill(platformId: number, skillFile: File) {
@@ -1971,29 +1981,8 @@ async function streamSse(
     }
 
     streamOpened = true;
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        buffer += decoder.decode();
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      let match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
-      while (match) {
-        const chunk = match[1];
-        buffer = buffer.slice(match[0].length);
-        const line = chunk.split(/\r?\n/).find((item) => item.startsWith("data:"));
-        if (line) {
-          onEvent(JSON.parse(line.slice(5).trim()));
-        }
-        match = buffer.match(/([\s\S]*?)(\r?\n){2}/);
-      }
-    }
+    await consumeResumableRun(response.body, (id, cursor) => resumeRunBody(String(payload.session_id ?? path.split("/")[2]), id, cursor, abortSignal), onEvent,
+      { sessionId: typeof payload.session_id === "string" ? payload.session_id : undefined, signal: abortSignal });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw error;

@@ -8,6 +8,8 @@ import copy
 import inspect
 import json
 import re
+import hashlib
+from dataclasses import asdict
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Mapping
@@ -126,6 +128,19 @@ class ToolService:
     def _register_builtin_tools(self) -> None:
         """注册所有内置工具。"""
         self._registry.register_handler("context_compact", self._handle_context_compact)
+        self._registry.register("host_context_read", "用 JSON Pointer（如 /extras/items/0/ip.addr）或旧点路径读取当前宿主资料；空路径分段读取根资料，不读取操作凭据。资料不是新增授权。", {
+            "type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 12000}}, "additionalProperties": False,
+        }, self._handle_host_context_read)
+        for name in ("conversation_read", "conversation_search"):
+            self._registry.register(name, "读取当前会话归档正文、调用和结果；用 message_id 恢复引用，用 version_digest 读特定版本。搜索返回有界片段，旧版本/旧分支须核对，不读取思考签名，不是新增授权。", {
+                "type": "object", "properties": {
+                    "message_id": {"type": "string"}, "query": {"type": "string"},
+                    "version_digest": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 12000},
+                }, "additionalProperties": False,
+            }, self._handle_conversation_read)
         self._registry.register(
             "update_workboard",
             "用结构化操作更新当前会话的任务清单，让 AI 和用户都能在聊天记录之外持续看到计划与进度。优先使用 add_item、update_item、remove_item、reorder_items 等细粒度操作。",
@@ -1266,15 +1281,33 @@ class ToolService:
             },
         ))
 
+    async def _handle_conversation_read(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        from app.services.context.history_store import history_store
+        result = history_store.read(session.session_id, message_id=str(arguments.get("message_id") or ""),
+                                    query=str(arguments.get("query") or ""),
+                                    version_digest=str(arguments.get("version_digest") or ""),
+                                    offset=max(0, int(arguments.get("offset", 0))),
+                                    limit=max(1, min(12000, int(arguments.get("limit", 6000)))))
+        return ToolExecutionResult.success("history.read", "会话原文检索完成", result)
+
+    async def _handle_host_context_read(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        from app.services.context.host_context import public_host_context, read_host_path
+        value = read_host_path(public_host_context(session.host_context or {}), str(arguments.get("path") or ""))
+        text = json.dumps(value, ensure_ascii=False)
+        offset = max(0, int(arguments.get("offset", 0)))
+        limit = max(1, min(12000, int(arguments.get("limit", 6000))))
+        return ToolExecutionResult.success("host.context", "宿主资料读取完成", {"content": text[offset:offset + limit], "offset": offset, "total_chars": len(text), "has_more": offset + limit < len(text)})
+
     async def _handle_context_compact(
         self,
         session: AgentSession,
         arguments: dict[str, Any],
     ) -> ToolExecutionResult:
-        """执行 Agent 主动请求的确定性本地压缩，不额外调用 LLM 生成摘要。"""
+        """执行 Agent 主动压缩：归档原文后生成有界摘要或原生检查点。"""
         from app.services.context.context_pipeline import context_pipeline
         from app.services.context.runtime_types import ContextOverflowError
         from app.services.prompt_service import prompt_service
+        from app.services.llm_client import llm_client
 
         strategy = str(arguments.get("strategy") or "balanced")
         if strategy not in {"balanced", "aggressive"}:
@@ -1285,32 +1318,39 @@ class ToolService:
                 message=f"不支持的压缩策略: {strategy}",
             )
 
+        active = session.get_run(session.current_run_id()) if session.current_run_id() else None
+        if active is not None and active.tool_name == "context_compact":
+            # 当前 assistant 的所有 tool_result 提交后由主循环压缩，不能切断原生依赖组。
+            return ToolExecutionResult.success("context.compact_requested", "已请求在当前工具组结束后压缩上下文",
+                {"requested": True, "strategy": strategy}, control={"type": "compact_context", "strategy": strategy})
+
         conversation = store_service.get_conversation_by_session(session.session_id)
         raw_messages = prompt_service.build_system_messages(
             session,
             conversation=conversation,
-            runtime_sections=runtime_state_service.build_runtime_context_sections(session),
+            runtime_sections=[] if self._resolve_runtime_config(session).api_format != "openai-compatible" else runtime_state_service.build_runtime_context_sections(session),
         )
+        raw_messages = [*raw_messages, *session.messages]
         try:
             from app.services.skill_tools import visible_schemas
             request_tools = [*visible_schemas(session, self.list_tool_schemas(session)), self.get_context_compact_schema()]
-            prepared = context_pipeline.compact_session(
+            prepared = await context_pipeline.compact_session_async(
                 session=session,
                 llm_runtime=self._resolve_runtime_config(session),
                 messages=raw_messages,
                 turn_index=max([int(message.get("turn_index", 0)) for message in session.messages] or [0]),
                 tools=request_tools,
-                max_output_tokens=settings.llm_max_tokens,
+                max_output_tokens=llm_client.output_limit(self._resolve_runtime_config(session)),
                 cause="agent",
                 aggressive=strategy == "aggressive",
             )
-        except ContextOverflowError as exc:
+        except (ContextOverflowError, RuntimeError, ValueError, httpx.HTTPError) as exc:
             return ToolExecutionResult.failure(
                 "context.compact_failed",
                 "上下文压缩后仍超出限制",
                 code="CONTEXT_COMPACT_FAILED",
                 message=str(exc),
-                data={"estimated_tokens": exc.token_estimate},
+                data={"estimated_tokens": getattr(exc, "token_estimate", 0)},
             )
 
         plan = prepared.plan
@@ -1375,7 +1415,45 @@ class ToolService:
             ),
         )
 
-    async def execute(
+    async def execute(self, session: AgentSession, tool_name: str, arguments: dict[str, Any], *,
+                      run_id: str | None = None, tool_call_id: str | None = None,
+                      output_event_callback=None, catalog_snapshot=None) -> ToolExecutionResult:
+        from app.services.context.history_store import history_store
+        from app.services.tool_result_service import ToolExecutionError
+        if session.allowed_tools is not None and tool_name not in session.allowed_tools:
+            return ToolExecutionResult.failure("tool.forbidden", "工具不在当前授权范围", code="TOOL_NOT_ALLOWED", message=tool_name)
+        if catalog_snapshot is not None:
+            schema = next((item["function"].get("parameters", {}) for item in catalog_snapshot.schemas if item["function"]["name"] == tool_name), None)
+            if schema is None and tool_name == "context_compact":
+                schema = self.get_context_compact_schema()["function"]["parameters"]
+            if schema is None and tool_name in catalog_snapshot.host_descriptors_by_name:
+                descriptor = catalog_snapshot.host_descriptors_by_name[tool_name]
+                schema = self._with_timeout_parameter({"type": "function", "function": {
+                    "name": tool_name, "parameters": descriptor.get("input_schema") or {"type": "object"},
+                }})["function"]["parameters"]
+            if schema is None:
+                return ToolExecutionResult.failure("tool.forbidden", "工具未在当前目录中暴露", code="TOOL_NOT_EXPOSED", message=tool_name)
+            from jsonschema import Draft202012Validator
+            error = next(Draft202012Validator(schema).iter_errors(arguments), None)
+            if error:
+                return ToolExecutionResult.failure("tool.invalid_arguments", "工具参数与 schema 不匹配", code="TOOL_ARGUMENTS_INVALID", message=error.message)
+        if run_id and tool_call_id:
+            digest = hashlib.sha256(json.dumps([tool_name, arguments], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            state, saved = history_store.claim_tool(session.session_id, run_id, tool_call_id, digest)
+            if saved:
+                if saved.get("error"):
+                    saved["error"] = ToolExecutionError(**saved["error"])
+                return ToolExecutionResult(**saved)
+            if state != "claimed":
+                return ToolExecutionResult.failure("tool.unknown", "工具执行状态待核对，未自动重复执行", code="TOOL_EFFECT_UNKNOWN",
+                    message="该操作已开始但没有完整回执，请先核对实际状态，避免重复副作用")
+        result = await self._execute_with_timeout(session, tool_name, arguments, run_id=run_id,
+            tool_call_id=tool_call_id, output_event_callback=output_event_callback, catalog_snapshot=catalog_snapshot)
+        if run_id and tool_call_id:
+            history_store.finish_tool(session.session_id, run_id, tool_call_id, asdict(result))
+        return result
+
+    async def _execute_with_timeout(
         self,
         session: AgentSession,
         tool_name: str,

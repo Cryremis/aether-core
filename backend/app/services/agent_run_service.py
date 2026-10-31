@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import traceback
 import uuid
@@ -318,14 +319,7 @@ class AgentRunService:
         if replay_history:
             for row in store_service.list_agent_run_events(run_id, limit=100_000):
                 await queue.put(
-                    AgentEvent(
-                        type=str(row["type"]),
-                        session_id=str(run["session_id"]),
-                        run_id=run_id,
-                        seq=int(row["seq"]),
-                        timestamp=str(row["created_at"]),
-                        payload=dict(row.get("payload") or {}),
-                    )
+                    self._event_from_row(run_id, str(run["session_id"]), row)
                 )
         await queue.put(None)
         return queue
@@ -357,14 +351,7 @@ class AgentRunService:
         if run is None:
             raise RuntimeError("目标运行不存在。")
         return [
-            AgentEvent(
-                type=str(row["type"]),
-                session_id=str(run["session_id"]),
-                run_id=run_id,
-                seq=int(row["seq"]),
-                timestamp=str(row["created_at"]),
-                payload=dict(row.get("payload") or {}),
-            )
+            self._event_from_row(run_id, str(run["session_id"]), row)
             for row in store_service.list_agent_run_events(run_id, after_seq=after_seq, limit=100_000)
         ]
 
@@ -556,6 +543,10 @@ class AgentRunService:
                 self._apply_event_to_active_view(session, terminal_event)
                 # 保留上游的异常隔离，记录/持久化失败不能阻止运行锁的释放。
                 try:
+                    from app.services.context.history_store import history_store
+                    history_store.recover_attempts(session, include_run_id=run_id)
+                    if self._status_for_event(terminal_event) in {"failed", "cancelled", "timed_out"}:
+                        self._persist_aborted_projection(session, run_id)
                     self._finalize_transcript(session)
                 except Exception:
                     logger.exception("Failed to finalize transcript for agent run %s", run_id)
@@ -584,6 +575,18 @@ class AgentRunService:
             finally:
                 await self._close_run(run_id, session.session_id)
 
+    _ENVELOPE_FIELDS = ("protocol_version", "turn_id", "step_id", "attempt_id", "message_id", "part_id", "context_epoch_id", "continuation_of")
+
+    @classmethod
+    def _event_from_row(cls, run_id: str, session_id: str, row: dict) -> AgentEvent:
+        payload = dict(row.get("payload") or {})
+        envelope = payload.pop("_runtime_envelope", {})
+        metadata = {key: envelope[key] for key in cls._ENVELOPE_FIELDS if key in envelope} if isinstance(envelope, dict) else {}
+        metadata.setdefault("protocol_version", 1)
+        return AgentEvent(type=str(row["type"]), session_id=session_id, run_id=run_id,
+            seq=int(row["seq"]), event_id=f"{run_id}:{row['seq']}", timestamp=str(row["created_at"]),
+            payload=payload, **metadata)
+
     async def _publish(self, run_id: str, event: AgentEvent) -> int:
         subscribers: list[asyncio.Queue[AgentEvent | None]] = []
         event.run_id = run_id
@@ -600,12 +603,17 @@ class AgentRunService:
         event.seq = store_service.append_agent_run_event(
             run_id=run_id,
             event_type=event.type,
-            payload=event.payload,
+            payload={**event.payload, "_runtime_envelope": {key: getattr(event, key) for key in self._ENVELOPE_FIELDS}},
             status=status,
             result=result,
             error=error,
         )
         published_seq = event.seq
+        event.event_id = f"{run_id}:{published_seq}"
+        current_session = session_service._sessions.get(event.session_id)
+        if current_session is not None and current_session.active_run_view:
+            current_session.active_run_view["last_seq"] = published_seq
+            session_service.persist(current_session)
         async with self._lock:
             state = self._runs.get(run_id)
             if state is None:
@@ -701,16 +709,19 @@ class AgentRunService:
         if event.type == "assistant_visible_started":
             assistant["response_started_at"] = active_view.get("updated_at")
         elif event.type == "reasoning_delta":
-            block = self._find_or_create_block(blocks, kind="reasoning", prefix="live-reasoning")
+            block = self._find_or_create_block(blocks, kind="reasoning", prefix="live-reasoning", part_id=payload.get("part_id"))
             block["content"] = f"{block.get('content', '')}{str(payload.get('delta') or '')}"
         elif event.type == "content_delta":
-            block = self._find_or_create_block(blocks, kind="content", prefix="live-content")
+            block = self._find_or_create_block(blocks, kind="content", prefix="live-content", part_id=payload.get("part_id"))
             block["content"] = f"{block.get('content', '')}{str(payload.get('delta') or '')}"
             block["status"] = "streaming"
         elif event.type == "content_completed":
             for block in blocks:
-                if isinstance(block, dict) and block.get("kind") == "content":
-                    block["status"] = "done"
+                if isinstance(block, dict) and block.get("kind") == "content" and (
+                    block.get("id") == (event.part_id or payload.get("part_id")) or
+                    (not (event.part_id or payload.get("part_id")) and block.get("status") == "streaming")
+                ):
+                    block["status"] = "incomplete" if payload.get("status") == "incomplete" else "done"
         elif event.type == "tool_started":
             tool_call_id = str(payload.get("id") or f"tool-{uuid.uuid4().hex}")
             tool_block = {
@@ -769,19 +780,38 @@ class AgentRunService:
             assistant["streaming"] = False
             assistant["elapsedMs"] = int(payload.get("elapsed_ms") or self._active_elapsed_ms(session))
 
-        session_service.persist(session)
-
     def _finalize_transcript(self, session: AgentSession) -> None:
         # transcript 是历史真相，只能从正式 messages 投影生成；
         # active_run_view 只是运行态快照，不能回写成 persisted transcript。
-        session.transcript = transcript_service.build_persisted_transcript(session.messages)
+        session.transcript = transcript_service.build_session_transcript(session)
 
-    def _find_or_create_block(self, blocks: list[dict[str, Any]], *, kind: str, prefix: str) -> dict[str, Any]:
+    def _persist_aborted_projection(self, session: AgentSession, run_id: str) -> None:
+        from app.services.context.message_adapter import context_message_adapter
+        view = session.active_run_view or {}
+        blocks = copy.deepcopy((view.get("assistant") or {}).get("blocks") or [])
+        if view.get("run_id") != run_id or not blocks:
+            return
+        for block in blocks:
+            if block.get("kind") == "tool" and block.get("status") == "running":
+                block["status"] = "aborted"
+                block["outputText"] = block.get("outputText") or '{"status":"unknown","summary":"运行已结束，工具实际结果待核对，未自动重复执行"}'
+            elif block.get("status") == "streaming":
+                block["status"] = "aborted"
+        for message in session.messages:
+            if message.get("run_id") == run_id and message.get("role") == "assistant":
+                message["visible_in_transcript"] = False
+        projection = context_message_adapter.make_assistant_message(content=None, blocks=blocks,
+            run_id=run_id, turn_index=max((int(m.get("turn_index", 0)) for m in session.messages), default=0), status="incomplete")
+        # 展示快照仅生成 UI 投影；模型历史仍只来自原始响应和真实工具结果。
+        projection["projection_only"] = True
+        session.messages.append(projection)
+
+    def _find_or_create_block(self, blocks: list[dict[str, Any]], *, kind: str, prefix: str, part_id: str | None = None) -> dict[str, Any]:
         for block in reversed(blocks):
-            if isinstance(block, dict) and block.get("kind") == kind:
+            if isinstance(block, dict) and block.get("kind") == kind and (not part_id or block.get("id") == part_id):
                 return block
         block = {
-            "id": f"{prefix}-{uuid.uuid4().hex}",
+            "id": part_id or f"{prefix}-{uuid.uuid4().hex}",
             "kind": kind,
             "content": "",
         }

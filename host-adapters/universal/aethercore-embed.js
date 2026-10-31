@@ -239,6 +239,7 @@
       this.previewStreamTimer = null;
       this.pendingStreamPreview = null;
       this.latestAssistantPreview = null;
+      this.assistantPreviewCursors = new Map();
       this.assistantPreviewRevision = 0;
       this.presentedAssistantPreviewRevision = 0;
       this.handleWorkbenchMessage = this.handleWorkbenchMessage.bind(this);
@@ -444,14 +445,25 @@
         messageId: String(payload.message_id || ""),
         contentId: String(payload.content_id || ""),
         content: String(payload.content || ""),
-        status: payload.status === "completed" ? "completed" : "streaming",
+        status: ["completed", "incomplete"].includes(payload.status) ? payload.status : "streaming",
+        runId: String(payload.run_id || ""),
+        attemptId: String(payload.attempt_id || ""),
+        seq: Number.isSafeInteger(payload.seq) ? payload.seq : null,
+        contextEpoch: payload.context_epoch_id,
       };
       if (!preview.content || !preview.messageId || !preview.contentId) return;
+      if (preview.runId && preview.seq !== null) {
+        const key = JSON.stringify([preview.sessionId, preview.runId]);
+        if (preview.seq <= (this.assistantPreviewCursors.get(key) || 0)) return;
+        this.assistantPreviewCursors.set(key, preview.seq);
+        // 只接收正文事件，seq 中间的工具/思考事件不应被误判为缺口。
+        if (this.assistantPreviewCursors.size > 256) this.assistantPreviewCursors.delete(this.assistantPreviewCursors.keys().next().value);
+      }
       this.queueAssistantPreview(preview);
     }
 
     queueAssistantPreview(preview) {
-      if (preview.status === "completed") {
+      if (preview.status === "completed" || preview.status === "incomplete") {
         if (this.previewStreamTimer) window.clearTimeout(this.previewStreamTimer);
         this.previewStreamTimer = null;
         this.pendingStreamPreview = null;

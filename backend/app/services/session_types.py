@@ -15,7 +15,7 @@ from typing import Any
 from app.sandbox.models import SandboxWorkspace
 
 
-CONTEXT_MESSAGE_SCHEMA_VERSION = 2
+CONTEXT_MESSAGE_SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -29,6 +29,13 @@ class SessionRunContext:
     tool_call_id: str | None = None
     tool_name: str | None = None
     tool_task: Any | None = None
+    attempt_id: str | None = None
+    turn_index: int = 0
+    step_id: str | None = None
+    message_id: str | None = None
+    continuation_of: str | None = None
+    reasoning_content: str | None = None
+    provider_payload: dict[str, Any] | None = None
 
     def request_abort(self) -> None:
         self.abort_event.set()
@@ -68,6 +75,12 @@ class AgentSession:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     uploads: list[dict[str, Any]] = field(default_factory=list)
     context_state: dict[str, Any] = field(default_factory=dict)
+    provider_binding: str = ""
+    context_epoch: int = 0
+    frozen_system_messages: list[dict[str, Any]] = field(default_factory=list)
+    frozen_tools_hash: str = ""
+    frozen_history_prefix_hash: str = ""
+    ledger_revision: int = 0
     message_schema_version: int = CONTEXT_MESSAGE_SCHEMA_VERSION
     allow_network: bool = True
     disabled_capability_ids: list[str] = field(default_factory=list)

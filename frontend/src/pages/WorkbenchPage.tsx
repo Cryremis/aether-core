@@ -1,3 +1,4 @@
+import { samplingFromForm, loadAdvancedSampling } from "../api/llmOptions";
 // frontend/src/pages/WorkbenchPage.tsx
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -65,6 +66,7 @@ const SIDEBAR_MAX_WIDTH = 460;
 const SIDEBAR_DEFAULT_WIDTH = 280;
 
 const RESULT_MESSAGES: Record<string, string> = {
+  incomplete: "回复未完整生成，已保留收到的内容，可继续追问",
   error_empty_response: "模型未返回可用正文",
   error_max_turns: "执行达到轮次上限",
   error_runtime_limit: "执行达到运行时限",
@@ -115,7 +117,7 @@ function buildSystemEventMessage(
 
 function fromTranscriptMessages(items: TranscriptChatMessage[]): TranscriptMessage[] {
   return items.map((item, index) =>
-    item.role === "assistant"
+    item.role === "system_event" ? { ...item } : item.role === "assistant"
       ? {
           id: item.id || `history-assistant-${index}`,
           role: "assistant",
@@ -672,10 +674,20 @@ window.addEventListener("resize", handleResize);
         enabled: boolean;
         base_url: string;
         model: string;
+        api_format?: LlmDialogState["api_format"];
         has_api_key: boolean;
         extra_headers?: Record<string, string>;
         extra_body?: Record<string, unknown>;
         sampling?: {
+          context_window?: number | null;
+          max_output_tokens?: number | null;
+          model_defaults?: string[];
+          native_compaction?: boolean;
+          model_profile?: LlmDialogState["model_profile"];
+          deployment_revision?: string;
+          stream_usage?: boolean;
+          reasoning_replay?: LlmDialogState["reasoning_replay"];
+          reasoning_field?: LlmDialogState["reasoning_field"];
           temperature?: number | null;
           frequency_penalty?: number | null;
           presence_penalty?: number | null;
@@ -686,6 +698,7 @@ window.addEventListener("resize", handleResize);
       } | null;
       resolved?: {
         scope?: "user" | "platform" | "global";
+        sampling_sources?: Record<string, string>;
         reasoning_effort_options?: string[];
         sampling?: { reasoning_effort?: string | null } | null;
       } | null;
@@ -696,10 +709,21 @@ window.addEventListener("resize", handleResize);
       setReasoningEffortOptions(data.resolved.reasoning_effort_options);
     }
     const resolvedEffort = data.resolved?.sampling?.reasoning_effort;
-    if (resolvedEffort) {
-      setReasoningEffort(resolvedEffort);
-    }
+    setReasoningEffort(resolvedEffort != null ? String(resolvedEffort) : "");
     setLlmState({
+      api_format: config?.api_format,
+      sampling_context_window: s?.context_window != null ? String(s.context_window) : "",
+      sampling_max_output_tokens: s?.max_output_tokens != null ? String(s.max_output_tokens) : "",
+      sampling_reasoning_effort: s?.reasoning_effort != null ? String(s.reasoning_effort) : "",
+      native_compaction: s?.native_compaction,
+      ...loadAdvancedSampling(s as Record<string, unknown> | undefined),
+      model_profile: s?.model_profile,
+      deployment_revision: s?.deployment_revision,
+      stream_usage: s?.stream_usage,
+      reasoning_replay: s?.reasoning_replay,
+      reasoning_field: s?.reasoning_field,
+      sampling_sources: data.resolved?.sampling_sources,
+      model_defaults: s?.model_defaults ?? [],
       enabled: config?.enabled ?? true,
       base_url: config?.base_url ?? "",
       model: config?.model ?? "",
@@ -748,18 +772,13 @@ window.addEventListener("resize", handleResize);
       setLlmError("");
       await updateUserLlmConfig({
         enabled: llmState.enabled,
+        api_format: llmState.api_format,
         base_url: llmState.base_url.trim(),
         model: llmState.model.trim(),
         api_key: llmState.api_key.trim() || undefined,
         extra_headers: parseJsonObject(llmState.extra_headers_text, "扩展请求头") as Record<string, string>,
         extra_body: parseJsonObject(llmState.extra_body_text, "扩展请求体"),
-        sampling: {
-          temperature: llmState.sampling_temperature.trim() ? Number(llmState.sampling_temperature) : null,
-          frequency_penalty: llmState.sampling_frequency_penalty.trim() ? Number(llmState.sampling_frequency_penalty) : null,
-          presence_penalty: llmState.sampling_presence_penalty.trim() ? Number(llmState.sampling_presence_penalty) : null,
-          top_p: llmState.sampling_top_p.trim() ? Number(llmState.sampling_top_p) : null,
-          repetition_penalty: llmState.sampling_repetition_penalty.trim() ? Number(llmState.sampling_repetition_penalty) : null,
-        },
+        sampling: samplingFromForm(llmState as unknown as Record<string, unknown>),
       });
       await loadUserLlmConfig();
     } catch (err) {
@@ -848,6 +867,7 @@ window.addEventListener("resize", handleResize);
       context_state?: {
         model_id?: string;
         last_known_token_estimate?: number;
+        budget_source?: string;
         effective_window?: number;
         context_window?: number;
         target_input_tokens?: number;
@@ -877,7 +897,7 @@ window.addEventListener("resize", handleResize);
       const effectiveWindow = ctx.effective_window ?? 0;
       const percentUsed = ctx.percent_used || (estimatedTokens && effectiveWindow ? (estimatedTokens / effectiveWindow) * 100 : 0);
       setContextStatus({
-        model: ctx.model_id,
+        model: ctx.model_id ?? "",
         estimatedTokens,
         effectiveWindow,
         contextWindow: ctx.context_window ?? 0,
@@ -886,7 +906,7 @@ window.addEventListener("resize", handleResize);
         blockingLimit: ctx.blocking_limit ?? 0,
         percentUsed,
         state: "idle",
-        detail: "已恢复上下文状态",
+        detail: ctx.budget_source === "unverified_fallback" ? "窗口为未验证的保守估算，请设置实际部署上限" : ctx.budget_source === "catalog_unverified" ? "窗口来自模型目录，请核对实际部署上限" : "已恢复上下文状态",
       });
     }
     const targetLiveRunRef = options?.liveRunTarget ?? liveRunRef;
@@ -1027,10 +1047,13 @@ window.addEventListener("resize", handleResize);
           isStreamingRef.current = true;
           setBusy(true);
         }
+        const snapshotBlocks = [...(activeRun.assistant.blocks ?? [])] as AssistantBlock[];
+        const currentContent = [...snapshotBlocks].reverse().find((block) => block.kind === "content");
+        const currentReasoning = [...snapshotBlocks].reverse().find((block) => block.kind === "reasoning");
         const reconnectRefs = {
-          activeReasoningId: { value: "" },
-          activeContentId: { value: "" },
-          activeContentText: { value: "" },
+          activeReasoningId: { value: currentReasoning?.id ?? "" },
+          activeContentId: { value: currentContent?.id ?? "" },
+          activeContentText: { value: currentContent?.kind === "content" ? currentContent.content : "" },
         };
         const handleEvent = buildEventProcessor(
           reconnectAssistantId,
@@ -1038,7 +1061,7 @@ window.addEventListener("resize", handleResize);
           reconnectRefs,
           isChildView ? childLiveRunRef : liveRunRef,
         );
-        void streamRunEvents(targetSessionId, activeRun.run_id, handleEvent, reconnectAbortController.signal)
+        void streamRunEvents(targetSessionId, activeRun.run_id, handleEvent, reconnectAbortController.signal, activeRun.last_seq ?? 0)
           .catch((streamError) => {
             if (!(streamError instanceof Error && streamError.name === "AbortError")) {
               setError(streamError instanceof Error ? streamError.message : "恢复运行订阅失败");
@@ -1052,7 +1075,7 @@ window.addEventListener("resize", handleResize);
               if (activeViewSessionIdRef.current === targetSessionId) {
                 setChildBusy(false);
               }
-              void refreshSubagents(sessionId || localSessionId).catch(() => undefined);
+              void refreshSubagents(sessionId || localSessionId || undefined).catch(() => undefined);
             } else {
               isStreamingRef.current = false;
               abortControllerRef.current = null;
@@ -1174,6 +1197,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
 
   const restoreActiveRunAssistant = (activeRun: ActiveRunSummary, targetLiveRunRef: LiveRunRef = liveRunRef) => {
     const assistantId = activeRun.assistant.id || `live-${activeRun.run_id}`;
+    if (activeRun.last_seq != null) eventCursorsRef.current.set(`${activeRun.session_id}:${activeRun.run_id}`, activeRun.last_seq);
     targetLiveRunRef.current = { runId: activeRun.run_id, assistantId };
     const responseStartedAt = Date.parse(activeRun.assistant.response_started_at ?? "");
     const normalizedResponseStartedAt = Number.isFinite(responseStartedAt) ? responseStartedAt : undefined;
@@ -1215,12 +1239,14 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
     );
   };
 
+  const eventCursorsRef = useRef(new Map<string, number>());
+
   const buildEventProcessor = (
     assistantId: string,
     effectiveSessionId: string,
     refs: {
-      activeReasoningId: { value: string };
-      activeContentId: { value: string };
+      activeReasoningId: { value: string | null };
+      activeContentId: { value: string | null };
       activeContentText: { value: string };
       wasAborted?: { value: boolean };
       partialContent?: { value: string };
@@ -1229,8 +1255,22 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
   ) => {
     return (event: Record<string, unknown>) => {
       if (activeViewSessionIdRef.current !== effectiveSessionId) return;
+      if (event.session_id && event.session_id !== effectiveSessionId) return;
+      if (event.run_id && typeof event.seq === "number") {
+        const key = `${effectiveSessionId}:${event.run_id}`;
+        const previous = eventCursorsRef.current.get(key) ?? 0;
+        if (event.seq <= previous) return;
+        if (event.seq !== previous + 1) throw new Error("运行事件序号中断，请重新载入会话以恢复完整记录");
+        eventCursorsRef.current.set(key, event.seq);
+      }
       const eventType = String(event.type ?? "");
       const payload = (event.payload ?? {}) as Record<string, unknown>;
+      const previewMetadata = {
+        runId: typeof event.run_id === "string" ? event.run_id : undefined,
+        attemptId: typeof event.attempt_id === "string" ? event.attempt_id : undefined,
+        seq: typeof event.seq === "number" ? event.seq : undefined,
+        contextEpoch: typeof event.context_epoch_id === "number" ? event.context_epoch_id : undefined,
+      };
 
       if (eventType === "run_started") {
         const runId = String(payload.run_id ?? "");
@@ -1360,7 +1400,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           blockingLimit: Number(payload.blocking_limit ?? 0),
           percentUsed: Number(payload.percent_used ?? 0),
           state: "idle",
-          detail: "上下文稳定",
+          detail: payload.budget_source === "unverified_fallback" ? "窗口为未验证的保守估算，请设置实际部署上限" : payload.budget_source === "catalog_unverified" ? "窗口来自模型目录，请核对实际部署上限" : "上下文稳定",
         });
         return;
       }
@@ -1432,8 +1472,9 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       }
 
       if (eventType === "reasoning_delta") {
+        if (typeof payload.part_id === "string" && refs.activeReasoningId.value !== payload.part_id) refs.activeReasoningId.value = "";
         if (!refs.activeReasoningId.value) {
-          refs.activeReasoningId.value = `reasoning-${Date.now()}`;
+          refs.activeReasoningId.value = String(payload.part_id ?? `reasoning-${Date.now()}`);
           appendAssistantBlock(assistantId, {
             id: refs.activeReasoningId.value,
             kind: "reasoning",
@@ -1449,6 +1490,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       }
 
       if (eventType === "content_delta") {
+        if (typeof payload.part_id === "string" && refs.activeContentId.value !== payload.part_id) {
+          refs.activeContentId.value = "";
+          refs.activeContentText.value = "";
+        }
         refs.activeContentText.value += String(payload.delta ?? "");
         if (!refs.activeContentId.value) {
           if (refs.activeReasoningId.value) {
@@ -1458,7 +1503,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
             );
             refs.activeReasoningId.value = null;
           }
-          refs.activeContentId.value = `content-${Date.now()}`;
+          refs.activeContentId.value = String(payload.part_id ?? `content-${Date.now()}`);
           appendAssistantBlock(assistantId, {
             id: refs.activeContentId.value,
             kind: "content",
@@ -1476,6 +1521,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           contentId: refs.activeContentId.value,
           content: refs.activeContentText.value,
           status: "streaming",
+          ...previewMetadata,
         });
         return;
       }
@@ -1483,14 +1529,15 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       if (eventType === "content_completed") {
         if (refs.activeContentId.value && refs.activeContentText.value) {
           updateAssistantBlock(assistantId, refs.activeContentId.value, (block) =>
-            block.kind === "content" ? { ...block, content: refs.activeContentText.value, status: "done" } : block,
+            block.kind === "content" ? { ...block, content: refs.activeContentText.value, status: payload.status === "incomplete" ? "incomplete" : "done" } : block,
           );
           onAssistantPreview?.({
             sessionId: effectiveSessionId,
             messageId: assistantId,
             contentId: refs.activeContentId.value,
             content: refs.activeContentText.value,
-            status: "completed",
+            status: payload.status === "incomplete" ? "incomplete" : "completed",
+            ...previewMetadata,
           });
         }
         if (refs.activeReasoningId.value) {

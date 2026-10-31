@@ -1,6 +1,10 @@
 # AetherCore
 
+[上下文二次审计](docs/context-runtime-audit.md) 已逐项列出设计要求、生产接入点与回归证据，覆盖 DeepSeek 思考回传、原生状态、有界压缩、取消和事件恢复。设置面板提供离线协议检查，会话诊断只返回元数据；真实模型效果仍需内网验收。
+
 能力作用域、MCP 配置与拓展市场请参阅 [docs/capabilities.md](docs/capabilities.md)。
+
+模型接入、上下文账本升级、故障恢复和内网 vLLM 验证请参阅 [上下文运行说明](docs/context-runtime-operations.md)。本版本保留文本思考和原生协议状态，使用真实摘要与可检索原文；未配置的温度、惩罚和思考力度交给模型默认值。已有显式配置继续生效。平台／个人设置支持 Chat Completions、Responses 和 Messages，内网部署应填写实际上下文上限。`AGENT_MAX_CONTINUATIONS=2` 限制自动续写；消息存储升级为 v3，回滚须同时恢复数据库与会话目录的升级前备份。默认端口及沙箱配置保持原值。
 
 [🌐 在线演示](https://cryremis.github.io/aether-core) | [English](./README.md)
 

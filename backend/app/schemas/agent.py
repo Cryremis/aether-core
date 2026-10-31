@@ -80,6 +80,15 @@ class AgentEvent(BaseModel):
         "handoff_completed",
     ]
     session_id: str
+    protocol_version: int = 2
+    event_id: str | None = None
+    turn_id: str | None = None
+    step_id: str | None = None
+    attempt_id: str | None = None
+    message_id: str | None = None
+    part_id: str | None = None
+    context_epoch_id: int | None = None
+    continuation_of: str | None = None
     run_id: str | None = None
     seq: int | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

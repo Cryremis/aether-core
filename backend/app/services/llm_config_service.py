@@ -23,8 +23,10 @@ class RuntimeLlmConfig:
     extra_body: dict[str, Any] = field(default_factory=dict)
     network: LlmNetworkConfig = field(default_factory=LlmNetworkConfig)
     sampling: dict[str, Any] = field(default_factory=dict)
-    reasoning_effort_options: list[str] = field(default_factory=lambda: ["low", "medium", "high", "max"])
+    sampling_sources: dict[str, str] = field(default_factory=dict)
+    reasoning_effort_options: list[str] = field(default_factory=lambda: ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
     enabled: bool = True
+    trace_context: dict[str, Any] = field(default_factory=dict)
 
 
 class LlmConfigService:
@@ -182,16 +184,18 @@ class LlmConfigService:
                 extra_body={},
                 network=self._global_network_config(),
                 sampling=self._global_sampling_dict(),
+                sampling_sources={key: "模型默认" if value is None else "全局" for key, value in self._global_sampling_dict().items()},
                 enabled=True,
             )
 
         # 采样参数: 字段级 merge(全局 → 平台 → 用户),非 None 的值逐层覆盖
-        merged_sampling = self._global_sampling_dict()
-        if platform_config and platform_config.get("enabled"):
-            merged_sampling = self._merge_sampling(merged_sampling, platform_config.get("sampling") or {})
+        merged_sampling = self._global_sampling_dict(model=config.model, base_url=config.base_url, api_format=config.api_format)
+        if platform_config and platform_config.get("enabled") and self._same_deployment(platform_config, {"model": config.model, "base_url": config.base_url, "api_format": config.api_format, "sampling": config.sampling}):
+            merged_sampling = self._merge_sampling(merged_sampling, self._row_sampling(platform_config))
         if user_config and user_config.get("enabled"):
-            merged_sampling = self._merge_sampling(merged_sampling, user_config.get("sampling") or {})
+            merged_sampling = self._merge_sampling(merged_sampling, self._row_sampling(user_config))
         config.sampling = merged_sampling
+        config.sampling_sources = self._sampling_sources(merged_sampling, platform_config, user_config, config.model, config.base_url, config.api_format)
         return config
 
     def resolve_summary_for_user(self, user: StoreUser) -> LlmResolvedConfig:
@@ -214,7 +218,9 @@ class LlmConfigService:
         resolved.sampling = LlmSamplingParams(**self._resolve_merged_sampling(
             platform_id=platform_id, owner_user_id=user.user_id,
         ))
-        return resolved
+        resolved.sampling_sources = self._sampling_sources(resolved.sampling.model_dump(),
+            store_service.get_platform_llm_config(platform_id) if platform_id else None, user_row, resolved.model, resolved.base_url, resolved.api_format)
+        return self._with_profile_summary(resolved)
 
     def resolve_summary_for_embed_user(self, platform_id: int, external_user_id: str) -> LlmResolvedConfig:
         user_row = store_service.get_embed_user_llm_config(platform_id, external_user_id)
@@ -230,6 +236,17 @@ class LlmConfigService:
         resolved.sampling = LlmSamplingParams(**self._resolve_merged_sampling(
             platform_id=platform_id, external_user_id=external_user_id,
         ))
+        resolved.sampling_sources = self._sampling_sources(resolved.sampling.model_dump(),
+            store_service.get_platform_llm_config(platform_id), user_row, resolved.model, resolved.base_url, resolved.api_format)
+        return self._with_profile_summary(resolved)
+
+    def _with_profile_summary(self, resolved: LlmResolvedConfig) -> LlmResolvedConfig:
+        from app.services.context.model_profile import resolve_model_profile
+        profile = resolve_model_profile(resolved)
+        resolved.model_profile_id = profile.profile_id
+        resolved.reasoning_required_with_tools = profile.requires_reasoning(resolved, [True])
+        if profile.effort_options:
+            resolved.reasoning_effort_options = list(profile.effort_options)
         return resolved
 
     def _to_summary(self, row: dict[str, Any]) -> LlmConfigSummary:
@@ -243,7 +260,7 @@ class LlmConfigService:
             extra_headers=row.get("extra_headers") or {},
             extra_body=row.get("extra_body") or {},
             network=self._public_network_config(self._normalize_network(row.get("network"))),
-            sampling=LlmSamplingParams(**(row.get("sampling") or {})),
+            sampling=LlmSamplingParams(**self._row_sampling(row)),
             updated_at=row.get("updated_at"),
         )
 
@@ -258,7 +275,7 @@ class LlmConfigService:
             extra_headers=row.get("extra_headers") or {},
             extra_body=row.get("extra_body") or {},
             network=self._normalize_network(row.get("network")),
-            sampling=row.get("sampling") or {},
+            sampling=self._row_sampling(row),
             enabled=bool(row.get("enabled", True)),
         )
 
@@ -274,23 +291,50 @@ class LlmConfigService:
             fetch_timeout_seconds=settings.llm_network_fetch_timeout_seconds,
         )
 
-    def _global_sampling_dict(self) -> dict[str, Any]:
+    def _global_sampling_dict(self, *, model: str | None = None, base_url: str | None = None, api_format: str = "openai-compatible") -> dict[str, Any]:
         """全局采样参数默认值(从 env 读取)。"""
+        applicable = model is None or (model == settings.llm_model and str(base_url or "").rstrip("/") == settings.llm_base_url.rstrip("/") and api_format == "openai-compatible")
         return {
-            "temperature": settings.llm_temperature,
-            "frequency_penalty": settings.llm_frequency_penalty,
-            "presence_penalty": settings.llm_presence_penalty,
+            "temperature": settings.llm_temperature if applicable else None,
+            "frequency_penalty": settings.llm_frequency_penalty if applicable else None,
+            "presence_penalty": settings.llm_presence_penalty if applicable else None,
             "top_p": None,
             "repetition_penalty": None,
-            "reasoning_effort": "high",
+            "reasoning_effort": None,
         }
+
+    def _row_sampling(self, row: dict[str, Any]) -> dict[str, Any]:
+        """兼容旧扩展参数；保持原有有效值，并让预算与来源可见。"""
+        sampling = dict(row.get("sampling") or {})
+        extra = row.get("extra_body") or {}
+        container = extra.get("reasoning" if row.get("api_format") == "openai-responses" else "output_config") if row.get("api_format") in {"openai-responses", "anthropic-messages"} else None
+        if isinstance(container, dict) and sampling.get("reasoning_effort") is None and container.get("effort") is not None:
+            sampling["reasoning_effort"] = container["effort"]
+        for key in ("temperature", "frequency_penalty", "presence_penalty", "top_p", "repetition_penalty", "reasoning_effort", "stop", "seed", "parallel_tool_calls"):
+            if key in extra:
+                if key in sampling.get("model_defaults", []):
+                    raise ValueError(f"旧配置 extra_body.{key} 与模型默认模式冲突，请重新保存配置")
+                sampling[key] = extra[key]
+        limits = [extra[key] for key in ("max_tokens", "max_completion_tokens", "max_output_tokens") if key in extra]
+        if len(limits) > 1:
+            raise ValueError("旧配置有多个输出预算，请重新保存配置")
+        if limits:
+            sampling["max_output_tokens"] = limits[0]
+        return sampling
 
     def _merge_sampling(self, base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         """字段级 merge: override 中非 None 的字段覆盖 base 的对应值。"""
         merged = dict(base)
+        defaults = set(base.get("model_defaults", []))
+        for key in override.get("model_defaults", []):
+            merged[key] = None
+            defaults.add(key)
         for key, value in override.items():
-            if value is not None:
+            if value is not None and key != "model_defaults":
                 merged[key] = value
+                defaults.discard(key)
+        if defaults or "model_defaults" in merged or "model_defaults" in override:
+            merged["model_defaults"] = sorted(defaults)
         return merged
 
     def _resolve_merged_sampling(
@@ -302,19 +346,45 @@ class LlmConfigService:
     ) -> dict[str, Any]:
         """采样参数三层字段级继承(用于 UI summary)。"""
         merged = self._global_sampling_dict()
+        platform_config = store_service.get_platform_llm_config(int(platform_id)) if platform_id else None
+        selected_user = store_service.get_user_llm_config(int(owner_user_id)) if owner_user_id else (
+            store_service.get_embed_user_llm_config(int(platform_id), str(external_user_id)) if platform_id and external_user_id else None)
+        target = selected_user if selected_user and selected_user.get("enabled") else platform_config
+        if target and target.get("enabled"):
+            merged = self._global_sampling_dict(model=target.get("model"), base_url=target.get("base_url"), api_format=target.get("api_format") or "openai-compatible")
         if platform_id:
             platform_config = store_service.get_platform_llm_config(int(platform_id))
-            if platform_config and platform_config.get("enabled"):
-                merged = self._merge_sampling(merged, platform_config.get("sampling") or {})
+            if platform_config and platform_config.get("enabled") and (not target or self._same_deployment(platform_config, target)):
+                merged = self._merge_sampling(merged, self._row_sampling(platform_config))
         if owner_user_id:
             user_config = store_service.get_user_llm_config(int(owner_user_id))
             if user_config and user_config.get("enabled"):
-                merged = self._merge_sampling(merged, user_config.get("sampling") or {})
+                merged = self._merge_sampling(merged, self._row_sampling(user_config))
         elif platform_id and external_user_id:
             embed_config = store_service.get_embed_user_llm_config(int(platform_id), str(external_user_id))
             if embed_config and embed_config.get("enabled"):
-                merged = self._merge_sampling(merged, embed_config.get("sampling") or {})
+                merged = self._merge_sampling(merged, self._row_sampling(embed_config))
         return merged
+
+    def _same_deployment(self, source, target) -> bool:
+        if source.get("model") != target.get("model") or str(source.get("base_url", "")).rstrip("/") != str(target.get("base_url", "")).rstrip("/") or (source.get("api_format") or "openai-compatible") != (target.get("api_format") or "openai-compatible"):
+            return False
+        source_revision = (source.get("sampling") or {}).get("deployment_revision")
+        target_revision = (target.get("sampling") or {}).get("deployment_revision")
+        return not (source_revision and target_revision and source_revision != target_revision)
+
+    def _sampling_sources(self, values, platform, user, model, base_url, api_format="openai-compatible") -> dict[str, str]:
+        sources = {key: "模型默认" if value is None else "全局" for key, value in values.items()}
+        for label, row in (("平台", platform), ("个人", user)):
+            if not row or not row.get("enabled") or not self._same_deployment(row, {"model": model, "base_url": base_url, "api_format": api_format, "sampling": values}):
+                continue
+            sampling = self._row_sampling(row)
+            for key in sampling.get("model_defaults", []):
+                sources[key] = f"模型默认（{label}指定）"
+            for key, value in sampling.items():
+                if value is not None and key != "model_defaults":
+                    sources[key] = label
+        return sources
 
     def _normalize_network(self, value: Any) -> LlmNetworkConfig:
         if isinstance(value, LlmNetworkConfig):

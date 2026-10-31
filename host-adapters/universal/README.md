@@ -34,6 +34,8 @@ Proactive prompts first appear 30-60 seconds after the page opens. After a promp
 
 Live assistant previews are independent from proactive prompt suppression. Public instance methods `showAssistantPreview(text)`, `hideAssistantPreview()`, and `destroy()` are available for host lifecycle integrations. `onAssistantPreview` observes normalized preview updates.
 
+Preview metadata optionally includes `runId`, `attemptId`, `seq`, and `contextEpoch`, alongside the existing message/content identifiers. Status is `streaming`, `completed`, or `incomplete`; a truncated response is terminal for preview throttling but is not a completed answer. The adapter ignores duplicate or older sequence numbers within the same session/run. Gaps are permitted because reasoning and tool events are not assistant previews. Older hosts that omit this metadata retain their existing behavior.
+
 ## Host Lifecycle Events
 
 The Workbench notifies the adapter when an agent run or tool call changes state. Host products can use `onRunStatus` to activate their own page-command channel, and `onToolStatus` for a more precise wake-up signal. The events carry lifecycle metadata only; host page commands remain owned by each host product.

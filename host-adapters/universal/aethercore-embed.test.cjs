@@ -2,6 +2,24 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 
+test("preview cursor rejects replay but permits non-content sequence gaps and incomplete terminal", () => {
+  const fixture = createFixture();
+  const instance = new fixture.AetherCoreEmbed({ assistantPreview: { enabled: true, autoHideMs: 0 } });
+  instance.isWorkbenchMessage = () => true;
+  const received = [];
+  instance.queueAssistantPreview = (preview) => received.push(preview);
+  const send = (seq, status) => instance.handleWorkbenchMessage({ data: { source: "aethercore-workbench", type: "aethercore:assistant-preview",
+    payload: { session_id: "s", message_id: "m", content_id: "p", run_id: "r", attempt_id: "a", seq, content: "192.0.2.10", status } } });
+  send(2, "streaming");
+  send(2, "streaming");
+  send(1, "streaming");
+  send(9, "incomplete");
+  assert.deepEqual(received.map((preview) => preview.seq), [2, 9]);
+  assert.equal(received[1].status, "incomplete");
+  assert.equal(received[1].content, "192.0.2.10");
+  instance.destroy();
+});
+
 function createStorage() {
   const values = new Map();
   return {

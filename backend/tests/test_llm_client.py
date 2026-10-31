@@ -72,8 +72,19 @@ class FakeResponse:
     async def aiter_lines(self):
         for line in self._lines:
             yield line
+            if line.startswith("data:"):
+                try:
+                    json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    yield ""
         if self._line_error is not None:
             raise self._line_error
+
+    async def aiter_bytes(self):
+        async for line in self.aiter_lines():
+            yield (line + "\n").encode("utf-8")
 
 
 class FakeStreamContext:
@@ -138,7 +149,7 @@ def test_payload_strips_tool_fields_when_tools_are_disabled_via_extra_body():
     assert "tool_stream" not in payload
 
 
-def test_stream_chat_completion_retries_without_tools_on_gateway_timeout(monkeypatch):
+def test_stream_gateway_timeout_preserves_tools_and_surfaces_error(monkeypatch):
     FakeAsyncClient.reset()
     FakeAsyncClient.stream_responses = [
         FakeResponse(status_code=504),
@@ -164,16 +175,13 @@ def test_stream_chat_completion_retries_without_tools_on_gateway_timeout(monkeyp
             items.append(chunk)
         return items
 
-    chunks = asyncio.run(collect())
-
-    assert chunks == [{"choices": [{"delta": {"content": "hello"}}]}]
-    assert len(FakeAsyncClient.stream_payloads) == 2
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(collect())
+    assert len(FakeAsyncClient.stream_payloads) == 1
     assert "tools" in FakeAsyncClient.stream_payloads[0]
-    assert "tools" not in FakeAsyncClient.stream_payloads[1]
-    assert "tool_choice" not in FakeAsyncClient.stream_payloads[1]
 
 
-def test_create_chat_completion_retries_without_tools_on_gateway_timeout(monkeypatch):
+def test_completion_gateway_timeout_preserves_tools_and_surfaces_error(monkeypatch):
     FakeAsyncClient.reset()
     FakeAsyncClient.post_responses = [
         FakeResponse(status_code=504),
@@ -184,21 +192,14 @@ def test_create_chat_completion_retries_without_tools_on_gateway_timeout(monkeyp
     client = LlmClient()
     config = make_runtime_config()
 
-    message = asyncio.run(
-        client.create_chat_completion(
-            config,
-            [{"role": "user", "content": "hi"}],
-            [{"type": "function", "function": {"name": "demo", "parameters": {}}}],
-        )
-    )
-
-    assert message == {"role": "assistant", "content": "ok"}
-    assert len(FakeAsyncClient.post_payloads) == 2
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(client.create_chat_completion(config, [{"role": "user", "content": "hi"}],
+            [{"type": "function", "function": {"name": "demo", "parameters": {}}}]))
+    assert len(FakeAsyncClient.post_payloads) == 1
     assert "tools" in FakeAsyncClient.post_payloads[0]
-    assert "tools" not in FakeAsyncClient.post_payloads[1]
 
 
-def test_stream_chat_completion_retries_once_when_stream_breaks_before_any_chunk(monkeypatch):
+def test_transport_retry_belongs_to_orchestrator(monkeypatch):
     FakeAsyncClient.reset()
     transport_error = httpx.RemoteProtocolError("peer closed connection without sending complete message body")
     FakeAsyncClient.stream_responses = [
@@ -221,10 +222,9 @@ def test_stream_chat_completion_retries_once_when_stream_breaks_before_any_chunk
             items.append(chunk)
         return items
 
-    chunks = asyncio.run(collect())
-
-    assert chunks == [{"choices": [{"delta": {"content": "hello"}}]}]
-    assert len(FakeAsyncClient.stream_payloads) == 2
+    with pytest.raises(httpx.RemoteProtocolError):
+        asyncio.run(collect())
+    assert len(FakeAsyncClient.stream_payloads) == 1
 
 
 def test_create_chat_completion_raises_with_downstream_error_body(monkeypatch):
@@ -247,7 +247,7 @@ def test_create_chat_completion_raises_with_downstream_error_body(monkeypatch):
         )
 
 
-def test_stream_chat_completion_keeps_final_downstream_error_body_after_tool_retry(monkeypatch):
+def test_unsupported_tools_is_not_silently_downgraded(monkeypatch):
     FakeAsyncClient.reset()
     FakeAsyncClient.stream_responses = [
         FakeResponse(status_code=400, json_data={"error": {"message": "tools are not supported"}}),
@@ -268,9 +268,8 @@ def test_stream_chat_completion_keeps_final_downstream_error_body_after_tool_ret
             items.append(chunk)
         return items
 
-    with pytest.raises(httpx.HTTPStatusError, match="invalid model: qwen3.6"):
+    with pytest.raises(httpx.HTTPStatusError, match="tools are not supported"):
         asyncio.run(collect())
 
-    assert len(FakeAsyncClient.stream_payloads) == 2
+    assert len(FakeAsyncClient.stream_payloads) == 1
     assert "tools" in FakeAsyncClient.stream_payloads[0]
-    assert "tools" not in FakeAsyncClient.stream_payloads[1]

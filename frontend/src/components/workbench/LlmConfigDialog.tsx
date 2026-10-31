@@ -1,3 +1,4 @@
+import { ModelOptionsFields } from "../ModelOptionsFields";
 import type { LlmDialogState } from "../../pages/workbench/types";
 
 type LlmConfigDialogProps = {
@@ -58,12 +59,13 @@ export function LlmConfigDialog({
           <details className="llm-advanced-panel">
             <summary>采样参数</summary>
             <p className="llm-advanced-panel__hint">调整温度与重复惩罚。留空表示继承上层（平台→全局）默认值。</p>
-            <div className="llm-sampling-grid">
-              <label className="admin-panel__field"><span>Temperature</span><input className="settings-input" type="number" step="0.1" min="0" max="2" value={llmState.sampling_temperature} onChange={(e) => onChange((current) => ({ ...current, sampling_temperature: e.target.value }))} placeholder="继承" /></label>
-              <label className="admin-panel__field"><span>Frequency Penalty</span><input className="settings-input" type="number" step="0.1" min="-2" max="2" value={llmState.sampling_frequency_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_frequency_penalty: e.target.value }))} placeholder="继承" /></label>
-              <label className="admin-panel__field"><span>Presence Penalty</span><input className="settings-input" type="number" step="0.1" min="-2" max="2" value={llmState.sampling_presence_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_presence_penalty: e.target.value }))} placeholder="继承" /></label>
-              <label className="admin-panel__field"><span>Top-P</span><input className="settings-input" type="number" step="0.05" min="0" max="1" value={llmState.sampling_top_p} onChange={(e) => onChange((current) => ({ ...current, sampling_top_p: e.target.value }))} placeholder="继承" /></label>
-              <label className="admin-panel__field"><span>Repetition Penalty</span><input className="settings-input" type="number" step="0.05" min="1" max="2" value={llmState.sampling_repetition_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_repetition_penalty: e.target.value }))} placeholder="继承" /></label>
+            <ModelOptionsFields value={llmState} onChange={(patch) => onChange((current) => ({ ...current, ...patch }))} />
+          <div className="llm-sampling-grid">
+              <label className="admin-panel__field"><span>Temperature</span><input className="settings-input" type="number" step="0.1" min="0" max="2" value={llmState.sampling_temperature} onChange={(e) => onChange((current) => ({ ...current, sampling_temperature: e.target.value, model_defaults: current.model_defaults?.filter((key) => key !== "temperature") }))} placeholder="继承" /></label>
+              <label className="admin-panel__field"><span>Frequency Penalty</span><input className="settings-input" type="number" step="0.1" min="-2" max="2" value={llmState.sampling_frequency_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_frequency_penalty: e.target.value, model_defaults: current.model_defaults?.filter((key) => key !== "frequency_penalty") }))} placeholder="继承" /></label>
+              <label className="admin-panel__field"><span>Presence Penalty</span><input className="settings-input" type="number" step="0.1" min="-2" max="2" value={llmState.sampling_presence_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_presence_penalty: e.target.value, model_defaults: current.model_defaults?.filter((key) => key !== "presence_penalty") }))} placeholder="继承" /></label>
+              <label className="admin-panel__field"><span>Top-P</span><input className="settings-input" type="number" step="0.05" min="0" max="1" value={llmState.sampling_top_p} onChange={(e) => onChange((current) => ({ ...current, sampling_top_p: e.target.value, model_defaults: current.model_defaults?.filter((key) => key !== "top_p") }))} placeholder="继承" /></label>
+              <label className="admin-panel__field"><span>Repetition Penalty</span><input className="settings-input" type="number" step="0.05" min="1" max="2" value={llmState.sampling_repetition_penalty} onChange={(e) => onChange((current) => ({ ...current, sampling_repetition_penalty: e.target.value, model_defaults: current.model_defaults?.filter((key) => key !== "repetition_penalty") }))} placeholder="继承" /></label>
             </div>
           </details>
           <details className="llm-advanced-panel">

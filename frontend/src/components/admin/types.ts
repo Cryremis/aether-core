@@ -42,6 +42,24 @@ export type DirectoryCapableFile = File & {
 };
 
 export type LlmConfigFormState = {
+  api_format?: "openai-compatible" | "openai-responses" | "anthropic-messages";
+  sampling_context_window?: string;
+  sampling_max_output_tokens?: string;
+  sampling_reasoning_effort?: string;
+  model_defaults?: string[];
+  model_profile?: "auto" | "generic" | "deepseek-thinking";
+  deployment_revision?: string;
+  deployment_profile_text?: string;
+  sampling_stop_text?: string;
+  sampling_seed?: string;
+  parallel_tool_calls?: boolean;
+  compaction_max_output_tokens?: string;
+  compaction_max_calls?: string;
+  stream_usage?: boolean;
+  native_compaction?: boolean;
+  reasoning_replay?: "auto" | "disabled";
+  reasoning_field?: "reasoning_content" | "reasoning";
+  sampling_sources?: Record<string, string>;
   enabled: boolean;
   base_url: string;
   model: string;

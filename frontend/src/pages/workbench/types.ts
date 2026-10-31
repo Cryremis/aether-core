@@ -19,7 +19,7 @@ export type SkillItem = {
 
 export type AssistantBlock =
   | { id: string; kind: "reasoning"; content: string; started_at?: string | null; ended_at?: string | null; status?: string }
-  | { id: string; kind: "content"; content: string; status: "streaming" | "done" | "aborted" }
+  | { id: string; kind: "content"; content: string; status: "streaming" | "done" | "aborted" | "incomplete" }
   | { id: string; kind: "elapsed"; elapsed_ms: number }
   | {
       id: string;
@@ -73,7 +73,7 @@ export type TranscriptMessage =
     };
 
 export type PendingUserEcho =
-  | { id: string; role: "user"; content: string }
+  | { id: string; role: "user"; content: string; timestamp?: string | null }
   | {
       id: string;
       role: "elicitation_response";
@@ -107,6 +107,24 @@ export type ContextStatus = {
 export type SidebarView = "sessions" | "files" | "skills" | "schedules";
 
 export type LlmDialogState = {
+  api_format?: "openai-compatible" | "openai-responses" | "anthropic-messages";
+  sampling_context_window?: string;
+  sampling_max_output_tokens?: string;
+  sampling_reasoning_effort?: string;
+  model_defaults?: string[];
+  model_profile?: "auto" | "generic" | "deepseek-thinking";
+  deployment_revision?: string;
+  deployment_profile_text?: string;
+  sampling_stop_text?: string;
+  sampling_seed?: string;
+  parallel_tool_calls?: boolean;
+  compaction_max_output_tokens?: string;
+  compaction_max_calls?: string;
+  stream_usage?: boolean;
+  native_compaction?: boolean;
+  reasoning_replay?: "auto" | "disabled";
+  reasoning_field?: "reasoning_content" | "reasoning";
+  sampling_sources?: Record<string, string>;
   enabled: boolean;
   base_url: string;
   model: string;
@@ -149,7 +167,11 @@ export type WorkbenchPageProps = {
     messageId: string;
     contentId: string;
     content: string;
-    status: "streaming" | "completed";
+    status: "streaming" | "completed" | "incomplete";
+    runId?: string;
+    attemptId?: string;
+    seq?: number;
+    contextEpoch?: number;
   }) => void;
 };
 

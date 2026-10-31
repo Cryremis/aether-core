@@ -10,6 +10,13 @@ import pytest
 import app.services.session_service as session_service_module
 from app.services.session_service import SessionService
 from app.services.session_types import AgentSession
+from app.services.store import store_service
+
+
+@pytest.fixture(autouse=True)
+def isolated_ledger(monkeypatch, tmp_path):
+    monkeypatch.setattr(store_service, "_db_path", tmp_path / "ledger.db")
+    store_service.initialize()
 
 
 def make_service(metadata_path: Path) -> SessionService:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -208,11 +209,30 @@ class SessionService:
         self.persist(session)
 
     def _load_from_disk(self, session_id: str) -> AgentSession | None:
+        from app.services.context.history_store import history_store
         metadata_path = self._metadata_path(session_id)
-        if not metadata_path.exists():
+        payload = history_store.snapshot(session_id)
+        if payload is None and not metadata_path.exists():
             return None
-        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-        return AgentSession(
+        if payload is None:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if int(payload.get("message_schema_version", 1)) > 3:
+            raise RuntimeError("当前版本不能读取更新版本的会话格式，拒绝降级写入")
+        if int(payload.get("message_schema_version", 1)) < 3:
+            # 迁移前先归档原始文件和消息；重复加载不会覆盖已有备份。
+            if metadata_path.exists():
+                original = metadata_path.read_bytes()
+                backup = metadata_path.with_name(f"session.pre-context-v3.{hashlib.sha256(original).hexdigest()[:16]}.json")
+                if not backup.exists():
+                    temporary = backup.with_name(f"{backup.name}.{uuid.uuid4().hex}.tmp")
+                    try:
+                        temporary.write_bytes(original)
+                        os.replace(temporary, backup)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            payload["ledger_revision"] = history_store.capture(session_id, payload,
+                expected_revision=int(payload.get("ledger_revision", 0)))
+        session = AgentSession(
             session_id=session_id,
             workspace_id=str(payload.get("workspace_id") or ""),
             conversation_id=payload.get("conversation_id"),
@@ -250,6 +270,12 @@ class SessionService:
             artifacts=payload.get("artifacts", []),
             uploads=payload.get("uploads", []),
             context_state=payload.get("context_state", {}),
+            provider_binding=str(payload.get("provider_binding") or ""),
+            context_epoch=int(payload.get("context_epoch", 0)),
+            frozen_system_messages=payload.get("frozen_system_messages", []),
+            frozen_tools_hash=str(payload.get("frozen_tools_hash") or ""),
+            frozen_history_prefix_hash=str(payload.get("frozen_history_prefix_hash") or ""),
+            ledger_revision=int(payload.get("ledger_revision", 0)),
             message_schema_version=int(payload.get("message_schema_version", 1)),
             allow_network=bool(payload.get("allow_network", True)),
             disabled_capability_ids=[str(item) for item in payload.get("disabled_capability_ids", [])],
@@ -262,6 +288,11 @@ class SessionService:
             last_access=float(payload.get("last_access", time.time())),
             active_run_view=payload.get("active_run_view"),
         )
+        from app.services.context.message_adapter import context_message_adapter
+        migrated = context_message_adapter.normalize_session(session)
+        if history_store.recover_attempts(session) or migrated:
+            session.transcript = transcript_service.build_session_transcript(session)
+        return session
 
     def reconcile_active_run_view(self, session: AgentSession) -> None:
         """把磁盘上的运行快照与数据库 run 状态对齐，避免重启后 UI 永远显示执行中。"""
@@ -277,6 +308,11 @@ class SessionService:
             session.active_run_view = None
 
     def _write_metadata(self, session: AgentSession) -> None:
+        # 快照采集与提交使用同一把锁，避免清理或其他线程写入后再提交旧投影。
+        with self._metadata_lock(session.session_id):
+            self._write_metadata_locked(session)
+
+    def _write_metadata_locked(self, session: AgentSession) -> None:
         if not session.workspace_id:
             raise RuntimeError("会话尚未绑定 Workspace")
         payload = {
@@ -307,6 +343,11 @@ class SessionService:
             "artifacts": session.artifacts,
             "uploads": session.uploads,
             "context_state": session.context_state,
+            "provider_binding": session.provider_binding,
+            "context_epoch": session.context_epoch,
+            "frozen_system_messages": session.frozen_system_messages,
+            "frozen_tools_hash": session.frozen_tools_hash,
+            "frozen_history_prefix_hash": session.frozen_history_prefix_hash,
             "message_schema_version": session.message_schema_version,
             "allow_network": session.allow_network,
             "disabled_capability_ids": session.disabled_capability_ids,
@@ -327,6 +368,10 @@ class SessionService:
         # Windows 下目标文件可能被短暂的杀毒/索引/读取占用；串行化同会话写入，
         # 并用唯一临时文件避免两个写入方抢占同一个 .tmp。
         with self._metadata_lock(session.session_id):
+            from app.services.context.history_store import history_store
+            session.ledger_revision = history_store.capture(session.session_id, payload, expected_revision=session.ledger_revision)
+            payload["ledger_revision"] = session.ledger_revision
+            serialized = json.dumps(payload, ensure_ascii=False, indent=2)
             try:
                 temporary_path.write_text(serialized, encoding="utf-8")
                 for attempt in range(20):
@@ -341,6 +386,8 @@ class SessionService:
                 temporary_path.unlink(missing_ok=True)
 
     def delete_session(self, session_id: str) -> bool:
+        from app.services.context.history_store import history_store
+        history_store.delete(session_id)
         session = self._sessions.get(session_id)
         workspace_id = (session.workspace_id if session else None) or self._find_workspace_id(session_id)
         self._sessions.pop(session_id, None)
