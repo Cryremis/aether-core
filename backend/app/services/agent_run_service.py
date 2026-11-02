@@ -12,7 +12,7 @@ from typing import Any
 from app.runtime.engine import agent_engine
 from app.runtime.event_protocol import make_event
 from app.core.config import settings
-from app.core.model_errors import public_run_error
+from app.core.model_errors import public_run_error, public_run_error_code
 from app.schemas.agent import AgentEvent
 from app.services.session_service import session_service
 from app.services.runtime_state import runtime_state_service
@@ -520,6 +520,7 @@ class AgentRunService:
                 session,
                 "error",
                 message=public_run_error(),
+                error_code=public_run_error_code(exc),
                 error_id=run_id,
             )
             self._apply_event_to_active_view(session, error_event)
@@ -529,6 +530,7 @@ class AgentRunService:
                 "completed",
                 elapsed_ms=self._active_elapsed_ms(session),
                 subtype="error",
+                error_code=public_run_error_code(exc),
             )
             terminal_event = completed_event
         finally:
@@ -730,6 +732,7 @@ class AgentRunService:
             tool_block = {
                 "id": tool_call_id,
                 "kind": "tool",
+                "toolName": str(payload.get("tool_name") or "tool"),
                 "title": str(((payload.get("tool_display") or {}) if isinstance(payload.get("tool_display"), dict) else {}).get("title") or payload.get("tool_name") or "tool"),
                 "meta": str(((payload.get("tool_display") or {}) if isinstance(payload.get("tool_display"), dict) else {}).get("meta") or "tool"),
                 "argumentsText": self._pretty_json(payload.get("input")),

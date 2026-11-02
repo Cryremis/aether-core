@@ -166,6 +166,7 @@ def test_external_auth_failure_is_not_retried_and_has_only_friendly_public_error
     events = service.list_events_after(run_id, 0)
     error = next(event for event in events if event.type == "error")
     assert error.payload["message"] == public_run_error()
+    assert next(event for event in events if event.type == "completed").payload["error_code"] == "MODEL_ACCESS_DENIED"
     assert "SECRET" not in json.dumps([event.model_dump(mode="json") for event in events])
     assert "traceback" not in error.payload
     assert len(FakeAsyncClient.stream_payloads) == 1

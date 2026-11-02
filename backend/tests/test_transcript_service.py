@@ -90,7 +90,8 @@ def test_transcript_service_uses_canonical_display_for_sandbox_shell_alias():
     assert len(transcript) == 1
     block = transcript[0]["blocks"][0]
     assert block["kind"] == "tool"
-    assert block["title"] == "npm"
+    assert block["title"] == "sandboxshell"
+    assert block["toolName"] == "sandboxshell"
     assert block["meta"] == "bash"
 
 

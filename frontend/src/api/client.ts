@@ -432,7 +432,7 @@ export type TranscriptAssistantBlock =
   | { id: string; kind: "content"; content: string; status: "streaming" | "done" | "aborted" }
   | { id: string; kind: "runtime_notice"; eventType: "runtime_recreated"; title: string; detail?: string }
   | { id: string; kind: "elapsed"; elapsed_ms: number }
-  | { id: string; kind: "tool"; title: string; meta: string; argumentsText: string; outputText: string; liveOutputText?: string; status: "running" | "done" | "aborted" };
+  | { id: string; kind: "tool"; toolName?: string; title: string; meta: string; argumentsText: string; outputText: string; liveOutputText?: string; status: "running" | "done" | "aborted" };
 
 export type TranscriptChatMessage =
   | {

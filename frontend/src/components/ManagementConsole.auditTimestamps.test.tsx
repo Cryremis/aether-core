@@ -34,6 +34,20 @@ function buildAuditDetail(): AuditConversationDetail {
 }
 
 describe("audit conversation timestamps", () => {
+  it("keeps a call note ahead of argument summaries in live and audit tool cards", () => {
+    const detail = buildAuditDetail();
+    detail.transcript![1] = { id: "assistant-note", role: "assistant", elapsedMs: null, streaming: false, blocks: [
+      { id: "tool-note", kind: "tool", title: "检查训练环境", toolName: "sandbox_shell",
+        meta: "bash", argumentsText: '{"command":"uname -a"}', outputText: "Linux", status: "done" },
+    ] };
+    const messages = convertAuditDetailToChatMessages(detail);
+    const html = renderToStaticMarkup(<AppPreferencesProvider>
+      <ChatTimeline loading={false} messages={messages} actionsDisabled={true} />
+    </AppPreferencesProvider>);
+    expect(html).toContain('class="tool-title__summary">检查训练环境</span>');
+    expect(messages[1]).toMatchObject({ blocks: [{ toolName: "sandbox_shell", title: "检查训练环境" }] });
+  });
+
   it("renders compaction summary as a separate expandable audit event", () => {
     const detail = buildAuditDetail();
     detail.transcript!.push({

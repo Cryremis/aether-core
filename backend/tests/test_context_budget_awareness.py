@@ -70,15 +70,19 @@ def test_native_warning_is_append_only_and_not_repeated_without_growth(protocol)
 
 
 @pytest.mark.parametrize("protocol", ["openai-responses", "anthropic-messages"])
-def test_native_notice_crossing_hard_limit_does_not_commit_a_partial_history(protocol):
+def test_native_notice_cannot_block_an_otherwise_valid_request(protocol):
     pipeline = make_pipeline()
     config = replace(make_runtime_config(), api_format=protocol, sampling={"context_window": 10000, "max_output_tokens": 1000})
     session = AgentSession("blocked_notice", messages=[context_message_adapter.make_user_message("a" * 14000, turn_index=1)])
     original = copy.deepcopy(session.messages)
     assert pipeline._estimate_request(session.messages, [], runtime=config) < 4750
-    with pytest.raises(ContextOverflowError):
-        pipeline.prepare_for_llm(session=session, llm_runtime=config, messages=session.messages, turn_index=1, allow_compaction=False)
-    assert session.messages == original
+    prepared = pipeline.prepare_for_llm(session=session, llm_runtime=config, messages=session.messages, turn_index=1, allow_compaction=False)
+    assert prepared.state.last_known_token_estimate < prepared.state.blocking_limit
+    assert prepared.ephemeral_warning
+    assert session.messages[:len(original)] == original
+    if len(session.messages) > len(original):
+        assert "提醒前输入估算" in session.messages[-1]["content"]
+        assert prepared.messages[-1]["content"] == session.messages[-1]["content"]
 
 
 def test_warning_does_not_offer_tools_outside_the_current_allowlist():

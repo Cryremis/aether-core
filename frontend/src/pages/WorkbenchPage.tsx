@@ -1568,11 +1568,12 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         refs.activeContentId.value = "";
         refs.activeContentText.value = "";
         const displayPayload = (payload.tool_display ?? {}) as Record<string, unknown>;
-        if (typeof displayPayload.title !== "string") return;
+        const toolName = String(payload.tool_name ?? "tool");
         appendAssistantBlock(assistantId, {
           id: String(payload.id ?? `tool-${Date.now()}`),
           kind: "tool",
-          title: displayPayload.title,
+          title: typeof displayPayload.title === "string" && displayPayload.title.trim() ? displayPayload.title : toolName,
+          toolName,
           meta: typeof displayPayload.meta === "string" ? displayPayload.meta : "tool",
           argumentsText: stringifyStructured(payload.input ?? {}),
           outputText: "",

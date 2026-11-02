@@ -174,6 +174,7 @@ export function convertAuditDetailToChatMessages(detail: AuditConversationDetail
             id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
             kind: "tool",
             title: toolBlock.title || "Tool",
+            toolName: toolBlock.toolName,
             meta: toolBlock.meta || "",
             argumentsText: toolBlock.argumentsText || "",
             outputText: toolBlock.outputText || "",

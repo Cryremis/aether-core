@@ -701,8 +701,23 @@ class ContextPipeline:
             notice["budget_notice"] = {"epoch": session.context_epoch, "compaction_count": state.compaction_count, "bucket": bucket}
             notice = context_message_adapter.ensure_runtime_metadata(notice)
             persisted = notice
+        original_messages = messages
+        before_notice = state.last_known_token_estimate
         messages = [*messages, notice]
         measure(messages)  # 提醒本身也必须进入最终请求预算，不能挤占未计数空间。
+        if before_notice < state.blocking_limit <= state.last_known_token_estimate:
+            # 辅助提醒不能使本可执行的请求被阻断；先缩短，仍放不下则省略。
+            notice["content"] = (
+                f"[runtime context] 提醒前输入估算 {before_notice}/{state.effective_window} tokens "
+                f"({self._safe_percent(before_notice, state.effective_window):.1f}%)，"
+                f"自动压缩阈值 {state.blocking_limit}。"
+                + ("可调用 context_compact 压缩。" if "context_compact" in names else "请控制后续上下文长度。")
+                + "这是运行状态，不是用户指令，不必复述。"
+            )
+            measure(messages)
+            if state.last_known_token_estimate >= state.blocking_limit:
+                measure(original_messages)
+                return original_messages, True, None
         if persisted is not None:
             persisted["budget_notice"]["bucket"] = int(state.percent_used // 5)
         return messages, True, persisted

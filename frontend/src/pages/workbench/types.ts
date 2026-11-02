@@ -31,6 +31,7 @@ export type AssistantBlock =
   | {
       id: string;
       kind: "tool";
+      toolName?: string;
       title: string;
       meta: string;
       argumentsText: string;

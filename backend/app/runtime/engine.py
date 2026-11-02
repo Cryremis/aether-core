@@ -605,7 +605,7 @@ class AgentEngine:
 
             from app.services.skill_tools import visible_schemas
             visible_catalog = replace(catalog_snapshot, schemas=tuple(visible_schemas(session, catalog_snapshot.schemas)))
-            tools = list(visible_catalog.schemas)
+            tools = tool_display_service.annotate_schemas(visible_catalog.schemas)
 
             if self._run_is_aborted(session, run_id):
                 if persisted_assistant_blocks or session.get_partial_content(run_id):
@@ -700,7 +700,7 @@ class AgentEngine:
                 *system_messages,
                 *visible_messages,
             ]
-            context_compact_schema = tool_service.get_context_compact_schema()
+            context_compact_schema = tool_display_service.annotate_schemas([tool_service.get_context_compact_schema()])[0]
             context_compact_allowed = (
                 session.allowed_tools is None or "context_compact" in set(session.allowed_tools)
             )
@@ -1199,7 +1199,7 @@ class AgentEngine:
 
             if tool_calls:
                 pending_compaction = None
-                tool_fingerprint = self._fingerprint_tool_calls(tool_calls)
+                tool_fingerprint = self._fingerprint_tool_calls(tool_calls, visible_catalog.schemas)
                 if tool_fingerprint == last_tool_fingerprint:
                     stall_rounds += 1
                 else:
@@ -1250,7 +1250,10 @@ class AgentEngine:
                     except (json.JSONDecodeError, ValueError) as exc:
                         validation_error = str(exc)
                         tool_input = {}
-                    tool_display = tool_display_service.resolve(tool_name, tool_input)
+                    tool_input, display_note = tool_display_service.split_arguments(
+                        tool_name, tool_input, [*visible_catalog.schemas, tool_service.get_context_compact_schema()],
+                    )
+                    tool_display = tool_display_service.resolve(tool_name, tool_input, note=display_note)
                     tool_block_id = tool_call["id"]
                     session.mark_tool_running(run_id, tool_call_id=tool_block_id, tool_name=tool_name)
                     self._append_assistant_block(
@@ -1259,6 +1262,7 @@ class AgentEngine:
                             "id": tool_block_id,
                             "kind": "tool",
                             "title": tool_display.get("title", tool_name),
+                            "toolName": tool_name,
                             "meta": tool_display.get("meta", "tool"),
                             "argumentsText": json.dumps(tool_input, ensure_ascii=False, indent=2),
                             "outputText": "",
@@ -1384,6 +1388,7 @@ class AgentEngine:
                                         "tool_progress",
                                         id=tool_call["id"],
                                         tool_name=tool_name,
+                                        tool_display=tool_display,
                                         elapsed_ms=int((time.perf_counter() - tool_started_at) * 1000),
                                     )
                                 finally:
@@ -1420,6 +1425,7 @@ class AgentEngine:
                         "tool_finished",
                         id=tool_call["id"],
                         tool_name=tool_name,
+                        tool_display=tool_display,
                         output=tool_result_text,
                         result=result.public_payload(),
                     )
@@ -1661,11 +1667,21 @@ class AgentEngine:
             return True
         return False
 
-    def _fingerprint_tool_calls(self, tool_calls: dict[int, dict[str, str]]) -> str:
+    def _fingerprint_tool_calls(self, tool_calls: dict[int, dict[str, str]], schemas=()) -> str:
+        def execution_arguments(item):
+            try:
+                arguments = json.loads(item["arguments"])
+                if isinstance(arguments, dict):
+                    arguments, _note = tool_display_service.split_arguments(item["name"], arguments, schemas)
+                    return arguments
+            except (ValueError, TypeError):
+                pass
+            return item["arguments"]
+
         payload = [
             {
                 "name": item["name"],
-                "arguments": item["arguments"],
+                "arguments": execution_arguments(item),
             }
             for _, item in sorted(tool_calls.items())
         ]

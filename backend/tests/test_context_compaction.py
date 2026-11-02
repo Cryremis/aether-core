@@ -247,6 +247,8 @@ async def collect_stream(session: AgentSession, message: str) -> list[dict[str, 
 
 def test_engine_exposes_context_tool_only_in_warning_and_hides_warning_from_user(monkeypatch, tmp_path):
     initialize_store(tmp_path)
+    # 固定请求级输出预算，避免依赖本地模型配置和 schema 大小触发阻断区。
+    monkeypatch.setattr("app.runtime.engine.llm_client.output_limit", lambda config: 1_000)
     monkeypatch.setattr(settings, "llm_max_tokens", 1_000)
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1_800)
@@ -273,6 +275,7 @@ def test_engine_exposes_context_tool_only_in_warning_and_hides_warning_from_user
     session = build_session("sess_engine_context_warning")
     events = asyncio.run(collect_stream(session, "a" * 12_000))
 
+    assert observed, [(e["type"], e["payload"]) for e in events if e["type"] in {"context_blocked", "completed"}]
     assert "context_compact" in observed["tool_names"]
     assert "[runtime context]" in str(observed["message_tail"]["content"])
     assert "[runtime context]" not in str(session.messages[-1]["content"])

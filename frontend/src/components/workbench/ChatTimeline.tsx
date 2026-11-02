@@ -853,6 +853,7 @@ function parseSubagentToolPayload(...sources: Array<string | null | undefined>):
 
 function SubagentToolCard({
   title,
+  toolName,
   argumentsText,
   outputText,
   liveOutputText,
@@ -866,6 +867,7 @@ function SubagentToolCard({
   liveOutputText?: string;
   status: "running" | "done" | "aborted";
   subagent: SubagentRunSummary;
+  toolName?: string;
   onOpenSubagent?: (childSessionId: string) => void;
 }) {
   return (
@@ -877,15 +879,16 @@ function SubagentToolCard({
       <span className="subagent-tool-card__icon"><Icons.User /></span>
       <span className="subagent-tool-card__body">
         <strong>{subagent.name}</strong>
-        <span>{title === "subagent_send_message" ? "已发送跟进消息" : subagent.task || "已创建子代理"}</span>
+        <span>{toolName && title !== toolName ? title : (toolName || title) === "subagent_send_message" ? "已发送跟进消息" : subagent.task || "已创建子代理"}</span>
       </span>
       <span className="subagent-tool-card__action">查看子代理</span>
     </button>
   );
 }
 
-function ToolCard({ title, argumentsText, outputText, liveOutputText, status, subagents, onOpenSubagent }: {
+function ToolCard({ title, toolName, argumentsText, outputText, liveOutputText, status, subagents, onOpenSubagent }: {
   title: string;
+  toolName?: string;
   argumentsText: string;
   outputText: string;
   liveOutputText?: string;
@@ -903,7 +906,7 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status, su
     setExpanded(status === "running");
   }, [status]);
 
-  if (title === "subagent_create" || title === "subagent_send_message") {
+  if ((toolName || title) === "subagent_create" || (toolName || title) === "subagent_send_message") {
     const payload = parseSubagentToolPayload(outputText, liveOutputText, argumentsText);
     const subagent = payload?.subagent_id
       ? subagents?.find((item) => item.subagent_id === payload.subagent_id)
@@ -912,6 +915,7 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status, su
       return (
         <SubagentToolCard
           title={title}
+          toolName={toolName}
           argumentsText={argumentsText}
           outputText={outputText}
           liveOutputText={liveOutputText}
@@ -929,7 +933,7 @@ function ToolCard({ title, argumentsText, outputText, liveOutputText, status, su
         <div className="tool-header__summary">
           <div className="tool-header__line">
             <svg className="tool-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-            <span className="tool-title__summary">{inputSummary.primary || outputSummary.primary || title}</span>
+            <span className="tool-title__summary">{title || inputSummary.primary || outputSummary.primary}</span>
           </div>
           {expanded ? (
             <div className="tool-summary-metrics">
@@ -1196,6 +1200,7 @@ export function ChatTimeline({
                   <ToolCard
                     key={segment.id}
                     title={segment.block.title}
+                    toolName={segment.block.toolName}
                     argumentsText={segment.block.argumentsText}
                     outputText={segment.block.outputText}
                     liveOutputText={segment.block.liveOutputText}
