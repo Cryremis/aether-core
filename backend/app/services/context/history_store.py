@@ -320,6 +320,42 @@ class HistoryStore:
             row = conn.execute("SELECT status,payload FROM context_tool_executions WHERE session_id=? AND run_id=? AND call_id=?", (session_id, run_id, call_id)).fetchone()
             return self._decode(row["payload"]) if row and row["status"] == "completed" and row["payload"] else None
 
+    def _streamed_attempt_response(self, run_id: str, attempt_id: str) -> dict:
+        """Recover an unfinished response from the already durable event journal.
+
+        Streaming writes each fragment once. A complete response snapshot is
+        written only when the attempt ends, avoiding prefix-sized DB updates.
+        """
+        content, reasoning = [], []
+        calls: dict[str, dict] = {}
+        with store_service._connect() as conn:
+            rows = conn.execute(
+                "SELECT type,payload_json FROM run_events WHERE run_id=? "
+                "AND type IN ('content_delta','reasoning_delta','tool_call_delta') "
+                "AND json_extract(payload_json,'$.attempt_id')=? ORDER BY seq",
+                (run_id, attempt_id),
+            )
+            for row in rows:
+                payload = json.loads(row["payload_json"])
+                if row["type"] == "content_delta":
+                    content.append(payload["delta"])
+                elif row["type"] == "reasoning_delta":
+                    reasoning.append(payload["delta"])
+                else:
+                    key = str(payload["index"])
+                    call = calls.setdefault(key, {"parts": []})
+                    call.update(id=payload["id"], name=payload["tool_name"])
+                    call["parts"].append(payload["arguments_delta"])
+        result = {}
+        if content:
+            result["content"] = "".join(content)
+        if reasoning:
+            result["reasoning_content"] = "".join(reasoning)
+        if calls:
+            result["tool_calls"] = {key: {"id": call["id"], "name": call["name"],
+                "arguments": "".join(call["parts"])} for key, call in calls.items()}
+        return result
+
     def recover_attempts(self, session, *, include_run_id: str | None = None) -> bool:
         from app.services.context.message_adapter import context_message_adapter
         with store_service._connect() as conn:
@@ -339,6 +375,8 @@ class HistoryStore:
             if run and run.get("status") in store_service.ACTIVE_AGENT_RUN_STATUSES and manifest.get("run_id") != include_run_id:
                 continue
             response = self._decode(row["response"])
+            if row["status"] != "completed":
+                response.update(self._streamed_attempt_response(str(manifest.get("run_id") or ""), row["attempt_id"]))
             if not (response.get("content") or response.get("reasoning_content") or response.get("provider_payload") or response.get("tool_calls")):
                 continue
             # 完整原生块可回放；未获得完整签名的部分思考只留在归档中。

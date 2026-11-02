@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import threading
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -15,6 +16,8 @@ from jsonschema.exceptions import SchemaError
 
 from app.services.session_types import AgentSession
 
+
+logger = logging.getLogger(__name__)
 
 MAX_HOST_TOOLS = 256
 MAX_HOST_TOOL_CATALOG_BYTES = 2 * 1024 * 1024
@@ -136,22 +139,46 @@ class ToolCatalogService:
             )
 
     @staticmethod
+    def _execution_contract(descriptor: dict[str, Any]) -> dict[str, Any]:
+        contract = {key: value for key, value in descriptor.items() if key not in {"description", "tags"}}
+        contract["method"] = str(contract.get("method") or "POST").upper()
+        contract.setdefault("requires_auth", True)
+        contract.setdefault("auth_inject", True)
+        return contract
+
+    @staticmethod
+    def _source_priority(source_id: str) -> tuple[int, str]:
+        # A live page describes the current host version. Legacy snapshots are
+        # retained only when no current source supplies the same execution contract.
+        rank = 0 if source_id.endswith(":page") else 2 if source_id == "host:legacy" else 1
+        return rank, source_id
+
+    @staticmethod
     def _compose(
-        collections: dict[str, list[dict[str, Any]]],
+        collections: dict[str, list[dict[str, Any]]], *, log_metadata_changes: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, tuple[str, ...]]]:
         by_name: dict[str, dict[str, Any]] = {}
         sources: dict[str, list[str]] = {}
-        for source_id, descriptors in sorted(collections.items()):
-            for descriptor in descriptors:
+        for source_id in sorted(collections, key=ToolCatalogService._source_priority):
+            for descriptor in collections[source_id]:
                 canonical = ToolCatalogService._canonical_descriptor(descriptor)
                 name = str(canonical["name"])
                 existing = by_name.get(name)
-                if existing is not None and existing != canonical:
-                    owners = "、".join(sources.get(name, []))
-                    raise ToolCatalogValidationError(
-                        f"工具 {name} 在来源 {owners} 与 {source_id} 中定义不一致"
-                    )
-                by_name[name] = canonical
+                if existing is not None:
+                    before = ToolCatalogService._execution_contract(existing)
+                    after = ToolCatalogService._execution_contract(canonical)
+                    changed = sorted(key for key in before.keys() | after.keys() if key not in before or key not in after or before[key] != after[key])
+                    if changed:
+                        owners = "、".join(sources[name])
+                        raise ToolCatalogValidationError(
+                            f"工具 {name} 在来源 {owners} 与 {source_id} 中定义不一致；执行字段：{', '.join(changed)}"
+                        )
+                    if log_metadata_changes and any(existing.get(field) != canonical.get(field)
+                                                    for field in ("description", "tags")):
+                        logger.warning("Tool %s metadata differs between sources %s and %s; kept %s",
+                                       name, sources[name][0], source_id, sources[name][0])
+                else:
+                    by_name[name] = canonical
                 sources.setdefault(name, []).append(source_id)
         return (
             [by_name[name] for name in sorted(by_name)],
@@ -235,10 +262,12 @@ class ToolCatalogService:
         current: dict[str, dict[str, Any]],
         collections: dict[str, list[dict[str, Any]]],
     ) -> ToolCatalogMutationResult:
-        descriptors, sources = self._compose(collections)
+        next_fingerprint = self._fingerprint(collections)
+        descriptors, sources = self._compose(
+            collections, log_metadata_changes=next_fingerprint != session.host_tools_fingerprint,
+        )
         next_by_name = {str(item["name"]): item for item in descriptors}
         self._validate_size(descriptors)
-        next_fingerprint = self._fingerprint(collections)
         added = tuple(sorted(set(next_by_name) - set(current)))
         removed = tuple(sorted(set(current) - set(next_by_name)))
         updated = tuple(

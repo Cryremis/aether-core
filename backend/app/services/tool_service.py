@@ -89,13 +89,13 @@ class ToolRegistry:
         required: list[str] | None = None,
     ) -> None:
         """注册一个工具。"""
-        schema = {
-            "type": "object",
-            "properties": parameters.get("properties", {}),
-            "additionalProperties": parameters.get("additionalProperties", False),
-        }
-        if required:
-            schema["required"] = required
+        # Keep the complete JSON Schema, including $defs, required and unions.
+        schema = copy.deepcopy(parameters)
+        schema.setdefault("type", "object")
+        schema.setdefault("properties", {})
+        schema.setdefault("additionalProperties", False)
+        if required is not None:
+            schema["required"] = list(required)
 
         self._schemas.append({
             "type": "function",
@@ -109,7 +109,7 @@ class ToolRegistry:
 
     def get_schemas(self) -> list[dict[str, Any]]:
         """返回所有已注册工具的 schema。"""
-        return self._schemas.copy()
+        return copy.deepcopy(self._schemas)
 
     def get_handler(self, name: str) -> ToolHandler | None:
         """返回指定工具的 handler。"""
@@ -160,7 +160,8 @@ class ToolService:
                     "status": {"type": "string", "enum": ["idle", "active", "completed", "blocked"]},
                     "archive_completed": {"type": "boolean"},
                     "ops": {
-                        "type": "array",
+                        "type": "array", "minItems": 1,
+                        "description": "操作对象数组，直接传数组，不是 JSON 字符串。",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -169,7 +170,7 @@ class ToolService:
                                     "enum": ["add_item", "update_item", "remove_item", "reorder_items", "replace_all"],
                                 },
                                 "id": {"type": "string"},
-                                "title": {"type": "string"},
+                                "title": {"type": "string", "minLength": 1, "pattern": r"\S"},
                                 "active_form": {"type": "string"},
                                 "status": {
                                     "type": "string",
@@ -189,7 +190,7 @@ class ToolService:
                                         "type": "object",
                                         "properties": {
                                             "id": {"type": "string"},
-                                            "title": {"type": "string"},
+                                            "title": {"type": "string", "minLength": 1, "pattern": r"\S"},
                                             "active_form": {"type": "string"},
                                             "status": {
                                                 "type": "string",
@@ -208,6 +209,15 @@ class ToolService:
                                 },
                             },
                             "required": ["op"],
+                            "allOf": [
+                                {"if": {"properties": {"op": {"const": op}}},
+                                 "then": {"required": fields}}
+                                for op, fields in (
+                                    ("add_item", ["title"]), ("update_item", ["id"]),
+                                    ("remove_item", ["id"]), ("reorder_items", ["ordered_ids"]),
+                                    ("replace_all", ["items"]),
+                                )
+                            ],
                             "additionalProperties": False,
                         },
                     },
@@ -217,7 +227,7 @@ class ToolService:
                             "type": "object",
                             "properties": {
                                 "id": {"type": "string"},
-                                "title": {"type": "string"},
+                                "title": {"type": "string", "minLength": 1, "pattern": r"\S"},
                                 "active_form": {"type": "string"},
                                 "status": {
                                     "type": "string",
@@ -231,11 +241,13 @@ class ToolService:
                                 "source": {"type": "string"},
                                 "evidence_refs": {"type": "array", "items": {"type": "string"}},
                             },
-                            "required": ["title", "status"],
+                            "required": ["title"],
                             "additionalProperties": False,
                         },
                     },
                 },
+                "anyOf": [{"required": [field]} for field in ("ops", "items", "status", "archive_completed")],
+                "examples": [{"ops": [{"op": "add_item", "title": "完成用户要求的任务"}]}],
                 "additionalProperties": False,
             },
             self._handle_update_workboard,
@@ -244,7 +256,7 @@ class ToolService:
 
         self._registry.register(
             "request_user_input",
-            "当你遇到不确定、被阻塞、需要用户明确决策或补充信息时，向用户发起结构化提问。它会在前端生成可持续存在的待回复状态，而不是只在普通聊天文本里提问。",
+            "仅当缺少执行所必需且无法通过工具查明的信息时，向用户发起结构化提问。它会在前端生成可持续存在的待回复状态，而不是只在普通聊天文本里提问。",
             {
                 "properties": {
                     "id": {"type": "string"},
@@ -254,7 +266,7 @@ class ToolService:
                     },
                     "title": {
                         "type": "string",
-                        "minLength": 1,
+                        "minLength": 1, "pattern": r"\S",
                         "maxLength": 128,
                         "description": "提问卡片的整体标题，必填非空。",
                     },
@@ -263,20 +275,21 @@ class ToolService:
                     "related_work_items": {"type": "array", "items": {"type": "string"}},
                     "preview_text": {"type": "string"},
                     "questions": {
-                        "type": "array",
+                        "type": "array", "minItems": 1,
+                        "description": "问题对象数组；纯文本问题省略 options，不要把数组转成字符串。",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "id": {"type": "string"},
                                 "header": {
                                     "type": "string",
-                                    "minLength": 1,
+                                    "minLength": 1, "pattern": r"\S",
                                     "maxLength": 20,
                                     "description": "问题的短标题，建议不超过 10 个字。",
                                 },
                                 "question": {
                                     "type": "string",
-                                    "minLength": 1,
+                                    "minLength": 1, "pattern": r"\S",
                                     "description": "要向用户提出的完整问题文本，必填非空。",
                                 },
                                 "multi_select": {"type": "boolean"},
@@ -289,7 +302,7 @@ class ToolService:
                                         "properties": {
                                             "label": {
                                                 "type": "string",
-                                                "minLength": 1,
+                                                "minLength": 1, "pattern": r"\S",
                                                 "description": "选项的展示文案。",
                                             },
                                             "description": {
@@ -810,8 +823,6 @@ class ToolService:
         )
 
     async def _handle_update_workboard(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
-        if not isinstance(arguments.get("ops"), list) and not isinstance(arguments.get("items"), list):
-            raise RuntimeError("update_workboard requires either ops or items")
         state = runtime_state_service.update_workboard(session, arguments)
         snapshot = state.model_dump(mode="json")
         open_item_count = sum(item.status not in {"completed", "cancelled"} for item in state.items)
@@ -835,30 +846,6 @@ class ToolService:
         )
 
     async def _handle_request_user_input(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
-        validation_error = self._validate_request_user_input(arguments)
-        if validation_error is not None:
-            example = {
-                "title": "请确认执行方式",
-                "questions": [
-                    {
-                        "header": "执行方式",
-                        "question": "请选择本次执行方式？",
-                        "options": [{"label": "继续"}, {"label": "停止"}],
-                    }
-                ],
-            }
-            return ToolExecutionResult.failure(
-                "elicitation.request_failed",
-                "用户提问参数无效",
-                code="INVALID_TOOL_ARGUMENTS",
-                message=validation_error,
-                retryable=True,
-                next_action=(
-                    f"{validation_error}。请按 schema 重新调用 request_user_input，"
-                    f"合法最小示例：{json.dumps(example, ensure_ascii=False, separators=(',', ':'))}"
-                ),
-            )
-
         request = runtime_state_service.request_user_input(session, arguments)
         state = runtime_state_service.get_elicitation(session)
         request_payload = request.model_dump(mode="json")
@@ -886,109 +873,6 @@ class ToolService:
                 "title": request.title,
             },
         )
-
-    def _validate_request_user_input(self, arguments: dict[str, Any]) -> str | None:
-        allowed_fields = {
-            "id",
-            "kind",
-            "title",
-            "blocking",
-            "source_agent",
-            "related_work_items",
-            "preview_text",
-            "questions",
-        }
-        unknown_fields = sorted(set(arguments) - allowed_fields)
-        if unknown_fields:
-            return f"不支持的顶层字段：{', '.join(unknown_fields)}"
-
-        title = arguments.get("title")
-        if not isinstance(title, str) or not title.strip():
-            return "title 必须为非空字符串"
-
-        questions = arguments.get("questions")
-        if not isinstance(questions, list) or not questions:
-            return "questions 必须为非空数组"
-
-        allowed_question_fields = {
-            "id",
-            "header",
-            "question",
-            "multi_select",
-            "allow_other",
-            "allow_notes",
-            "options",
-        }
-        for index, question in enumerate(questions, start=1):
-            prefix = f"questions[{index - 1}]"
-            if not isinstance(question, dict):
-                return f"{prefix} 必须为对象"
-
-            unknown_fields = sorted(set(question) - allowed_question_fields)
-            if unknown_fields:
-                return f"{prefix} 包含不支持的字段：{', '.join(unknown_fields)}"
-
-            header = question.get("header")
-            if not isinstance(header, str) or not header.strip():
-                return f"{prefix}.header 必须为非空字符串"
-
-            question_text = question.get("question")
-            if not isinstance(question_text, str) or not question_text.strip():
-                return f"{prefix}.question 必须为非空字符串"
-
-            if "id" in question and not isinstance(question["id"], str):
-                return f"{prefix}.id 必须为字符串"
-
-            for field in ("multi_select", "allow_other", "allow_notes"):
-                if field in question and not isinstance(question[field], bool):
-                    return f"{prefix}.{field} 必须为布尔值"
-
-            if "options" not in question:
-                return f"{prefix}.options 必须为对象数组，而不是字符串"
-
-            options = question.get("options")
-            if not isinstance(options, list):
-                return f"{prefix}.options 必须为对象数组，而不是字符串"
-
-            for option_index, option in enumerate(options, start=1):
-                option_prefix = f"{prefix}.options[{option_index - 1}]"
-                if not isinstance(option, dict):
-                    return f"{option_prefix} 必须为对象"
-                label = option.get("label")
-                if not isinstance(label, str) or not label.strip():
-                    return f"{option_prefix}.label 必须为非空字符串"
-                if "description" in option and not isinstance(option["description"], str):
-                    return f"{option_prefix}.description 必须为字符串"
-                if set(option) - {"label", "description"}:
-                    return f"{option_prefix} 只能包含 label 和 description 字段"
-
-        for field, expected_type in (
-            ("id", str),
-            ("source_agent", str),
-            ("preview_text", str),
-        ):
-            if field in arguments and not isinstance(arguments[field], expected_type):
-                return f"{field} 必须为字符串"
-
-        if "kind" in arguments and arguments["kind"] not in {
-            "clarification",
-            "confirmation",
-            "decision",
-            "missing_info",
-            "approval",
-        }:
-            return "kind 必须为 clarification、confirmation、decision、missing_info 或 approval"
-
-        if "blocking" in arguments and not isinstance(arguments["blocking"], bool):
-            return "blocking 必须为布尔值"
-
-        related_work_items = arguments.get("related_work_items", [])
-        if not isinstance(related_work_items, list) or any(
-            not isinstance(item, str) for item in related_work_items
-        ):
-            return "related_work_items 必须为字符串数组"
-
-        return None
 
     async def _handle_list_skills(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         skills = [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]
@@ -1470,6 +1354,7 @@ class ToolService:
         from app.services.tool_result_service import ToolExecutionError
         if session.allowed_tools is not None and tool_name not in session.allowed_tools:
             return ToolExecutionResult.failure("tool.forbidden", "工具不在当前授权范围", code="TOOL_NOT_ALLOWED", message=tool_name)
+        schema = None
         if catalog_snapshot is not None:
             schema = next((item["function"].get("parameters", {}) for item in catalog_snapshot.schemas if item["function"]["name"] == tool_name), None)
             if schema is None and tool_name == "context_compact":
@@ -1481,10 +1366,18 @@ class ToolService:
                 }}, business_timeout=TIMEOUT_SECONDS_PROPERTY in (descriptor.get("input_schema") or {}).get("properties", {}))["function"]["parameters"]
             if schema is None:
                 return ToolExecutionResult.failure("tool.forbidden", "工具未在当前目录中暴露", code="TOOL_NOT_EXPOSED", message=tool_name)
-            from jsonschema import Draft202012Validator
-            error = next(Draft202012Validator(schema).iter_errors(arguments), None)
+        else:
+            registered = next((item for item in self._registry.get_schemas()
+                               if item["function"]["name"] == tool_name), None)
+            if registered is not None:
+                schema = self._with_timeout_parameter(registered)["function"]["parameters"]
+        if schema is not None:
+            from app.services.tool_argument_schema import validate_arguments
+            error = validate_arguments(schema, arguments)
             if error:
-                return ToolExecutionResult.failure("tool.invalid_arguments", "工具参数与 schema 不匹配", code="TOOL_ARGUMENTS_INVALID", message=error.message)
+                return ToolExecutionResult.failure("tool.invalid_arguments", "工具参数与 schema 不匹配",
+                    code="TOOL_ARGUMENTS_INVALID", message=error, retryable=True,
+                    next_action="按返回的字段路径修正参数后重试；保持对象和数组原生结构，不要反复提交相同输入。")
         if run_id and tool_call_id:
             digest = hashlib.sha256(json.dumps([tool_name, arguments], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             state, saved = history_store.claim_tool(session.session_id, run_id, tool_call_id, digest)
@@ -1937,9 +1830,12 @@ class ToolService:
             return {}
 
         try:
-            return json.loads(raw_arguments)
+            parsed = json.loads(raw_arguments)
         except json.JSONDecodeError:
-            return self._repair_json(stripped)
+            parsed = self._repair_json(stripped)
+        if not isinstance(parsed, dict):
+            raise ValueError("$: 工具参数必须是 JSON 对象；直接传对象，不要传数组或带引号的 JSON 字符串")
+        return parsed
 
     def _repair_json(self, cleaned: str) -> dict[str, Any]:
         """尝试修复损坏的 JSON。"""
@@ -1956,9 +1852,7 @@ class ToolService:
             return json.loads(normalized)
         except json.JSONDecodeError:
             parsed = ast.literal_eval(cleaned)
-            if isinstance(parsed, dict):
-                return parsed
-            return {"value": parsed}
+            return parsed
 
     def _make_schema(self, name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
         """构建工具 schema。"""

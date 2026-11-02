@@ -233,25 +233,18 @@ def test_request_user_input_tool_returns_control_payload(tmp_path):
                 "allow_notes": "true",
                 "id": "q2",
             },
-            "不支持的顶层字段",
+            "unexpected fields",
         ),
         (
             {"title": "确认", "questions": []},
-            "questions 必须为非空数组",
+            "$.questions: constraint minItems",
         ),
         (
             {
                 "title": "确认",
                 "questions": [{"header": "环境", "question": ""}],
             },
-            "questions[0].question 必须为非空字符串",
-        ),
-        (
-            {
-                "title": "确认",
-                "questions": [{"header": "环境", "question": "选择哪个环境？"}],
-            },
-            "questions[0].options 必须为对象数组，而不是字符串",
+            "$.questions[0].question",
         ),
         (
             {
@@ -264,7 +257,7 @@ def test_request_user_input_tool_returns_control_payload(tmp_path):
                     }
                 ],
             },
-            "questions[0].options 必须为对象数组，而不是字符串",
+            "$.questions[0].options: expected array, received string",
         ),
     ],
 )
@@ -297,7 +290,7 @@ def test_request_user_input_schema_documents_required_text_fields():
     assert "description" in question_properties["question"]
 
 
-def test_request_user_input_validation_error_includes_field_and_example(tmp_path):
+def test_request_user_input_validation_error_identifies_field(tmp_path):
     settings.storage_root = tmp_path / "storage"
     session = AgentSession(session_id="sess_request_user_input_example")
     arguments = {
@@ -308,9 +301,9 @@ def test_request_user_input_validation_error_includes_field_and_example(tmp_path
     result = asyncio.run(tool_service.execute(session, "request_user_input", arguments))
 
     assert result.error is not None
-    assert result.error.message == "questions[0].question 必须为非空字符串"
-    assert "questions[0].question" in result.error.next_action
-    assert '"question":"请选择本次执行方式？"' in result.error.next_action
+    assert "$.questions[0].question" in result.error.message
+    assert "pattern" in result.error.message
+    assert "字段路径" in result.error.next_action
 
 
 def test_update_workboard_tool_supports_ops(tmp_path):

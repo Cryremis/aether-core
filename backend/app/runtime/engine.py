@@ -873,7 +873,6 @@ class AgentEngine:
                         if active:
                             active.reasoning_content = assistant_reasoning
                     if reasoning_delta:
-                        history_store.save_attempt(session.session_id, attempt_id, {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls})
                         had_reasoning_output = True
                         visible_started_event = maybe_emit_visible_started()
                         if visible_started_event is not None:
@@ -912,7 +911,6 @@ class AgentEngine:
                         if visible_started_event is not None:
                             yield visible_started_event
                         assistant_content += content_delta
-                        history_store.save_attempt(session.session_id, attempt_id, {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls})
                         session.set_partial_content(run_id, assistant_content)
                         if not active_content_block_id:
                             active_content_block_id = f"content_{uuid.uuid4().hex}"
@@ -958,8 +956,6 @@ class AgentEngine:
                         arguments_delta = model_text(function.get("arguments")) or ""
                         if arguments_delta:
                             current["arguments"] += arguments_delta
-                        history_store.save_attempt(session.session_id, attempt_id,
-                            {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls})
                         yield make_event(
                             session,
                             "tool_call_delta",
@@ -968,7 +964,7 @@ class AgentEngine:
                             id=current["id"],
                             tool_name=current["name"],
                             arguments_delta=arguments_delta,
-                            arguments=current["arguments"],
+                            attempt_id=attempt_id,
                         )
             except httpx.HTTPStatusError as exc:
                 history_store.save_attempt(session.session_id, attempt_id,
@@ -1246,7 +1242,7 @@ class AgentEngine:
                     try:
                         tool_input = json.loads(tool_call["arguments"])
                         if not isinstance(tool_input, dict):
-                            raise ValueError("工具参数必须为完整 JSON 对象")
+                            raise ValueError("$: 工具参数必须为完整 JSON 对象；直接传对象，不要传带引号的 JSON 字符串")
                     except (json.JSONDecodeError, ValueError) as exc:
                         validation_error = str(exc)
                         tool_input = {}
