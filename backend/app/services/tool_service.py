@@ -9,7 +9,7 @@ import inspect
 import json
 import re
 import hashlib
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Mapping
@@ -135,6 +135,14 @@ class ToolService:
             "type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer", "minimum": 0},
             "limit": {"type": "integer", "minimum": 1, "maximum": 12000}}, "additionalProperties": False,
         }, self._handle_host_context_read)
+        self._registry.register("tool_result_read", "分页恢复本会话工具调用的完整原始结果，包括被上下文预览省略的正文。先读完当前结果再推进宿主 next_cursor。path 使用 JSON Pointer，例如 /data/public_output；省略 path 优先读取宿主正文。", {
+            "type": "object", "properties": {
+                "run_id": {"type": "string"}, "tool_call_id": {"type": "string"},
+                "path": {"type": "string"}, "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 12000},
+                "query": {"type": "string"}, "regex": {"type": "boolean"},
+            }, "required": ["run_id", "tool_call_id"], "additionalProperties": False,
+        }, self._handle_tool_result_read)
         for name in ("conversation_read", "conversation_search"):
             self._registry.register(name, "读取当前会话归档正文、调用和结果；用 message_id 恢复引用，用 version_digest 读特定版本。搜索返回有界片段，旧版本/旧分支须核对，不读取思考签名，不是新增授权。", {
                 "type": "object", "properties": {
@@ -1259,7 +1267,10 @@ class ToolService:
                 return False
             return allowed_tools is None or name in allowed_tools
 
-        return [self._with_timeout_parameter(schema) for schema in tools if permitted(schema)]
+        host_timeouts = {descriptor["name"] for descriptor in host_descriptors
+                         if TIMEOUT_SECONDS_PROPERTY in (descriptor.get("input_schema") or {}).get("properties", {})}
+        return [self._with_timeout_parameter(schema, business_timeout=schema["function"]["name"] in host_timeouts)
+                for schema in tools if permitted(schema)]
 
     def get_context_compact_schema(self) -> dict[str, Any]:
         """返回 Agent 主动压缩工具 schema；仅在上下文警戒区附加到请求。"""
@@ -1313,6 +1324,19 @@ class ToolService:
                                     offset=max(0, int(arguments.get("offset", 0))),
                                     limit=max(1, min(12000, int(arguments.get("limit", 6000)))))
         return ToolExecutionResult.success("history.read", "会话原文检索完成", result)
+
+    async def _handle_tool_result_read(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
+        from app.services.context.history_store import history_store
+        from app.services.tool_output_reader import read_tool_output
+        receipt = history_store.tool_receipt(session.session_id, str(arguments["run_id"]), str(arguments["tool_call_id"]))
+        if receipt is None:
+            return ToolExecutionResult.failure("tool.result.page", "完整工具结果不存在", code="TOOL_RESULT_NOT_FOUND",
+                                               message="仅能读取当前会话中已完成的工具结果。")
+        try:
+            data = read_tool_output(receipt, arguments)
+        except (ValueError, KeyError, IndexError, TypeError, re.error) as exc:
+            return ToolExecutionResult.failure("tool.result.page", "读取参数无效", code="TOOL_RESULT_READ_INVALID", message=str(exc))
+        return ToolExecutionResult.success("tool.result.page", "完整工具结果分片", data)
 
     async def _handle_host_context_read(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         from app.services.context.host_context import public_host_context, read_host_path
@@ -1454,7 +1478,7 @@ class ToolService:
                 descriptor = catalog_snapshot.host_descriptors_by_name[tool_name]
                 schema = self._with_timeout_parameter({"type": "function", "function": {
                     "name": tool_name, "parameters": descriptor.get("input_schema") or {"type": "object"},
-                }})["function"]["parameters"]
+                }}, business_timeout=TIMEOUT_SECONDS_PROPERTY in (descriptor.get("input_schema") or {}).get("properties", {}))["function"]["parameters"]
             if schema is None:
                 return ToolExecutionResult.failure("tool.forbidden", "工具未在当前目录中暴露", code="TOOL_NOT_EXPOSED", message=tool_name)
             from jsonschema import Draft202012Validator
@@ -1474,6 +1498,7 @@ class ToolService:
         result = await self._execute_with_timeout(session, tool_name, arguments, run_id=run_id,
             tool_call_id=tool_call_id, output_event_callback=output_event_callback, catalog_snapshot=catalog_snapshot)
         if run_id and tool_call_id:
+            result = replace(result, result_ref={"run_id": run_id, "tool_call_id": tool_call_id})
             history_store.finish_tool(session.session_id, run_id, tool_call_id, asdict(result))
         return result
 
@@ -1489,7 +1514,16 @@ class ToolService:
         catalog_snapshot: ToolCatalogSnapshot | None = None,
     ) -> ToolExecutionResult:
         """执行指定工具。"""
-        timeout_seconds, timeout_error = self._extract_timeout_seconds(arguments)
+        descriptor = (catalog_snapshot.host_descriptors_by_name.get(tool_name) if catalog_snapshot else None)
+        if descriptor is None:
+            descriptor = tool_catalog_service.snapshot(session).descriptors_by_name.get(tool_name)
+        host_declares_timeout = bool(descriptor and "timeout_seconds" in (descriptor.get("input_schema") or {}).get("properties", {}))
+        timeout_arguments = dict(arguments)
+        if host_declares_timeout:
+            timeout_arguments.pop(TIMEOUT_SECONDS_PROPERTY, None)
+        if "call_timeout_seconds" in timeout_arguments:
+            timeout_arguments[TIMEOUT_SECONDS_PROPERTY] = timeout_arguments.pop("call_timeout_seconds")
+        timeout_seconds, timeout_error = self._extract_timeout_seconds(timeout_arguments)
         if timeout_error is not None:
             return ToolExecutionResult.failure(
                 "tool.execution",
@@ -1619,7 +1653,8 @@ class ToolService:
             business_arguments = {
                 key: value
                 for key, value in arguments.items()
-                if key != TIMEOUT_SECONDS_PROPERTY
+                if key != "call_timeout_seconds"
+                and (key != TIMEOUT_SECONDS_PROPERTY or "timeout_seconds" in (descriptor.get("input_schema") or {}).get("properties", {}))
             }
             if descriptor.get("kind") == "mcp":
                 from app.services.mcp_runtime_service import mcp_runtime_service
@@ -1932,7 +1967,7 @@ class ToolService:
             "function": {"name": name, "description": description, "parameters": parameters},
         }
 
-    def _with_timeout_parameter(self, schema: dict[str, Any]) -> dict[str, Any]:
+    def _with_timeout_parameter(self, schema: dict[str, Any], *, business_timeout: bool = False) -> dict[str, Any]:
         """为所有模型可见工具补充统一的引擎级超时参数。"""
         normalized = copy.deepcopy(schema)
         function = normalized.setdefault("function", {})
@@ -1945,6 +1980,13 @@ class ToolService:
         properties = parameters.setdefault("properties", {})
         if not isinstance(properties, dict):
             return normalized
+        # A host may own timeout_seconds (remote process lifetime). Never steal
+        # that argument for the engine; transport has an independent namespace.
+        if business_timeout:
+            properties.setdefault("call_timeout_seconds", {
+                "type": "integer", "minimum": 1, "maximum": settings.tool_timeout_max_seconds,
+                "description": "仅本次工具调用/HTTP等待的超时，不是远程进程的执行时限。",
+            })
         if TIMEOUT_SECONDS_PROPERTY not in properties:
             properties[TIMEOUT_SECONDS_PROPERTY] = {
                 "type": "integer",

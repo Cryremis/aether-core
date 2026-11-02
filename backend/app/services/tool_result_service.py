@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -40,6 +41,7 @@ class ToolExecutionResult:
     injected_messages: tuple[dict[str, Any], ...] = ()
     control: dict[str, Any] | None = None
     artifact: dict[str, Any] | None = None
+    result_ref: dict[str, str] | None = None
 
     @classmethod
     def success(
@@ -119,6 +121,8 @@ class ToolExecutionResult:
             "summary": self.summary,
             "data": copy.deepcopy(self.data),
         }
+        if self.result_ref is not None:
+            payload["result_ref"] = dict(self.result_ref)
         if self.error is not None:
             payload["error"] = self.error.public_payload()
         return payload
@@ -141,11 +145,31 @@ class ToolResultRenderer:
     _ignored_fields = {"duration_ms"}
 
     def render(self, result: ToolExecutionResult) -> str:
+        reference = result.result_ref
         if result.error is not None:
-            return self._bound_output("\n".join(self._render_error(result.error)))
-
-        lines = self._render_success(result)
-        return self._bound_output("\n".join(line for line in lines if line.strip()))
+            text = "\n".join(self._render_error(result.error))
+        elif result.kind == "host_tool.completed":
+            # Host paged text is already a presentation contract. Generic scalar
+            # clipping used to erase its middle/tail AND advance the source cursor.
+            public = result.data.get("public_output")
+            text = public if isinstance(public, str) else "\n".join(self._render_success(result))
+        elif result.kind == "tool.result.page":
+            data = result.data
+            metadata = {key: value for key, value in data.items() if key != "content"}
+            text = json.dumps(metadata, ensure_ascii=False) + "\n" + str(data.get("content") or "")
+        else:
+            lines = self._render_success(result)
+            text = "\n".join(line for line in lines if line.strip())
+        if reference:
+            pointer = json.dumps(reference, ensure_ascii=False, separators=(",", ":"))
+            header = "result_ref: " + pointer + "\nFull original: tool_result_read(run_id, tool_call_id, path, offset, limit).\n"
+            budget = max(256, self.max_output_chars - len(header))
+            if len(text) > budget:
+                keep = max(1, (budget - 120) // 2)
+                omitted = len(text) - keep * 2
+                text = text[:keep] + f"\n[preview: {omitted} characters omitted; read original before advancing source cursor]\n" + text[-keep:]
+            return header + text
+        return self._bound_output(text)
 
     def _render_error(self, error: ToolExecutionError) -> list[str]:
         lines = [f"error: {error.message}"]
