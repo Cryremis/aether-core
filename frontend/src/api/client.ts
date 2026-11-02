@@ -540,6 +540,7 @@ export type AuditConversationDetail = {
   created_at: string;
   messages: AuditSessionMessage[];
   transcript?: TranscriptChatMessage[];
+  transcript_page?: { total: number; start: number; end: number; has_more: boolean };
   runtime?: WorkspaceRuntimeSummary | null;
   audit: AuditConversationSummary;
 };
@@ -1532,17 +1533,38 @@ export async function addRouteFor80Network() {
   return response.json();
 }
 
-export async function listAdminConversations(platformId?: number) {
-  const query = platformId ? `?platform_id=${platformId}` : "";
-  const response = await apiFetch(`/admin/conversations${query}`);
+export type AuditConversationQuery = {
+  limit: number;
+  offset: number;
+  q?: string;
+  sort_by?: "last_message_at" | "created_at" | "updated_at" | "message_count";
+  sort_order?: "asc" | "desc";
+  time_field?: "last_message_at" | "created_at" | "updated_at";
+  time_from?: string;
+  time_to?: string;
+};
+
+export type AuditConversationPage = { items: AuditConversationSummary[]; total: number; limit: number; offset: number };
+
+export async function listAdminConversations(platformId?: number, options?: AuditConversationQuery, signal?: AbortSignal) {
+  const query = new URLSearchParams();
+  if (platformId) query.set("platform_id", String(platformId));
+  Object.entries(options ?? {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  });
+  const response = await apiFetch(`/admin/conversations?${query}`, { signal });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, `获取审计会话失败: ${response.status}`));
   }
   return response.json();
 }
 
-export async function getAdminConversationDetail(sessionId: string) {
-  const response = await apiFetch(`/admin/conversations/${encodeURIComponent(sessionId)}`);
+export async function getAdminConversationDetail(sessionId: string, options?: { limit: number; before?: number }, signal?: AbortSignal) {
+  const query = new URLSearchParams();
+  Object.entries(options ?? {}).forEach(([key, value]) => {
+    if (value !== undefined) query.set(key, String(value));
+  });
+  const response = await apiFetch(`/admin/conversations/${encodeURIComponent(sessionId)}?${query}`, { signal });
   if (!response.ok) {
     throw new Error(await readErrorMessage(response, `获取审计会话详情失败: ${response.status}`));
   }

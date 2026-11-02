@@ -133,6 +133,43 @@ class SessionService:
     def _metadata_path(self, session_id: str) -> Path:
         return settings.sessions_root / "session-state" / session_id / "session.json"
 
+    def read_for_audit(self, conversation: dict[str, Any]) -> AgentSession:
+        """只读持久化审计视图：不激活会话、不创建 Workspace、不回写账本或访问时间。"""
+        from app.services.context.history_store import history_store
+        from app.services.context.message_adapter import context_message_adapter
+
+        session_id = str(conversation["session_id"])
+        with self._metadata_lock(session_id):
+            payload = history_store.snapshot(session_id)
+            metadata_path = self._metadata_path(session_id)
+            if metadata_path.exists():
+                try:
+                    disk_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    if payload is None:
+                        raise
+                else:
+                    identity_updates(session_id, disk_payload, conversation)
+                    if payload is None:
+                        payload = disk_payload
+            if payload is None:
+                raise LookupError("会话历史不存在")
+            payload.update(identity_updates(session_id, payload, conversation))
+            version = int(payload.get("message_schema_version", 1))
+            if version > 3:
+                raise RuntimeError("当前版本不能读取更新版本的会话格式")
+            session = AgentSession(
+                session_id=session_id, conversation_id=conversation["conversation_id"],
+                workspace_id=str(payload.get("workspace_id") or conversation.get("workspace_id") or ""),
+                owner_user_id=payload.get("owner_user_id"), platform_id=payload.get("platform_id"),
+                external_user_id=payload.get("external_user_id"), host_name=payload.get("host_name", ""),
+                messages=payload.get("messages", []), compaction_audit=payload.get("compaction_audit", []),
+                allow_network=bool(payload.get("allow_network", True)), message_schema_version=version,
+            )
+            context_message_adapter.normalize_session(session)
+            history_store.recover_attempts(session)
+            return session
+
     def _metadata_lock(self, session_id: str) -> threading.RLock:
         with self._metadata_locks_guard:
             return self._metadata_locks.setdefault(session_id, threading.RLock())

@@ -32,6 +32,8 @@ class HistoryStore:
                 UNIQUE(session_id, message_id, digest)
             );
             CREATE INDEX IF NOT EXISTS ix_context_records_session ON context_records(session_id, seq);
+            CREATE INDEX IF NOT EXISTS ix_context_records_message_version
+                ON context_records(session_id, message_id, seq DESC);
             CREATE TABLE IF NOT EXISTS context_snapshots (
                 session_id TEXT PRIMARY KEY, revision INTEGER NOT NULL,
                 digest TEXT NOT NULL, payload TEXT NOT NULL
@@ -48,9 +50,26 @@ class HistoryStore:
                 committed INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(session_id, attempt_id)
             );
+            CREATE TABLE IF NOT EXISTS audit_transcript_sources (
+                session_id TEXT PRIMARY KEY, snapshot_revision INTEGER NOT NULL,
+                fingerprint TEXT NOT NULL, metadata TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS audit_transcript_heads (
+                session_id TEXT PRIMARY KEY, source_key TEXT NOT NULL, total INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS audit_transcript_items (
+                session_id TEXT NOT NULL, position INTEGER NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY(session_id, position)
+            );
+            CREATE TABLE IF NOT EXISTS audit_attempt_versions (
+                session_id TEXT NOT NULL, attempt_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                PRIMARY KEY(session_id, attempt_id)
+            );
         """)
         if "committed" not in {row[1] for row in conn.execute("PRAGMA table_info(context_attempts)")}:
             conn.execute("ALTER TABLE context_attempts ADD COLUMN committed INTEGER NOT NULL DEFAULT 0")
+        conn.execute("""CREATE INDEX IF NOT EXISTS ix_context_attempts_uncommitted
+            ON context_attempts(session_id) WHERE committed=0""")
 
     def capture(self, session_id: str, payload: dict[str, Any], *, expected_revision: int | None = None) -> int:
         body = {key: value for key, value in payload.items() if key != "ledger_revision"}
@@ -67,9 +86,11 @@ class HistoryStore:
                 return revision
             if row and expected_revision is not None and revision != expected_revision:
                 raise RuntimeError("会话账本版本冲突，拒绝覆盖其他写入方的上下文；请重新加载会话")
+            message_digests = []
             for index, message in enumerate(payload.get("messages", [])):
                 encoded = json.dumps(message, ensure_ascii=False, sort_keys=True)
                 key = hashlib.sha256(encoded.encode()).hexdigest()
+                message_digests.append(key)
                 message_id = str(message.get("message_id") or f"legacy_{index}_{key[:16]}")
                 if not conn.execute("SELECT 1 FROM context_records WHERE session_id=? AND message_id=? AND digest=?", (session_id, message_id, key)).fetchone():
                     conn.execute("INSERT INTO context_records(session_id,message_id,digest,payload) VALUES(?,?,?,?)",
@@ -80,7 +101,27 @@ class HistoryStore:
             serialized = json.dumps({**body, "ledger_revision": revision}, ensure_ascii=False, separators=(",", ":"))
             conn.execute("INSERT INTO context_snapshots VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,digest=excluded.digest,payload=excluded.payload",
                          (session_id, revision, digest, self._encode({**body, "ledger_revision": revision})))
+            self.sync_audit_source(conn, session_id, payload, revision, message_digests=message_digests)
             return revision
+
+    def sync_audit_source(self, conn, session_id: str, payload: dict, revision: int, *, message_digests: list[str] | None = None) -> None:
+        """复用 capture 已计算的消息摘要，访问时间等元数据更新不使展示索引失效。"""
+        if message_digests is None:
+            message_digests = [hashlib.sha256(json.dumps(message, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+                               for message in payload.get("messages", [])]
+        fingerprint = hashlib.sha256(json.dumps({
+            "messages": message_digests, "compaction_audit": payload.get("compaction_audit", []),
+            "message_schema_version": payload.get("message_schema_version", 1),
+            # 相同检查点指针重新出现时，其引用的原消息可能已有更新版本。
+            "archive_revision": conn.execute("SELECT MAX(seq) FROM context_records WHERE session_id=?", (session_id,)).fetchone()[0] or 0,
+        }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        fields = ("conversation_id", "workspace_id", "owner_user_id", "platform_id", "external_user_id",
+                  "host_name", "allow_network", "message_schema_version", "_audit_legacy_stamp")
+        metadata = {field: payload[field] for field in fields if field in payload}
+        conn.execute("""INSERT INTO audit_transcript_sources VALUES(?,?,?,?)
+            ON CONFLICT(session_id) DO UPDATE SET snapshot_revision=excluded.snapshot_revision,
+                fingerprint=excluded.fingerprint, metadata=excluded.metadata""",
+            (session_id, revision, fingerprint, self._encode(metadata)))
 
     def snapshot(self, session_id: str) -> dict[str, Any] | None:
         with store_service._connect() as conn:
@@ -183,6 +224,8 @@ class HistoryStore:
             conn.execute("DELETE FROM context_snapshots WHERE session_id=?", (session_id,))
             conn.execute("DELETE FROM context_tool_executions WHERE session_id=?", (session_id,))
             conn.execute("DELETE FROM context_attempts WHERE session_id=?", (session_id,))
+            for table in ("audit_transcript_sources", "audit_transcript_heads", "audit_transcript_items", "audit_attempt_versions"):
+                conn.execute(f"DELETE FROM {table} WHERE session_id=?", (session_id,))
 
     def expand_history(self, session_id: str, messages: list[dict]) -> list[dict]:
         """仅展开当前分支检查点可达的来源，不复活编辑/重跑已丢弃的分支。"""
@@ -251,6 +294,8 @@ class HistoryStore:
         with store_service._connect() as conn:
             conn.execute("UPDATE context_attempts SET response=?,status=? WHERE session_id=? AND attempt_id=?",
                          (self._encode(response), status, session_id, attempt_id))
+            conn.execute("""INSERT INTO audit_attempt_versions VALUES(?,?,1)
+                ON CONFLICT(session_id,attempt_id) DO UPDATE SET revision=revision+1""", (session_id, attempt_id))
 
     def claim_tool(self, session_id: str, run_id: str, call_id: str, digest: str) -> tuple[str, dict | None]:
         with store_service._connect() as conn:

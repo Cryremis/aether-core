@@ -1,11 +1,13 @@
 import json
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import AuthContext, require_admin
 from app.schemas.common import ApiResponse
 from app.schemas.session import SessionSummary
+from app.services.audit_transcript_service import audit_transcript_service
 from app.services.file_service import file_service
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
@@ -36,17 +38,17 @@ def _ensure_admin_conversation_access(conversation: dict, auth: AuthContext) -> 
 
 def _inflate_conversation_summary(row: dict) -> dict:
     metadata = json.loads(row.get("metadata_json") or "{}")
-    platform = store_service.get_platform_by_id(int(row["platform_id"])) if row.get("platform_id") else None
-    owner = store_service.get_user_by_id(int(row["owner_user_id"])) if row.get("owner_user_id") else None
+    platform = store_service.get_platform_by_id(int(row["platform_id"])) if "platform_display_name" not in row and row.get("platform_id") else None
+    owner = store_service.get_user_by_id(int(row["owner_user_id"])) if "owner_user_name" not in row and row.get("owner_user_id") else None
     return {
         "conversation_id": row["conversation_id"],
         "session_id": row["session_id"],
         "title": row.get("title") or "新对话",
         "host_name": row.get("host_name") or "",
         "platform_id": row.get("platform_id"),
-        "platform_display_name": platform["display_name"] if platform else None,
+        "platform_display_name": row.get("platform_display_name") or (platform["display_name"] if platform else None),
         "owner_user_id": row.get("owner_user_id"),
-        "owner_user_name": owner.full_name if owner else metadata.get("owner_name"),
+        "owner_user_name": row.get("owner_user_name") or (owner.full_name if owner else metadata.get("owner_name")),
         "external_user_id": row.get("external_user_id"),
         "external_user_name": metadata.get("external_user_name"),
         "external_org_id": row.get("external_org_id"),
@@ -61,28 +63,42 @@ def _inflate_conversation_summary(row: dict) -> dict:
 @router.get("")
 def list_admin_conversations(
     platform_id: int | None = Query(default=None),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    q: str = Query(default="", max_length=200),
+    sort_by: Literal["last_message_at", "created_at", "updated_at", "message_count"] = Query(default="last_message_at"),
+    sort_order: Literal["asc", "desc"] = Query(default="desc"),
+    time_field: Literal["last_message_at", "created_at", "updated_at"] = Query(default="last_message_at"),
+    time_from: datetime | None = Query(default=None),
+    time_to: datetime | None = Query(default=None),
     auth: AuthContext = Depends(require_admin),
 ) -> ApiResponse:
     managed_platform_ids = _managed_platform_ids(auth)
-    if auth.role != "system_admin" and not managed_platform_ids:
-        return ApiResponse(message="审计会话列表", data=[])
-
     if platform_id is not None:
         if auth.role != "system_admin" and platform_id not in managed_platform_ids:
             raise HTTPException(status_code=403, detail="无权查看该平台会话")
-        rows = store_service.list_conversations_for_platform_ids([platform_id])
-    elif auth.role == "system_admin":
-        rows = store_service.list_all_conversations()
-    else:
-        rows = store_service.list_conversations_for_platform_ids(managed_platform_ids)
 
-    items = [_inflate_conversation_summary(row) for row in rows]
-    return ApiResponse(message="审计会话列表", data=items)
+    def utc(value: datetime | None) -> str | None:
+        return value.replace(tzinfo=value.tzinfo or timezone.utc).astimezone(timezone.utc).isoformat() if value else None
+
+    start, end = utc(time_from), utc(time_to)
+    if start and end and start >= end:
+        raise HTTPException(status_code=422, detail="开始时间必须早于结束时间")
+    page = store_service.query_audit_conversations(
+        platform_ids=[platform_id] if platform_id is not None else (None if auth.role == "system_admin" else managed_platform_ids),
+        query=q, sort_by=sort_by, sort_order=sort_order, time_field=time_field,
+        time_from=start, time_to=end, limit=limit, offset=offset,
+    )
+    page["items"] = [_inflate_conversation_summary(row) for row in page["items"]]
+    # 未传 limit 的既有调用方继续接收数组。
+    return ApiResponse(message="审计会话列表", data=page if limit is not None else page["items"])
 
 
 @router.get("/{session_id}")
 def get_admin_conversation_detail(
     session_id: str,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    before: int | None = Query(default=None, ge=0),
     auth: AuthContext = Depends(require_admin),
 ) -> ApiResponse:
     conversation = store_service.get_conversation_by_session(session_id)
@@ -90,6 +106,22 @@ def get_admin_conversation_detail(
         raise HTTPException(status_code=404, detail="会话不存在")
     _ensure_admin_conversation_access(conversation, auth)
 
+    if limit is not None:
+        try:
+            page = audit_transcript_service.read_page(conversation, limit=limit, before=before)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="会话历史不存在") from exc
+        metadata = page.pop("metadata")
+        workspace_id = metadata.get("workspace_id") or conversation.get("workspace_id")
+        return ApiResponse(message="审计会话详情", data={
+            "session_id": session_id, "workspace_id": workspace_id,
+            "conversation_id": conversation["conversation_id"], "title": conversation.get("title") or "新对话",
+            "host_name": metadata.get("host_name") or "", "message_count": page["transcript_page"]["total"],
+            "allow_network": bool(metadata.get("allow_network", True)),
+            "created_at": conversation.get("created_at"), "messages": [], **page,
+            "runtime": store_service.get_workspace_runtime(workspace_id) if workspace_id else None,
+            "audit": _inflate_conversation_summary(conversation),
+        })
     session = session_service.get_or_create(session_id)
     session.conversation_id = conversation.get("conversation_id")
     transcript = transcript_service.build_audit_transcript(session)

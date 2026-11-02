@@ -257,6 +257,9 @@ class StoreService:
                 CREATE INDEX IF NOT EXISTS idx_conversations_platform_created
                 ON conversations(platform_id, created_at);
 
+                CREATE INDEX IF NOT EXISTS idx_conversations_audit_activity
+                ON conversations(platform_id, last_message_at DESC, session_id);
+
                 CREATE INDEX IF NOT EXISTS idx_users_created_at
                 ON users(created_at);
 
@@ -2009,6 +2012,52 @@ class StoreService:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM conversations ORDER BY updated_at DESC, created_at DESC").fetchall()
         return [dict(row) for row in rows]
+
+    def query_audit_conversations(
+        self, *, platform_ids: list[int] | None = None, query: str = "",
+        sort_by: str = "last_message_at", sort_order: str = "desc",
+        time_field: str = "last_message_at", time_from: str | None = None,
+        time_to: str | None = None, limit: int | None = None, offset: int = 0,
+    ) -> dict[str, Any]:
+        # 审计列表仅查询元数据；关联名称一次 JOIN，避免逐条打开数据库。
+        fields = {"last_message_at", "created_at", "updated_at", "message_count"}
+        if sort_by not in fields or time_field not in fields - {"message_count"}:
+            raise ValueError("不支持的审计排序或时间字段")
+        if sort_order not in {"asc", "desc"}:
+            raise ValueError("不支持的排序方向")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if platform_ids is not None:
+            ids = sorted(set(platform_ids))
+            if not ids:
+                return {"items": [], "total": 0, "limit": limit, "offset": offset}
+            clauses.append(f"c.platform_id IN ({','.join('?' for _ in ids)})")
+            parameters.extend(ids)
+        if query.strip():
+            # LIKE 中的 %、_ 作为普通字符，搜索范围明确限定为身份及会话元数据。
+            escaped = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            columns = ["c.title", "c.session_id", "c.conversation_id", "c.external_user_id",
+                       "c.conversation_key", "u.full_name", "u.username",
+                       "json_extract(c.metadata_json, '$.external_user_name')",
+                       "json_extract(c.metadata_json, '$.owner_name')"]
+            clauses.append("(" + " OR ".join(f"{column} LIKE ? ESCAPE '\\'" for column in columns) + ")")
+            parameters.extend([f"%{escaped}%"] * len(columns))
+        for value, operator in ((time_from, ">="), (time_to, "<")):
+            if value:
+                clauses.append(f"julianday(c.{time_field}) {operator} julianday(?)")
+                parameters.append(value)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        source = " FROM conversations c LEFT JOIN users u ON u.user_id = c.owner_user_id"
+        with self._connect() as conn:
+            total = conn.execute("SELECT COUNT(*)" + source + where, parameters).fetchone()[0]
+            sql = ("SELECT c.*, u.full_name AS owner_user_name, p.display_name AS platform_display_name"
+                   + source + " LEFT JOIN platforms p ON p.platform_id = c.platform_id" + where
+                   + f" ORDER BY c.{sort_by} {sort_order}, c.session_id ASC")
+            if limit is not None:
+                sql += " LIMIT ? OFFSET ?"
+                parameters.extend([limit, offset])
+            rows = conn.execute(sql, parameters).fetchall()
+        return {"items": [dict(row) for row in rows], "total": int(total), "limit": limit, "offset": offset}
 
     def list_conversations_for_platform_ids(self, platform_ids: list[int]) -> list[dict[str, Any]]:
         normalized = sorted({int(item) for item in platform_ids})

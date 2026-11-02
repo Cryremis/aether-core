@@ -81,6 +81,9 @@ def test_multiple_compactions_keep_full_user_history_and_audit_summaries_after_r
     audit = client.get(f"/api/v1/admin/conversations/{session_id}", headers=auth)
     assert audit.status_code == 200
     transcript = audit.json()["data"]["transcript"]
+    paged_audit = client.get(f"/api/v1/admin/conversations/{session_id}?limit=100", headers=auth)
+    assert paged_audit.status_code == 200
+    assert paged_audit.json()["data"]["transcript"] == transcript
     checkpoints = [m for m in transcript if m["role"] == "system_event"]
     assert len(checkpoints) == 2
     assert all(summary in checkpoint["summary"] for summary, checkpoint in zip(summaries, checkpoints))

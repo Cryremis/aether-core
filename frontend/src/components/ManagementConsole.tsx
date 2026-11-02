@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 
 import type {
-  AuditConversationDetail,
-  AuditConversationSummary,
   AuditPlatformSeries,
   AuditTrendPoint,
   CurrentUserProfile,
@@ -10,18 +8,14 @@ import type {
   PlatformRegistrationRequestSummary,
   WorkspaceRuntimeSummary,
   SystemAuditOverview,
-  TranscriptAssistantBlock,
-  TranscriptChatMessage,
   UserSummary,
 } from "../api/client";
 import {
   approvePlatformRegistrationRequest,
   assignPlatformAdmin,
   collectAdminRuntime,
-  getAdminConversationDetail,
   getAuditTrends,
   getSystemAuditOverview,
-  listAdminConversations,
   listAdminRuntimes,
   listAdminRuntimesHistory,
   listPlatformRegistrationRequests,
@@ -34,9 +28,11 @@ import {
   updateUserRole,
 } from "../api/client";
 import { AdminPanel } from "./AdminPanel";
-import { ChatTimeline } from "./workbench/ChatTimeline";
+import { AuditBrowser } from "./admin/AuditBrowser";
+import { isRuntimeActive, getRuntimeStatusClass, getRuntimeStatusLabel } from "./admin/auditMessages";
 import { TrendChart, PlatformStackedChart, type TrendPoint, type TrendSeries } from "./admin/TrendChart";
-import type { ChatMessage, AssistantBlock } from "../pages/workbench/types";
+
+export { convertAuditDetailToChatMessages, isRuntimeActive, getRuntimeStatusClass, getRuntimeStatusLabel } from "./admin/auditMessages";
 
 type ManagementConsoleProps = {
   currentUser: CurrentUserProfile;
@@ -76,210 +72,6 @@ function formatTime(value?: string | null) {
   return parsed.toLocaleString();
 }
 
-function formatAuditOwnerLabel(item: {
-  owner_user_name?: string | null;
-  external_user_name?: string | null;
-  external_user_id?: string | null;
-}) {
-  return item.owner_user_name || item.external_user_name || item.external_user_id || "未知";
-}
-
-function getAuditListTimestamp(item: {
-  updated_at?: string | null;
-  last_message_at?: string | null;
-  created_at?: string | null;
-}) {
-  return formatTime(item.updated_at || item.last_message_at || item.created_at);
-}
-
-export function isRuntimeActive(status: string) {
-  return ["provisioning", "running", "executing"].includes(status);
-}
-
-export function getRuntimeStatusLabel(status: string) {
-  if (status === "running") return "运行中";
-  if (status === "executing") return "执行中";
-  if (status === "provisioning") return "创建中";
-  if (status === "expired") return "已过期";
-  if (status === "collected") return "已回收";
-  if (status === "failed") return "已失效";
-  if (status === "missing") return "容器丢失";
-  return status;
-}
-
-export function getRuntimeStatusClass(status: string) {
-  if (status === "running" || status === "executing" || status === "provisioning") return "approved";
-  if (status === "expired" || status === "failed" || status === "missing") return "rejected";
-  return "returned";
-}
-
-export function convertAuditDetailToChatMessages(detail: AuditConversationDetail | null): ChatMessage[] {
-  if (!detail) return [];
-  
-  const transcript = detail.transcript;
-  if (transcript && transcript.length > 0) {
-    return transcript.map((msg, index): ChatMessage => {
-      if (msg.role === "user") {
-        return {
-          id: `audit-${detail.session_id}-t-${index}`,
-          role: "user",
-          content: msg.content || "",
-          timestamp: msg.timestamp ?? null,
-        };
-      }
-
-      if (msg.role === "system_event") {
-        return {
-          id: `audit-${detail.session_id}-t-${index}`,
-          role: "system_event",
-          title: msg.title,
-          detail: msg.detail,
-          summary: msg.summary,
-          eventType: msg.eventType,
-          timestamp: msg.timestamp ?? null,
-        };
-      }
-      
-      if (msg.role === "elicitation_response") {
-        return {
-          id: `audit-${detail.session_id}-t-${index}`,
-          role: "elicitation_response",
-          title: msg.title,
-          summary: msg.summary,
-          answers: msg.answers,
-          timestamp: msg.timestamp ?? null,
-        };
-      }
-      
-      const msgBlocks = (msg as Extract<TranscriptChatMessage, { role: "assistant" }>).blocks ?? [];
-      const blocks: AssistantBlock[] = msgBlocks.map((block, blockIndex): AssistantBlock => {
-        if (block.kind === "reasoning") {
-          return {
-            id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
-            kind: "reasoning",
-            content: block.content || "",
-          };
-        }
-        if (block.kind === "content") {
-          return {
-            id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
-            kind: "content",
-            content: block.content || "",
-            status: "done",
-          };
-        }
-        if (block.kind === "tool") {
-          const toolBlock = block as Extract<TranscriptAssistantBlock, { kind: "tool" }>;
-          return {
-            id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
-            kind: "tool",
-            title: toolBlock.title || "Tool",
-            toolName: toolBlock.toolName,
-            meta: toolBlock.meta || "",
-            argumentsText: toolBlock.argumentsText || "",
-            outputText: toolBlock.outputText || "",
-            status: "done",
-          };
-        }
-        if (block.kind === "runtime_notice") {
-          return {
-            id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
-            kind: "runtime_notice",
-            eventType: "runtime_recreated",
-            title: block.title || "",
-            detail: block.detail,
-          };
-        }
-        return {
-          id: `audit-${detail.session_id}-t-${index}-b-${blockIndex}`,
-          kind: "content",
-          content: "",
-          status: "done",
-        };
-      });
-      
-      return {
-        id: `audit-${detail.session_id}-t-${index}`,
-        role: "assistant",
-        blocks,
-        elapsedMs: null,
-        streaming: false,
-        timestamp: msg.timestamp ?? null,
-      };
-    });
-  }
-  
-  const messages = detail.messages ?? [];
-  return messages.map((msg, index): ChatMessage => {
-    if (msg.role === "user") {
-      return {
-        id: `audit-${detail.session_id}-m-${index}`,
-        role: "user",
-        content: msg.content || "",
-        timestamp: msg.timestamp ?? null,
-      };
-    }
-    
-    const blocks: AssistantBlock[] = [];
-    const normalizedTopLevelContent = msg.content?.trim() ?? "";
-    const normalizedBlockContents = Array.isArray(msg.blocks)
-      ? msg.blocks
-          .filter((block: Record<string, unknown>) => block.kind === "content" && typeof block.content === "string")
-          .map((block: Record<string, unknown>) => String(block.content).trim())
-          .filter(Boolean)
-      : [];
-    const shouldIncludeTopLevelContent = Boolean(
-      normalizedTopLevelContent &&
-      !normalizedBlockContents.some((content) => content === normalizedTopLevelContent),
-    );
-
-    if (shouldIncludeTopLevelContent) {
-      blocks.push({
-        id: `audit-${detail.session_id}-m-${index}-c`,
-        kind: "content",
-        content: normalizedTopLevelContent,
-        status: "done",
-      });
-    }
-    if (Array.isArray(msg.blocks) && msg.blocks.length > 0) {
-      msg.blocks.forEach((block: Record<string, unknown>, blockIndex: number) => {
-        const kind = block.kind as string;
-        const content = typeof block.content === "string" ? block.content : "";
-        if (kind === "reasoning") {
-          blocks.push({
-            id: `audit-${detail.session_id}-m-${index}-b-${blockIndex}`,
-            kind: "reasoning",
-            content,
-          });
-        } else if (kind === "content") {
-          blocks.push({
-            id: `audit-${detail.session_id}-m-${index}-b-${blockIndex}`,
-            kind: "content",
-            content,
-            status: "done",
-          });
-        } else {
-          blocks.push({
-            id: `audit-${detail.session_id}-m-${index}-b-${blockIndex}`,
-            kind: "content",
-            content: JSON.stringify(block, null, 2),
-            status: "done",
-          });
-        }
-      });
-    }
-    
-    return {
-      id: `audit-${detail.session_id}-m-${index}`,
-      role: "assistant",
-      blocks,
-      elapsedMs: null,
-      streaming: false,
-      timestamp: msg.timestamp ?? null,
-    };
-  });
-}
-
 export function ManagementConsole({ currentUser, scope = "all" }: ManagementConsoleProps) {
   const [activeTab, setActiveTab] = useState<ManagementTab>(scope === "system" ? "approvals" : "config");
   const [requests, setRequests] = useState<PlatformRegistrationRequestSummary[]>([]);
@@ -294,16 +86,12 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
   const [auditTrendView, setAuditTrendView] = useState<"overview" | "platforms">("overview");
   const [auditPlatformMetric, setAuditPlatformMetric] = useState<"users" | "conversations" | "messages">("messages");
   const [auditPlatformSeries, setAuditPlatformSeries] = useState<AuditPlatformSeries[]>([]);
-  const [auditConversations, setAuditConversations] = useState<AuditConversationSummary[]>([]);
-  const [selectedAuditSessionId, setSelectedAuditSessionId] = useState<string>("");
-  const [selectedAuditDetail, setSelectedAuditDetail] = useState<AuditConversationDetail | null>(null);
   const [platforms, setPlatforms] = useState<PlatformOption[]>([]);
   const [selectedPlatformId, setSelectedPlatformId] = useState<number | null>(null);
   const [selectedAuditPlatformId, setSelectedAuditPlatformId] = useState<number | null>(null);
   const [selectedPlatformAdmins, setSelectedPlatformAdmins] = useState<PlatformAdminRecord[]>([]);
   const [assignUserId, setAssignUserId] = useState<number | null>(null);
   const [showRuntimeHistory, setShowRuntimeHistory] = useState(false);
-  const [auditBusy, setAuditBusy] = useState(false);
   const [systemAuditBusy, setSystemAuditBusy] = useState(false);
   const [error, setError] = useState("");
   const [busyRequestId, setBusyRequestId] = useState<number | null>(null);
@@ -395,28 +183,6 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
     }
   };
 
-  const loadAuditSessions = async (platformId?: number | null) => {
-    setAuditBusy(true);
-    try {
-      const result = await listAdminConversations(platformId ?? undefined);
-      const items = (result.data ?? []) as AuditConversationSummary[];
-      setAuditConversations(items);
-      const nextSelectedId =
-        selectedAuditSessionId && items.some((item) => item.session_id === selectedAuditSessionId)
-          ? selectedAuditSessionId
-          : items[0]?.session_id ?? "";
-      setSelectedAuditSessionId(nextSelectedId);
-      if (!nextSelectedId) {
-        setSelectedAuditDetail(null);
-        return;
-      }
-      const detailResult = await getAdminConversationDetail(nextSelectedId);
-      setSelectedAuditDetail((detailResult.data ?? null) as AuditConversationDetail | null);
-    } finally {
-      setAuditBusy(false);
-    }
-  };
-
   useEffect(() => {
     if (!canManage) {
       return;
@@ -457,28 +223,6 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
       setError(err instanceof Error ? err.message : "加载 runtime 列表失败");
     });
   }, [activeTab, canManage, showRuntimeHistory]);
-
-  useEffect(() => {
-    if (!canManage || activeTab !== "audit") {
-      return;
-    }
-    void loadAuditSessions(selectedAuditPlatformId).catch((err) => {
-      setError(err instanceof Error ? err.message : "加载审计会话失败");
-    });
-  }, [activeTab, canManage, selectedAuditPlatformId]);
-
-  useEffect(() => {
-    if (!canManage || activeTab !== "audit" || !selectedAuditSessionId) {
-      return;
-    }
-    void getAdminConversationDetail(selectedAuditSessionId)
-      .then((result) => {
-        setSelectedAuditDetail((result.data ?? null) as AuditConversationDetail | null);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "加载审计会话详情失败");
-      });
-  }, [activeTab, canManage, selectedAuditSessionId]);
 
   useEffect(() => {
     if (!canManageSystem || activeTab !== "systemAudit") {
@@ -1074,7 +818,6 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                 <h4>平台会话审计</h4>
                 <p>查看当前可管理平台下的所有用户会话，并按需展开完整消息、runtime 与工作区状态。</p>
               </div>
-              <span className="management-console__metric">{auditConversations.length} 会话</span>
             </div>
             <div className="management-console__audit-platform-grid">
               {platforms.length === 0 ? (
@@ -1093,97 +836,7 @@ export function ManagementConsole({ currentUser, scope = "all" }: ManagementCons
                 ))
               )}
             </div>
-            <div className="management-console__audit-layout">
-              <div className="management-console__audit-list">
-                <div className="management-console__audit-list-header">
-                  <span>历史会话</span>
-                  <button
-                    type="button"
-                    className="action-button action-button--ghost small"
-                    disabled={auditBusy}
-                    onClick={() => void loadAuditSessions(selectedAuditPlatformId)}
-                  >
-                    {auditBusy ? "刷新中..." : "刷新"}
-                  </button>
-                </div>
-                <div className="management-console__audit-list-scroll">
-                  {auditConversations.length === 0 ? (
-                    <div className="admin-panel__empty">当前平台还没有可审计会话。</div>
-                  ) : (
-                    auditConversations.map((item) => (
-                      <button
-                        key={item.session_id}
-                        type="button"
-                        className={`management-console__audit-card ${selectedAuditSessionId === item.session_id ? "is-active" : ""}`}
-                        onClick={() => setSelectedAuditSessionId(item.session_id)}
-                      >
-                        <div className="management-console__audit-card-top">
-                          <strong>{item.title || "新对话"}</strong>
-                          <span className="request-status request-status--returned">{item.message_count} 条</span>
-                        </div>
-                        <div className="management-console__audit-card-meta">
-                          <span className="audit-meta-item">
-                            <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                            {formatAuditOwnerLabel(item)}
-                          </span>
-                          <span className="audit-meta-item">
-                            <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" strokeWidth="2" fill="none"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                            {getAuditListTimestamp(item)}
-                          </span>
-                        </div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div className="management-console__audit-detail">
-                {selectedAuditDetail ? (
-                  <>
-                    <div className="management-console__audit-detail-header">
-                      <div className="management-console__card-head">
-                        <div>
-                          <strong>{selectedAuditDetail.audit.title || "新对话"}</strong>
-                          <p>{selectedAuditDetail.audit.platform_display_name || selectedAuditDetail.host_name}</p>
-                        </div>
-                        <span className="request-status request-status--approved">{selectedAuditDetail.message_count} 条消息</span>
-                      </div>
-                      <div className="management-console__audit-detail-meta">
-                        <span>用户：{formatAuditOwnerLabel(selectedAuditDetail.audit)}</span>
-                        <span>Session：{selectedAuditDetail.session_id}</span>
-                        <span>创建：{formatTime(selectedAuditDetail.created_at)}</span>
-                        <span>更新：{formatTime(selectedAuditDetail.audit.updated_at)}</span>
-                        <span>最后消息：{formatTime(selectedAuditDetail.audit.last_message_at)}</span>
-                        <span>网络：{selectedAuditDetail.allow_network ? "允许" : "受限"}</span>
-                        {selectedAuditDetail.runtime ? (
-                          <span className={`runtime-status runtime-status--${getRuntimeStatusClass(selectedAuditDetail.runtime.status)}`}>
-                            Runtime：{getRuntimeStatusLabel(selectedAuditDetail.runtime.status)}
-                          </span>
-                        ) : (
-                          <span className="runtime-status runtime-status--none">Runtime：尚未创建</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="management-console__audit-timeline-wrapper">
-                      <ChatTimeline
-                        loading={auditBusy}
-                        messages={convertAuditDetailToChatMessages(selectedAuditDetail)}
-                        actionsDisabled={true}
-                        showMessageTimestamps={true}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <div className="admin-panel__empty management-console__audit-empty-detail">
-                    <div className="audit-empty-icon">
-                      <svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                      </svg>
-                    </div>
-                    <p>选择左侧会话后，可在这里查看完整审计详情</p>
-                  </div>
-                )}
-              </div>
-            </div>
+            <AuditBrowser key={selectedAuditPlatformId ?? "all"} platformId={selectedAuditPlatformId ?? undefined} />
           </section>
         )}
 

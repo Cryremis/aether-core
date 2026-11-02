@@ -2424,6 +2424,142 @@
   color: var(--text-tertiary);
 }
 
+/* 分页审计浏览器：固定行密度，列表与消息分别滚动。 */
+.audit-browser {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.audit-browser__toolbar,
+.audit-browser__search,
+.audit-browser__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.audit-browser__toolbar {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.audit-browser input,
+.audit-browser select,
+.audit-browser__pagination button,
+.audit-browser__message-nav button {
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-color, #dbe2ea);
+  border-radius: 7px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.audit-browser button { cursor: pointer; }
+.audit-browser button:disabled { cursor: default; opacity: 0.5; }
+.audit-browser button:focus-visible,
+.audit-browser input:focus-visible,
+.audit-browser select:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+.audit-browser__search input { flex: 1; min-width: min(260px, 100%); }
+.audit-browser__filters label { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-secondary); }
+.audit-browser__hint { font-size: 12px; color: var(--text-tertiary); }
+
+.audit-browser__layout {
+  display: grid;
+  grid-template-columns: minmax(390px, 0.9fr) minmax(0, 1.1fr);
+  height: clamp(480px, 68vh, 960px);
+  gap: 14px;
+  min-width: 0;
+}
+
+.audit-browser__list,
+.audit-browser__detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-primary, #fff);
+}
+
+.audit-browser__list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  font-size: 13px;
+}
+
+.audit-browser__columns,
+.audit-browser__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px 154px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: left;
+}
+
+.audit-browser__columns { color: var(--text-tertiary); flex-shrink: 0; font-size: 11px; }
+.audit-browser__rows { overflow-y: auto; flex: 1; min-height: 0; }
+.audit-browser__row {
+  width: 100%;
+  min-height: 58px;
+  border: 0;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  box-shadow: inset 3px 0 transparent;
+}
+.audit-browser__row:hover { background: rgba(59, 130, 246, 0.05); }
+.audit-browser__row.is-active { background: rgba(59, 130, 246, 0.09); box-shadow: inset 3px 0 #3b82f6; }
+.audit-browser__identity,
+.audit-browser__dates { display: grid; gap: 5px; min-width: 0; }
+.audit-browser__identity strong { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.audit-browser__identity > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.audit-browser__dates { font-size: 11px; font-variant-numeric: tabular-nums; }
+.audit-browser__dates time { white-space: nowrap; }
+.audit-browser__dates time + time { color: var(--text-tertiary); }
+.audit-browser__pagination,
+.audit-browser__message-nav { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; font-size: 12px; flex-shrink: 0; border-top: 1px solid var(--border-color, #e2e8f0); }
+.audit-browser__pagination span,
+.audit-browser__message-nav span { margin-right: auto; color: var(--text-secondary); }
+.audit-browser__detail-header { padding: 12px; display: grid; gap: 8px; flex-shrink: 0; }
+.audit-browser__detail-header > strong { overflow-wrap: anywhere; max-height: 3em; overflow-y: auto; font-size: 14px; }
+.audit-browser__detail-header .management-console__audit-detail-meta { gap: 6px 12px; }
+.audit-browser__session-id { overflow-wrap: anywhere; }
+.audit-browser__timeline { flex: 1; min-height: 0; overflow: auto; }
+.audit-browser__timeline .chat-container { max-width: 100%; min-width: 0; padding: 16px 12px 24px; }
+:root[data-theme="dark"] .audit-browser__list,
+:root[data-theme="dark"] .audit-browser__detail,
+:root[data-theme="dark"] .audit-browser input,
+:root[data-theme="dark"] .audit-browser select,
+:root[data-theme="dark"] .audit-browser__pagination button,
+:root[data-theme="dark"] .audit-browser__message-nav button { background: var(--bg-secondary, #161c28); border-color: rgba(148, 163, 184, 0.2); }
+
+@media (max-width: 1150px) {
+  .audit-browser__layout { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .audit-browser__list { height: 480px; }
+  .audit-browser__detail { height: 640px; }
+}
+
+@media (max-width: 520px) {
+  .audit-browser__columns, .audit-browser__row { grid-template-columns: minmax(0, 1fr) 30px 130px; gap: 5px; padding-left: 8px; padding-right: 8px; }
+  .audit-browser__dates { font-size: 10px; }
+  .audit-browser__filters input { max-width: 140px; }
+}
+
 .management-console__audit-layout {
   display: grid;
   gap: 18px;
