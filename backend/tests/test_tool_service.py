@@ -36,14 +36,11 @@ def test_host_tool_error_preserves_bounded_host_detail(monkeypatch):
         "auth_inject": False,
     }
 
-    try:
-        asyncio.run(tool_service._invoke_host_tool(session, descriptor, {"value": 1}))
-    except RuntimeError as exc:
-        message = str(exc)
-        assert "HTTP 409" in message
-        assert "页面版本已变化，请重新读取后再操作。" in message
-    else:
-        raise AssertionError("expected host tool failure")
+    result = asyncio.run(tool_service._invoke_host_tool(session, descriptor, {"value": 1}))
+    assert result.status == "error"
+    assert "HTTP 409" in result.error.message
+    assert "页面版本已变化，请重新读取后再操作。" in result.error.message
+    assert result.data["host_response"]["detail"] == "页面版本已变化，请重新读取后再操作。"
 
 
 def test_host_tool_error_preserves_plain_text_detail(monkeypatch):
@@ -64,13 +61,11 @@ def test_host_tool_error_preserves_plain_text_detail(monkeypatch):
         "auth_inject": False,
     }
 
-    try:
-        asyncio.run(tool_service._invoke_host_tool(session, descriptor, {}))
-    except RuntimeError as exc:
-        assert "HTTP 502" in str(exc)
-        assert "upstream connection reset by peer" in str(exc)
-    else:
-        raise AssertionError("expected host tool failure")
+    result = asyncio.run(tool_service._invoke_host_tool(session, descriptor, {}))
+    assert result.status == "error"
+    assert "HTTP 502" in result.error.message
+    assert "upstream connection reset by peer" in result.error.message
+    assert result.data["host_response"] == "upstream connection reset by peer"
 
 
 def test_host_tool_success_uses_unified_result_contract(monkeypatch):

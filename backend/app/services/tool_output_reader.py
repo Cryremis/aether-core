@@ -10,7 +10,10 @@ def read_tool_output(receipt: dict[str, Any], arguments: dict[str, Any]) -> dict
     value: Any = receipt
     if not path:
         payload = receipt.get("data") or {}
-        if isinstance(payload.get("public_output"), str):
+        if payload.get("output_format") == "json":
+            value = payload["data"]
+            path = "/data/data"
+        elif isinstance(payload.get("public_output"), str):
             value = payload["public_output"]
             path = "/data/public_output"
     else:

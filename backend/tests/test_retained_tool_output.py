@@ -91,3 +91,49 @@ def test_only_host_business_timeouts_add_the_separate_transport_parameter(monkey
     assert "call_timeout_seconds" in host["function"]["parameters"]["properties"]
     assert "call_timeout_seconds" not in descriptor["input_schema"]["properties"]
     assert "call_timeout_seconds" not in tool_service.get_context_compact_schema()["function"]["parameters"]["properties"]
+
+
+def test_json_host_result_is_used_directly_and_default_read_path_matches_preview():
+    import json
+    structured = {"summary": "metrics", "data": {"sub_tasks": [{"id": "case3", "metrics": {"ttft": 326360}}]}}
+    result = ToolExecutionResult.success("host_tool.completed", "read", {
+        "output_format": "json", "public_output": "display-only text", "data": structured,
+    })
+    preview = ToolResultRenderer().render(result)
+    assert json.loads(preview) == structured
+    receipt = result.public_payload()
+    page = read_tool_output(receipt, {})
+    assert page["path"] == "/data/data"
+    assert json.loads(page["content"]) == structured
+    selected = read_tool_output(receipt, {"path": "/data/data/data/sub_tasks/0/metrics/ttft"})
+    assert selected["content"] == "326360"
+
+
+def test_host_error_prefers_diagnostic_text_and_keeps_machine_readable_code():
+    import httpx
+    payload = {"status": "error", "public_output": "error: node_id is required\ncode: INVALID_ARGUMENTS",
+               "data": {"data": {"detail": {"code": "INVALID_ARGUMENTS", "fields": ["node_id"], "retryable": False}}}}
+    response = httpx.Response(422, json=payload)
+    result = tool_service._host_failure("monitor", response)
+    assert result.error.code == "INVALID_ARGUMENTS"
+    assert "node_id is required" in result.error.message
+    assert not result.error.retryable
+    assert result.data["host_response"] == payload
+    assert "public_output" not in result.error.message
+
+
+def test_failed_host_receipt_keeps_original_fields_and_is_not_an_unknown_effect(tmp_path, monkeypatch):
+    from app.services.context.history_store import history_store
+    from app.services.store import store_service
+    import httpx
+    monkeypatch.setattr(store_service, "_db_path", tmp_path / "host-errors.db")
+    session = AgentSession("failed_receipt")
+    async def invoke(*args, **kwargs):
+        return tool_service._host_failure("monitor", httpx.Response(503, json={
+            "detail": {"code": "DATASOURCE_UNAVAILABLE", "message": "Prometheus unavailable", "retryable": True}}))
+    monkeypatch.setattr(tool_service, "_execute_with_timeout", invoke)
+    result = asyncio.run(tool_service.execute(session, "monitor", {}, run_id="run", tool_call_id="call"))
+    assert result.error.code == "DATASOURCE_UNAVAILABLE"
+    receipt = history_store.tool_receipt(session.session_id, "run", "call")
+    assert receipt["error"]["code"] == "DATASOURCE_UNAVAILABLE"
+    assert receipt["data"]["host_response"]["detail"]["retryable"] is True

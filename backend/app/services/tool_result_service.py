@@ -152,7 +152,10 @@ class ToolResultRenderer:
             # Host paged text is already a presentation contract. Generic scalar
             # clipping used to erase its middle/tail AND advance the source cursor.
             public = result.data.get("public_output")
-            text = public if isinstance(public, str) else "\n".join(self._render_success(result))
+            if result.data.get("output_format") == "json":
+                text = json.dumps(result.data["data"], ensure_ascii=False)
+            else:
+                text = public if isinstance(public, str) else "\n".join(self._render_success(result))
         elif result.kind == "tool.result.page":
             data = result.data
             metadata = {key: value for key, value in data.items() if key != "content"}

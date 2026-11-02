@@ -481,7 +481,9 @@ def test_compaction_wait_is_cancelled_without_starting_a_model_request(monkeypat
 def test_runtime_limit_also_applies_while_waiting_for_compaction(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     setup_client(monkeypatch, make_runtime_config())
-    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1)
+    # Isolate the context-wait budget from variable SQLite/setup latency.
+    monkeypatch.setattr(settings, "agent_max_runtime_seconds", 60)
+    monkeypatch.setattr("app.runtime.engine.agent_engine._remaining_runtime", lambda *_: 0.02)
     cancelled = []
 
     async def prepare(**kwargs):

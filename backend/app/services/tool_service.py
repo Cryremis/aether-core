@@ -1701,10 +1701,7 @@ class ToolService:
                         )
 
             if response.is_error:
-                detail = self._host_error_detail(response)
-                raise RuntimeError(
-                    f"宿主工具 {descriptor['name']} 调用失败（HTTP {response.status_code}）：{detail}"
-                )
+                return self._host_failure(descriptor["name"], response)
             try:
                 data = response.json()
             except ValueError as exc:
@@ -1719,6 +1716,31 @@ class ToolService:
             payload,
         )
 
+    @classmethod
+    def _host_failure(cls, name: str, response: httpx.Response) -> ToolExecutionResult:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = response.text
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        if not isinstance(detail, dict) and isinstance(payload, dict):
+            # AgentToolInvokeResponse.data is the host result; its data.detail
+            # is the original business error, not a new runtime exception.
+            result = payload.get("data")
+            data = result.get("data") if isinstance(result, dict) else None
+            detail = data.get("detail") if isinstance(data, dict) else None
+        detail = detail if isinstance(detail, dict) else {}
+        retryable = detail.get("retryable")
+        if not isinstance(retryable, bool):
+            retryable = response.status_code in {408, 425, 429, 502, 503, 504}
+        return ToolExecutionResult.failure(
+            "host_tool.failed", f"宿主工具 {name} 调用失败",
+            code=str(detail.get("code") or "HOST_TOOL_HTTP_ERROR"),
+            message=f"宿主工具 {name} 调用失败（HTTP {response.status_code}）：{cls._host_error_detail(response)}",
+            retryable=bool(retryable), next_action=str(detail.get("next_action") or ""),
+            data={"http_status": response.status_code, "host_response": payload},
+        )
+
     @staticmethod
     def _host_error_detail(response: httpx.Response) -> str:
         """Preserve a bounded host explanation so the model can recover intelligently."""
@@ -1729,7 +1751,7 @@ class ToolService:
             payload = None
         candidates: list[Any] = []
         if isinstance(payload, dict):
-            candidates.extend((payload.get("detail"), payload.get("message"), payload.get("summary")))
+            candidates.extend((payload.get("public_output"), payload.get("detail"), payload.get("message"), payload.get("summary")))
             error = payload.get("error")
             if isinstance(error, dict):
                 candidates.extend((error.get("message"), error.get("detail")))
