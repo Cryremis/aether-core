@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.sandbox.manager import sandbox_manager
 from app.services.context.bootstrap import configure_context_runtime
 from app.services.session_types import AgentSession
+from app.services.session_identity import IDENTITY_FIELDS, identity_updates
 from app.services.store import store_service
 from app.services.transcript_service import transcript_service
 from app.services.tool_catalog_service import tool_catalog_service
@@ -44,16 +45,26 @@ class SessionService:
         role: str = "owner",
         parent_session_id: str | None = None,
     ) -> AgentSession:
+        # 同一进程首次加载、懒修复和快照写入共享锁，避免创建两个旧内存实例。
+        resolved_id = session_id or f"sess_{uuid.uuid4().hex}"
+        with self._metadata_lock(resolved_id):
+            return self._get_or_create_locked(resolved_id, workspace_id, role=role, parent_session_id=parent_session_id)
+
+    def _get_or_create_locked(self, session_id: str, workspace_id: str | None, *,
+                              role: str, parent_session_id: str | None) -> AgentSession:
         if session_id and session_id in self._sessions:
             session = self._sessions[session_id]
             if workspace_id and session.workspace_id != workspace_id:
                 raise ValueError("会话已绑定到另一个 Workspace")
+            if self._reconcile_identity(session):
+                self._write_metadata(session)
             session.touch()
             store_service.touch_workspace_session(session.session_id)
             return session
 
         new_id = session_id or f"sess_{uuid.uuid4().hex}"
         session = self._load_from_disk(new_id) or AgentSession(session_id=new_id)
+        self._reconcile_identity(session)
         self.reconcile_active_run_view(session)
         resolved_workspace_id = session.workspace_id or workspace_id or self._find_workspace_id(new_id)
         if resolved_workspace_id is None:
@@ -101,6 +112,14 @@ class SessionService:
         self._sessions[new_id] = session
         self._write_metadata(session)
         return session
+
+    def _reconcile_identity(self, session: AgentSession) -> bool:
+        conversation = store_service.get_conversation_by_session(session.session_id)
+        updates = identity_updates(session.session_id,
+            {field: getattr(session, field) for field in IDENTITY_FIELDS}, conversation)
+        for field, value in updates.items():
+            setattr(session, field, value)
+        return bool(updates)
 
     def _find_workspace_id(self, session_id: str) -> str | None:
         conversation = store_service.get_conversation_by_session(session_id)
@@ -214,8 +233,19 @@ class SessionService:
         payload = history_store.snapshot(session_id)
         if payload is None and not metadata_path.exists():
             return None
+        conversation = store_service.get_conversation_by_session(session_id)
+        if payload is not None and metadata_path.exists():
+            try:
+                disk_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                disk_payload = None  # 损坏的投影仍可由完整账本恢复。
+            if isinstance(disk_payload, dict):
+                # 即使账本正确，也不静默覆盖 JSON 中非空且冲突的身份。
+                identity_updates(session_id, disk_payload, conversation)
         if payload is None:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        # 账本快照优先于 JSON，必须在迁移、恢复与历史重建之前统一身份。
+        payload.update(identity_updates(session_id, payload, conversation))
         if int(payload.get("message_schema_version", 1)) > 3:
             raise RuntimeError("当前版本不能读取更新版本的会话格式，拒绝降级写入")
         if int(payload.get("message_schema_version", 1)) < 3:
@@ -315,6 +345,8 @@ class SessionService:
             self._write_metadata_locked(session)
 
     def _write_metadata_locked(self, session: AgentSession) -> None:
+        # 创建 conversation 后的第一次 persist 也走这里；旧内存态不能再写回空身份。
+        self._reconcile_identity(session)
         if not session.workspace_id:
             raise RuntimeError("会话尚未绑定 Workspace")
         payload = {

@@ -96,7 +96,7 @@ class ScheduleExecutor:
         title_prefix = str(task.get("new_session_title_prefix") or task["title"])
         conversation = store_service.create_conversation(
             session_id=session.session_id,
-            workspace_id=parent_workspace_id,
+            workspace_id=session.workspace_id,
             title=f"{title_prefix} · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
             host_name=host_name,
             platform_id=platform_id,

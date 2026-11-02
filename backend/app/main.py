@@ -4,7 +4,9 @@ import faulthandler
 from app.api.routes.auth import router as auth_router
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from app.services.session_identity import SessionIdentityConflict
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.agent import router as agent_router
@@ -62,6 +64,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(SessionIdentityConflict)
+async def session_identity_conflict(_request: Request, exc: SessionIdentityConflict):
+    # 不回显其他平台或用户的身份；冲突原值留在存储中供管理员核对。
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
 
 app.include_router(health_router)
 app.include_router(auth_router)

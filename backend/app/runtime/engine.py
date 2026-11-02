@@ -1703,11 +1703,12 @@ class AgentEngine:
 
     def _resolve_conversation_seed(self, session: AgentSession) -> dict[str, Any] | None:
         """从已有 conversation 继承身份与平台字段，避免兜底创建时丢失归属。"""
-        if not session.conversation_id:
-            return None
-        source = store_service.get_conversation(session.conversation_id)
+        source = store_service.get_conversation(session.conversation_id) if session.conversation_id else None
         if source is None:
-            return None
+            # 内部创建但尚未落 conversation 的会话也必须保留已明确的身份。
+            # 不从 host_name、host_context 或请求正文猜测平台/用户。
+            return {"platform_id": session.platform_id, "owner_user_id": session.owner_user_id,
+                    "external_user_id": session.external_user_id, "host_name": session.host_name}
         return {
             "platform_id": source.get("platform_id"),
             "owner_user_id": source.get("owner_user_id"),
