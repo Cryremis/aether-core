@@ -112,3 +112,12 @@ npm run build
 本地验证覆盖协议夹具和确定性运行时契约；真实 vLLM、Responses 与 Messages 服务在本环境不可用，需单列为待部署验证。默认端口、沙箱执行器和网络隔离均未调整；本次不自动重启服务，也不自动提交 Git。
 
 最新工作区验证记录见 [二次审计矩阵](context-runtime-audit.md)。构建仍报告既有 vendor 循环分包和大 chunk 提示。内网模型质量、真实服务协议与同机性能对照未在此环境运行。
+
+
+## WeLink 旧运行恢复与会话绑定
+
+恢复既有 run 只应读取和订阅该 run，不能先调用会话创建／bind 再拿新返回的 ID 校验旧运行。GET /api/v1/host/runs/{run_id} 新增 external_user_id、conversation_key 元数据，帮助网关核实原归属和修复本地映射；旧客户端可忽略新增字段。旧版控制面缺少该元数据时，WeLink 可以使用按 external_user_id 过滤的会话列表（包含隐藏／归档）核实会话归属。
+
+POST /api/v1/host/conversations 新增可选 conversation_id、session_id。已有会话刷新应携带原 ID，而不只依赖 conversation_key；这两个字段沿用 HostBindRequest 的平台、用户、删除状态和 ID 一致性检查，不能用于跨用户复用或在指定 ID 失效后偷偷新建。未提供 ID 时保持原创建／幂等行为。
+
+WeLink 遇到本地未收口记录时先查询远端：已终态的取回结果，已不存在的结束本地阻塞，仍在执行的按照已有插话语义停止后处理本次正文。/result 只接回原任务，不重做业务操作。暂时查询失败不把原运行误标为停止。无需修改端口、环境变量或数据库结构；回滚代码不需要数据迁移。内网仍需验收宿主 bind 对显式 ID 的实际支持及重启／断线链路。

@@ -741,6 +741,8 @@ def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tm
 @pytest.mark.usefixtures("checkpoint_model")
 def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     initialize_store(tmp_path)
+    # 用例缩小窗口时也固定输出预留，避免继承本机 32K 配置而依赖测试执行顺序。
+    monkeypatch.setattr("app.runtime.engine.llm_client.output_limit", lambda runtime: 2000)
     session = build_session("sess_engine_proactive")
     seed_verbose_history(session, turns=6)
 

@@ -31,6 +31,8 @@ class HostControlService:
         bind_request = HostBindRequest(
             platform_key=str(platform["platform_key"]),
             host_name=request.host_name,
+            conversation_id=request.conversation_id,
+            session_id=request.session_id,
             conversation_key=request.conversation_key or request.idempotency_key or f"host-created-{uuid.uuid4().hex}",
             visibility=request.visibility,
             context=HostContextDescriptor(**context),
@@ -209,6 +211,9 @@ class HostControlService:
             raise LookupError("运行不存在")
         conversation = self._conversation(platform, str(run.get("conversation_id") or ""))
         run["conversation_id"] = conversation["conversation_id"]
+        # 供宿主按原运行恢复及核实归属，不能用重新 bind 的会话替代旧运行。
+        run["external_user_id"] = conversation.get("external_user_id")
+        run["conversation_key"] = conversation.get("conversation_key")
         run["subagents"] = store_service.list_subagents_for_session(str(conversation["session_id"]))
         return run
 

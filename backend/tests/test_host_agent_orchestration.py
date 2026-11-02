@@ -697,3 +697,44 @@ def test_subagent_result_is_proactively_injected_into_parent_context(tmp_path):
     assert "found the answer" in injected["content"]
     assert "subagent_result_ready" in event_types
     assert "subagent_completed" in event_types
+
+
+def test_host_explicit_conversation_rebind_preserves_identity_with_changed_key(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    client = TestClient(app)
+    headers = {"X-Aether-Platform-Secret": platform["host_secret"]}
+    original = client.post("/api/v1/host/conversations", headers=headers, json={
+        "external_user_id": "owner", "conversation_key": "old-key",
+    }).json()["data"]
+    rebound = client.post("/api/v1/host/conversations", headers=headers, json={
+        "external_user_id": "owner", "conversation_key": "changed-key",
+        "conversation_id": original["conversation_id"], "session_id": original["session_id"],
+    })
+    assert rebound.status_code == 200
+    assert rebound.json()["data"]["conversation_id"] == original["conversation_id"]
+    assert rebound.json()["data"]["session_id"] == original["session_id"]
+    denied = client.post("/api/v1/host/conversations", headers=headers, json={
+        "external_user_id": "other-user", "conversation_id": original["conversation_id"],
+        "session_id": original["session_id"],
+    })
+    assert denied.status_code == 400
+    missing = client.post("/api/v1/host/conversations", headers=headers, json={
+        "external_user_id": "owner", "conversation_id": "missing", "conversation_key": "changed-key",
+    })
+    assert missing.status_code == 400
+
+
+def test_host_run_recovery_identity_comes_from_owned_conversation(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    conversation = store_service.create_conversation(session_id="recovery-session", title="Recovery", host_name="WeLink", platform_id=platform["platform_id"],
+        external_user_id="owner", conversation_key="original-key")
+    store_service.create_agent_run(run_id="recovery-run", session_id="recovery-session",
+        conversation_id=conversation["conversation_id"], status="completed")
+    run = host_control_service.get_run(platform=platform, run_id="recovery-run")
+    assert run["external_user_id"] == "owner"
+    assert run["conversation_key"] == "original-key"
+    assert run["session_id"] == "recovery-session"
+    with pytest.raises(LookupError):
+        host_control_service.get_run(platform=create_platform("other-platform"), run_id="recovery-run")

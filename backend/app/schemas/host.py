@@ -95,6 +95,8 @@ class HostConversationCreateRequest(BaseModel):
 
     external_user_id: str = Field(min_length=1, max_length=256)
     external_user_name: str = Field(default="Host User", max_length=256)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=256)
+    session_id: str | None = Field(default=None, min_length=1, max_length=256)
     external_org_id: str | None = Field(default=None, max_length=256)
     conversation_key: str | None = Field(default=None, max_length=256)
     idempotency_key: str | None = Field(default=None, max_length=256)
