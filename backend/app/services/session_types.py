@@ -61,6 +61,7 @@ class AgentSession:
     baseline_root: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
     transcript: list[dict[str, Any]] = field(default_factory=list)
+    compaction_audit: list[dict[str, Any]] = field(default_factory=list)
     host_context: dict[str, Any] = field(default_factory=dict)
     platform_files: list[dict[str, Any]] = field(default_factory=list)
     platform_skills: list[dict[str, Any]] = field(default_factory=list)

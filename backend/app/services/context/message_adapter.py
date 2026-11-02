@@ -240,7 +240,7 @@ class ContextMessageAdapter:
             if role not in allowed_roles:
                 continue
             api_message = self.strip_runtime_metadata(message)
-            if pending and message.get("kind") == "subagent_result":
+            if pending and message.get("kind") in {"subagent_result", "skill_context"}:
                 deferred.append(api_message)
                 continue
             result.append(api_message)

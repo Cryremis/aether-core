@@ -14,6 +14,7 @@ from app.schemas.host import (
 from app.schemas.platform import ConversationSummary
 from app.services.agent_run_service import agent_run_service
 from app.services.session_service import session_service
+from app.services.transcript_service import transcript_service
 from app.services.store import store_service
 from app.services.workspace_runtime_service import workspace_runtime_service
 
@@ -252,7 +253,7 @@ class HostControlService:
         session = session_service.get_or_create(str(conversation["session_id"]))
         candidates: list[dict[str, Any]] = []
 
-        for message in session.messages:
+        for message in transcript_service.visible_session_messages(session):
             if str(message.get("role")) != "assistant" or not message.get("content"):
                 continue
             if message.get("visible_in_transcript") is False:

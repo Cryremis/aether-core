@@ -183,6 +183,8 @@ class SkillService:
                 {
                     "role": "user",
                     "content": final_content,
+                    "kind": "skill_context",
+                    "visible_in_transcript": False,
                 }
             ],
         }

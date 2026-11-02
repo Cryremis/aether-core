@@ -440,6 +440,7 @@ export type TranscriptChatMessage =
       role: "system_event";
       title: string;
       detail?: string;
+      summary?: string;
       eventType: "runtime_created" | "runtime_recreated" | "context_compacted" | "context_recovered" | "context_warning" | "context_blocked";
       timestamp?: string | null;
     }

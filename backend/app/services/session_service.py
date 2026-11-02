@@ -242,6 +242,7 @@ class SessionService:
             host_name=payload.get("host_name", ""),
             baseline_root=payload.get("baseline_root", ""),
             messages=payload.get("messages", []),
+            compaction_audit=payload.get("compaction_audit", []),
             transcript=payload.get(
                 "transcript",
                 transcript_service.build_persisted_transcript(payload.get("messages", [])),
@@ -289,9 +290,10 @@ class SessionService:
             active_run_view=payload.get("active_run_view"),
         )
         from app.services.context.message_adapter import context_message_adapter
-        migrated = context_message_adapter.normalize_session(session)
-        if history_store.recover_attempts(session) or migrated:
-            session.transcript = transcript_service.build_session_transcript(session)
+        context_message_adapter.normalize_session(session)
+        history_store.recover_attempts(session)
+        # 展示历史独立于模型活动窗口；刷新或重启后也从当前分支归档重建。
+        session.transcript = transcript_service.build_session_transcript(session)
         return session
 
     def reconcile_active_run_view(self, session: AgentSession) -> None:
@@ -325,6 +327,7 @@ class SessionService:
             "host_name": session.host_name,
             "baseline_root": session.baseline_root,
             "messages": session.messages,
+            "compaction_audit": session.compaction_audit,
             "transcript": session.transcript,
             "host_context": session.host_context,
             "platform_files": session.platform_files,

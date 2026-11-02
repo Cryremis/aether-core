@@ -13,6 +13,38 @@ class TranscriptService:
         from app.services.context.history_store import history_store
         return self.build_persisted_transcript(history_store.expand_history(session.session_id, session.messages))
 
+    def visible_session_messages(self, session) -> list[dict[str, Any]]:
+        from app.services.context.history_store import history_store
+        return [message for message in history_store.expand_history(session.session_id, session.messages)
+                if self._is_visible(message)]
+
+    def build_audit_transcript(self, session) -> list[dict[str, Any]]:
+        from app.services.context.history_store import history_store
+        expanded = history_store.expand_history(session.session_id, session.messages)
+        positions = {message.get("message_id"): index for index, message in enumerate(expanded)}
+        transcript = self.build_persisted_transcript(expanded)
+        # 用原消息锚点定位，不能把摘要放到模型检查点的头部替换位置。
+        events: dict[int, list[dict[str, Any]]] = {}
+        for record in session.compaction_audit:
+            anchor = positions.get(record.get("after_message_id"))
+            if anchor is None:
+                continue  # 被编辑/重跑丢弃的分支不回流到当前审计时间线。
+            slot = next((index for index, item in enumerate(transcript)
+                         if positions.get(item.get("id"), -1) > anchor), len(transcript))
+            detail = (f"策略：{record['strategy']}；原因：{record['cause']}；"
+                      f"输入估算：{record['tokens_before']} → {record['tokens_after']} tokens。")
+            events.setdefault(slot, []).append({
+                "id": record["id"], "role": "system_event", "eventType": "context_compacted",
+                "title": "上下文压缩（仅审计可见）", "detail": detail, "summary": record["summary"],
+                "timestamp": record["timestamp"],
+            })
+        result = []
+        for index in range(len(transcript) + 1):
+            result.extend(events.get(index, []))
+            if index < len(transcript):
+                result.append(transcript[index])
+        return result
+
     _SYSTEM_EVENT_TITLES: dict[str, str] = {
         "context_compacted": "上下文已压缩",
         "context_recovered": "上下文已恢复",
@@ -112,10 +144,14 @@ class TranscriptService:
 
     def build_persisted_transcript(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         transcript: list[dict[str, Any]] = []
+        latest_by_run = {message["run_id"]: index for index, message in enumerate(messages)
+                         if message.get("run_id") and message.get("role") == "assistant" and self._is_visible(message)}
         for index, message in enumerate(messages):
             if not self._is_visible(message):
                 continue
             role = str(message.get("role") or "")
+            if role == "assistant" and message.get("run_id") and latest_by_run[message["run_id"]] != index:
+                continue
             if role == "user":
                 transcript.append(self.transcript_item_from_committed_message(message, index=index))
                 continue
@@ -439,6 +475,8 @@ class TranscriptService:
                 block["status"] = str(pending.get("status") or "done")
 
     def _is_visible(self, message: dict[str, Any]) -> bool:
+        if message.get("kind") == "skill_context":
+            return False
         if bool(message.get("ephemeral")):
             return False
         return message.get("visible_in_transcript") is not False

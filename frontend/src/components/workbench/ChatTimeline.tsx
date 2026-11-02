@@ -1156,7 +1156,16 @@ export function ChatTimeline({
             <div className="timeline-system-event__line" />
             <div className="timeline-system-event__content">
               <div className="timeline-system-event__label">{message.title}</div>
+              {showMessageTimestamps && message.timestamp ? <TimestampBadge timestamp={message.timestamp} /> : null}
               {message.detail ? <div className="timeline-system-event__detail">{message.detail}</div> : null}
+              {message.summary ? (
+                <details className="timeline-compaction-summary">
+                  <summary>查看压缩摘要</summary>
+                  <div className="timeline-compaction-summary__body">
+                    <MemoizedMarkdown content={message.summary} />
+                  </div>
+                </details>
+              ) : null}
             </div>
             <div className="timeline-system-event__line" />
           </div>

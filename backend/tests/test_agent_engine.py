@@ -574,6 +574,10 @@ def test_agent_engine_injects_skill_content_after_invoke_skill(monkeypatch, tmp_
     events = asyncio.run(collect_stream(session, "analyze data"))
 
     assert len(observed_messages) == 2
+    injection_index = next(index for index, message in enumerate(observed_messages[1])
+        if "aether_skill" in str(message.get("content", "")))
+    assert observed_messages[1][injection_index - 1]["role"] == "tool"
+    assert any(message.get("kind") == "skill_context" for message in session.messages)
     assert any(
         message.get("role") == "user" and "aether_skill" in str(message.get("content", ""))
         for message in observed_messages[1]
@@ -883,7 +887,8 @@ def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, t
                 first_events.append(event.model_dump(mode="json"))
 
         task = asyncio.create_task(consume_first())
-        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        # 初始化包含文件与账本 IO；取消动作本身仍要求在下面的 1 秒内完成。
+        await asyncio.wait_for(tool_started.wait(), timeout=5)
         aborted_run_id = session.request_abort()
         assert aborted_run_id is not None
         await asyncio.wait_for(task, timeout=1)
@@ -952,7 +957,8 @@ def test_agent_engine_cleans_pending_wait_tasks_when_cancelled(monkeypatch, tmp_
                 pass
 
         task = asyncio.create_task(consume())
-        await asyncio.wait_for(tool_started.wait(), timeout=1)
+        # 这里只等待初始化完成，不是取消响应时间的断言。
+        await asyncio.wait_for(tool_started.wait(), timeout=5)
         task.cancel()
         try:
             await task

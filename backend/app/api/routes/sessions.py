@@ -15,6 +15,7 @@ from app.services.session_service import session_service
 from app.services.skill_service import skill_service
 from app.services.subagent_service import subagent_service
 from app.services.store import store_service
+from app.services.transcript_service import transcript_service
 
 router = APIRouter(prefix="/api/v1/agent/sessions", tags=["sessions"])
 
@@ -133,18 +134,19 @@ def list_sessions(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
 @router.get("/{session_id}")
 def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
     conversation, session = _ensure_session_access(session_id, auth)
+    session.transcript = transcript_service.build_session_transcript(session)
     summary = SessionSummary(
         session_id=session.session_id,
         workspace_id=session.workspace_id,
         conversation_id=session.conversation_id,
         title=conversation.get("title") or "新对话",
         host_name=session.host_name,
-        message_count=len(session.messages),
+        message_count=len(session.transcript),
         allow_network=session.allow_network,
         created_at=datetime.fromisoformat(conversation["created_at"]) if conversation.get("created_at") else datetime.now(timezone.utc),
         skills=skill_service.list_for_session(session),
         files=file_service.list_sidebar_files(session),
-        messages=session.messages,
+        messages=transcript_service.visible_session_messages(session),
         transcript=session.transcript,
         context_state=session.context_state,
         runtime=store_service.get_workspace_runtime(session.workspace_id) if session.workspace_id else None,

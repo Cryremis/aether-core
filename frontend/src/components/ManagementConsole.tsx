@@ -134,6 +134,7 @@ export function convertAuditDetailToChatMessages(detail: AuditConversationDetail
           role: "system_event",
           title: msg.title,
           detail: msg.detail,
+          summary: msg.summary,
           eventType: msg.eventType,
           timestamp: msg.timestamp ?? null,
         };

@@ -149,6 +149,7 @@ class ContextPipeline:
         candidate, affected = self._truncate_tool_results(source_window, keep_recent_turns=keep_recent, aggressive=aggressive)
         affected += len(working) - len(source_window)
         used_summary = False
+        audit_summary = None
         if used_native:
             from app.services.llm_client import llm_client
             traced_runtime = replace(llm_runtime, trace_context={"session_id": session.session_id, "purpose": "native_compaction", "context_epoch": session.context_epoch})
@@ -172,6 +173,18 @@ class ContextPipeline:
             checkpoint["is_compact_summary"] = True
             checkpoint["visible_in_transcript"] = False
             checkpoint["compression_meta"] = {"source_message_ids": [m.get("message_id") for m in working]}
+            audit_summary = "原生压缩检查点：服务未提供可读摘要；原始对话仍保留在归档中。"
+            readable = []
+            for item in payload.get("items", []):
+                if item.get("type") != "compaction":
+                    continue
+                summary_parts = item.get("summary") or []
+                if isinstance(summary_parts, str):
+                    readable.append(summary_parts)
+                elif isinstance(summary_parts, list):
+                    readable.extend(part["text"] for part in summary_parts if isinstance(part, dict) and isinstance(part.get("text"), str))
+            if readable:
+                audit_summary = "\n".join(readable)
             candidate, affected = [checkpoint], len(working)
         elif not affected or self._estimate_request(prefix + candidate, tools, state, runtime=llm_runtime) > state.compact_target_tokens:
             tail_ratio, tail_cap = (0.20, 6000) if aggressive else (0.35, 12000)
@@ -198,6 +211,7 @@ class ContextPipeline:
                 raise
             facts = compaction_summarizer.exact_facts(summary_source)
             summary += "\n\n原文事实（逐字保留）:\n" + "\n".join(facts)
+            audit_summary = summary
             checkpoint = context_message_adapter.make_summary_message(content=summary, turn_index=cut_turn - 1,
                 compression_meta={"strategy": "llm_checkpoint", "mode": "aggressive" if aggressive else "balanced", "source_message_ids": [m.get("message_id") for m in older],
                                   "first_kept_message_id": tail[0].get("message_id") if tail else None})
@@ -229,6 +243,9 @@ class ContextPipeline:
         state.last_compaction_strategy = "checkpoint"
         plan = CompactionPlan(CompactionStrategyName.TranscriptSummary, before, after, before - after,
                               affected, cause, reversible=True, requires_llm_summary=used_summary)
+        self._record_compaction(session, original, before=before, after=after, cause=cause,
+            strategy="native_checkpoint" if used_native else "llm_checkpoint" if used_summary else "tool_result_truncate",
+            summary=audit_summary)
         self._persist_session(session)
         prepared = self._build_prepared_context(session=session, state=state, system_prefix=prefix,
                                                 tools=tools, plan=plan, cause=cause, llm_runtime=llm_runtime)
@@ -252,6 +269,7 @@ class ContextPipeline:
         state = self._refresh_state_thresholds(self.state_store.get(session), str(llm_runtime.model), max_output_tokens, runtime=llm_runtime)
         # 先归档原始数据，再生成任何有损的请求视图。
         self._persist_session(session)
+        original = copy.deepcopy(session.messages)
         system_prefix = self._system_prefix(messages)
         token_before = self._estimate_request(system_prefix + session.messages, tools, state, runtime=llm_runtime)
         messages_affected = 0
@@ -325,6 +343,9 @@ class ContextPipeline:
             reason=f"forced context compaction ({cause})",
             reversible=True,
         )
+        self._record_compaction(session, original, before=token_before, after=token_after, cause=cause,
+            strategy=last_strategy.value,
+            summary=next((str(m.get("content") or "") for m in session.messages if m.get("is_compact_summary")), None))
         return self._build_prepared_context(
             session=session,
             state=state,
@@ -776,6 +797,17 @@ class ContextPipeline:
         if self._persister is None:
             raise RuntimeError("ContextPipeline requires a bound SessionPersister")
         self._persister.persist(session)
+
+    def _record_compaction(self, session, original, *, before, after, cause, strategy, summary=None) -> None:
+        """审计事件与模型窗口分开保存，摘要不作为用户发言，也不重复送给模型。"""
+        from app.services.context.runtime_types import new_message_id
+        anchor = next((m for m in reversed(original)
+            if m.get("message_id") and m.get("kind") != "context_budget" and not m.get("projection_only")), None)
+        session.compaction_audit.append({
+            "id": new_message_id("compaction"), "after_message_id": anchor.get("message_id") if anchor else None,
+            "timestamp": utc_now_iso(), "strategy": strategy, "cause": cause,
+            "tokens_before": before, "tokens_after": after, "summary": summary or "本次仅缩减历史工具结果，未生成文本摘要。",
+        })
 
 
 context_pipeline = ContextPipeline(state_store=context_state_store)

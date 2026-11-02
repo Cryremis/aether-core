@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -77,12 +79,23 @@ class RuntimeStateStore:
 
     def _write_unlocked(self, path: Path, state: BaseModel) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(".tmp")
-        temp_path.write_text(
-            json.dumps(state.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temp_path.replace(path)
+        temp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(
+                json.dumps(state.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            # 与会话快照一致：Windows 索引/杀毒短暂占用不能打断状态提交。
+            for attempt in range(20):
+                try:
+                    temp_path.replace(path)
+                    return
+                except PermissionError:
+                    if attempt == 19:
+                        raise
+                    time.sleep(0.05)
+        finally:
+            temp_path.unlink(missing_ok=True)
 
 
 runtime_state_store = RuntimeStateStore()

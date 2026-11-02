@@ -58,6 +58,9 @@ class TimelineService:
         self._clone_workspace(source_session, new_session)
         self._clone_host_and_assets(source_session, new_session)
         new_session.messages = forked_messages
+        positions = {m.get("message_id"): index for index, m in enumerate(forked_messages)}
+        new_session.compaction_audit = [copy.deepcopy(record) for record in source_session.compaction_audit
+            if positions.get(record.get("after_message_id"), source_index) < source_index]
         allowed_message_ids = {
             str(message.get("message_id") or "")
             for message in forked_messages
@@ -217,6 +220,8 @@ class TimelineService:
         for index in range(start_index, -1, -1):
             item = messages[index]
             if str(item.get("role") or "") != "user":
+                continue
+            if not transcript_service._is_visible(item):
                 continue
             if str(item.get("content") or "").strip():
                 return index

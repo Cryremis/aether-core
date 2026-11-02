@@ -1455,6 +1455,7 @@ class AgentEngine:
                                 context_message_adapter.ensure_runtime_metadata(
                                     injected_message,
                                     turn_index=request_turn_index,
+                                    kind="skill_context" if tool_name == "invoke_skill" else None,
                                 )
                             )
                         session_service.persist(session)
@@ -1646,6 +1647,8 @@ class AgentEngine:
         for index in range(len(session.messages) - 1, -1, -1):
             message = session.messages[index]
             if str(message.get("role") or "") != "user":
+                continue
+            if not transcript_service._is_visible(message):
                 continue
             old_message_id = str(message.get("message_id") or "")
             replacement = context_message_adapter.make_user_message(

@@ -34,6 +34,25 @@ function buildAuditDetail(): AuditConversationDetail {
 }
 
 describe("audit conversation timestamps", () => {
+  it("renders compaction summary as a separate expandable audit event", () => {
+    const detail = buildAuditDetail();
+    detail.transcript!.push({
+      id: "compaction-1", role: "system_event", eventType: "context_compacted",
+      title: "上下文压缩（仅审计可见）", detail: "输入估算：1000 → 300 tokens。",
+      summary: "## 压缩后的任务\n保留事实 192.0.2.10", timestamp: assistantTimestamp,
+    });
+    const messages = convertAuditDetailToChatMessages(detail);
+    expect(messages[2]).toMatchObject({ role: "system_event", summary: "## 压缩后的任务\n保留事实 192.0.2.10" });
+    const html = renderToStaticMarkup(
+      <AppPreferencesProvider>
+        <ChatTimeline loading={false} messages={messages} actionsDisabled={true} showMessageTimestamps={true} />
+      </AppPreferencesProvider>,
+    );
+    expect(html).toContain("查看压缩摘要");
+    expect(html).toContain("<details");
+    expect(html).toContain("保留事实 192.0.2.10");
+  });
+
   it("maps transcript timestamps to chat messages", () => {
     const messages = convertAuditDetailToChatMessages(buildAuditDetail());
 
