@@ -8,6 +8,7 @@ import {
   startMcpOAuth, uploadUserSkill, type ExtensionEntry, type McpCapability,
 } from "../../api/client";
 import type { SkillItem } from "../../pages/workbench/types";
+import { CapabilityPreviewDialog, type PreviewTarget } from "./CapabilityPreviewDialog";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type Scope = "session" | "user";
@@ -73,6 +74,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
   const [extensions, setExtensions] = useState<ExtensionEntry[]>([]);
   const [storeLoading, setStoreLoading] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const [notice, setNotice] = useState("");
   const [mcpForm, setMcpForm] = useState(emptyMcpForm);
   const [publishForm, setPublishForm] = useState<PublishForm>(emptyPublishForm);
@@ -98,7 +100,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
 
   // Escape 逐层关闭：先收起发布悬浮窗，再关当前弹窗
   useEffect(() => {
-    if (!dialog) return;
+    if (!dialog || preview) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (publishOpen) setPublishOpen(false);
@@ -106,7 +108,9 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dialog, publishOpen]);
+  }, [dialog, publishOpen, preview]);
+
+  useEffect(() => setPreview(null), [sessionId]);
 
   // 市场窗关闭时同步收起发布窗，避免下次打开残留
   useEffect(() => {
@@ -203,7 +207,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
         {skills.map((item) => {
         const key = `skill:${item.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
         return <article key={`${item.source}:${item.name}`} className="resource-card block">
-          <div className="flex-row"><strong>{item.name}</strong><span className="badge">{item.source}</span><input type="checkbox" checked={!disabled.includes(key)} onChange={() => toggle(key)} aria-label={`启用 ${item.name}`} /></div>
+          <div className="flex-row"><button type="button" className="capability-preview-link" title={`${item.name} 详情`} onClick={() => setPreview({ skill: item })}>{item.name}</button><span className="badge">{item.source}</span><input type="checkbox" checked={!disabled.includes(key)} onChange={() => toggle(key)} aria-label={`启用 ${item.name}`} /></div>
           <p className="desc">{item.description}</p>
           {item.source === "user" || item.source === "upload" ? <button className="action-button small" onClick={() => void (item.source === "user" ? deleteUserSkill(item.name) : deleteSessionSkill(sessionId, item.name)).then(refresh).catch((reason) => setError(reason.message))}>删除</button> : null}
         </article>;
@@ -233,7 +237,7 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
     </div>
 
     {dialog === "store" ? createPortal(
-      <StoreDialog sessionId={sessionId} extensions={extensions} loading={storeLoading} error={error} notice={notice} onPublish={() => setPublishOpen(true)} onClose={() => setDialog(null)} setError={setError} refresh={refresh} />,
+      <StoreDialog sessionId={sessionId} extensions={extensions} loading={storeLoading} error={error} notice={notice} onPublish={() => setPublishOpen(true)} onPreview={(extension) => setPreview({ extension })} onClose={() => setDialog(null)} setError={setError} refresh={refresh} />,
       document.body,
     ) : null}
 
@@ -246,6 +250,11 @@ export function CapabilityPanel({ sessionId, skills, isEmbedMode, onUploadSessio
     {/* 添加 Skill / MCP */}
     {dialog === "skill" || dialog === "mcp" ? createPortal(
       <AddDialog kind={dialog} scope={scope} busy={busy} error={error} mcpForm={mcpForm} setMcpForm={setMcpForm} onScopeChange={setScope} onClose={() => setDialog(null)} onSubmitSkill={submitSkill} onSubmitSkillFolder={submitSkillFolder} onSubmitMcp={submitMcp} />,
+      document.body,
+    ) : null}
+
+    {preview ? createPortal(
+      <CapabilityPreviewDialog target={preview} sessionId={sessionId} onClose={() => setPreview(null)} onInstalled={refresh} />,
       document.body,
     ) : null}
   </div>;
@@ -344,13 +353,14 @@ function AddDialog({ kind, scope, busy, error, mcpForm, setMcpForm, onScopeChang
   </div>;
 }
 
-function StoreDialog({ sessionId, extensions, loading, error, notice, onPublish, refresh, onClose, setError }: {
+function StoreDialog({ sessionId, extensions, loading, error, notice, onPublish, onPreview, refresh, onClose, setError }: {
   sessionId: string;
   extensions: ExtensionEntry[];
   loading: boolean;
   error: string;
   notice: string;
   onPublish: () => void;
+  onPreview: (entry: ExtensionEntry) => void;
   refresh: () => Promise<void>;
   onClose: () => void;
   setError: (value: string) => void;
@@ -375,7 +385,7 @@ function StoreDialog({ sessionId, extensions, loading, error, notice, onPublish,
     const scope = selectedScopes[item.entry_id] || "session";
     setInstallingId(item.entry_id); setError("");
     try {
-      await installExtension(item.entry_id, scope, { sessionId });
+      await installExtension(item.entry_id, scope, { sessionId, version: item.current_version });
       await refresh();
       setInstalledIds((current) => [...current, item.entry_id]);
       window.setTimeout(() => setInstalledIds((current) => current.filter((id) => id !== item.entry_id)), 2400);
@@ -430,12 +440,12 @@ function StoreDialog({ sessionId, extensions, loading, error, notice, onPublish,
             return <article className={`market-card market-card--${item.kind}`} key={item.entry_id}>
               <div className="market-card__head">
                 <span className="market-card__icon">{item.kind === "skill" ? <Icons.Sparkles /> : <Icons.Braces />}</span>
-                <strong className="market-card__name" title={item.name}>{item.name}</strong>
+                <button type="button" className="market-card__name capability-preview-link" title={`${item.name} 详情`} onClick={() => onPreview(item)}>{item.name}</button>
                 <span className="market-card__version">v{item.current_version}</span>
               </div>
               <p className="market-card__desc">{item.description || "暂无介绍"}</p>
               <div className="market-card__meta">
-                <span title="提交人"><Icons.User />{item.submitter_name}</span>
+                <span title="发布者"><Icons.User />{item.submitter_name}{item.submitter_account && item.submitter_account !== item.submitter_name ? `（${item.submitter_account}）` : ""}</span>
                 <span title="安装次数"><Icons.Zap />{item.usage_count} 次安装</span>
                 <span>{item.maintenance_policy === "platform_members" ? "共同维护" : "作者维护"}</span>
                 <span>{new Date(item.updated_at).toLocaleDateString()}</span>

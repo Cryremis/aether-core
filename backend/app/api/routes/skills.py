@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.deps import AuthContext, get_auth_context
+from app.api.routes.capabilities import _session_record
 from app.schemas.common import ApiResponse
 from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
@@ -50,6 +51,20 @@ def list_skills(session_id: str, auth: AuthContext = Depends(get_auth_context)) 
     session = _ensure_session_access(session_id, auth)
     items = [item.model_dump(mode="json") for item in skill_service.list_for_session(session)]
     return ApiResponse(message="技能列表", data=items)
+
+
+@router.get("/preview")
+def preview_skill(session_id: str, name: str, source: str, file_path: str | None = None,
+                  auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    conversation = _session_record(session_id, auth)
+    try:
+        session = session_service.read_skill_context(conversation)
+        result = skill_service.inspect_skill(session, name, source, file_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ApiResponse(message="技能预览", data=result)
 
 
 @router.post("/upload")

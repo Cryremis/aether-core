@@ -298,7 +298,7 @@ class StoreService:
                     kind TEXT NOT NULL,
                     name TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
-                    submitter_user_id INTEGER NOT NULL,
+                    submitter_user_id INTEGER,
                     visibility TEXT NOT NULL DEFAULT 'public',
                     current_version TEXT NOT NULL,
                     usage_count INTEGER NOT NULL DEFAULT 0,
@@ -473,19 +473,48 @@ class StoreService:
             )
             # 旧市场条目保留但不自动猜测平台归属；新发布必须绑定平台及作者。
             conn.execute("BEGIN IMMEDIATE")
+            conn.execute("""CREATE TABLE IF NOT EXISTS platform_external_users (
+                platform_id INTEGER NOT NULL, external_user_id TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '', account TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+                PRIMARY KEY (platform_id, external_user_id)
+            )""")
             for column, definition in {
                 "platform_id": "INTEGER", "author_key": "TEXT", "maintenance_policy": "TEXT NOT NULL DEFAULT 'creator_only'",
                 "revision": "INTEGER NOT NULL DEFAULT 1", "status": "TEXT NOT NULL DEFAULT 'active'",
+                "submitter_external_user_id": "TEXT", "submitter_display_name_snapshot": "TEXT",
+                "submitter_account_snapshot": "TEXT",
             }.items():
                 self._ensure_column(conn, "extension_entries", column, definition)
             entry_sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='extension_entries'").fetchone()[0]
-            if "UNIQUE(kind, name)" in entry_sql:
+            if "UNIQUE(kind, name)" in entry_sql or "submitter_user_id INTEGER NOT NULL" in entry_sql:
                 conn.execute("DROP TABLE IF EXISTS extension_entries_migrated")
                 columns = ",".join(row[1] for row in conn.execute("PRAGMA table_info(extension_entries)"))
-                conn.execute(entry_sql.replace("extension_entries", "extension_entries_migrated", 1).replace("UNIQUE(kind, name)", "UNIQUE(platform_id, author_key, kind, name)"))
+                conn.execute(entry_sql.replace("extension_entries", "extension_entries_migrated", 1)
+                    .replace("UNIQUE(kind, name)", "UNIQUE(platform_id, author_key, kind, name)")
+                    .replace("submitter_user_id INTEGER NOT NULL", "submitter_user_id INTEGER"))
                 conn.execute(f"INSERT INTO extension_entries_migrated ({columns}) SELECT {columns} FROM extension_entries")
                 conn.execute("DROP TABLE extension_entries")
                 conn.execute("ALTER TABLE extension_entries_migrated RENAME TO extension_entries")
+                conn.execute("""UPDATE extension_entries
+                    SET submitter_user_id=NULL,
+                        submitter_external_user_id=substr(author_key, length('embed:' || platform_id || ':') + 1)
+                    WHERE submitter_user_id=0 AND platform_id IS NOT NULL
+                      AND substr(author_key, 1, length('embed:' || platform_id || ':'))='embed:' || platform_id || ':'
+                      AND length(author_key)>length('embed:' || platform_id || ':')""")
+                # 旧会话只存过姓名。回填显示目录，历史发布快照保留原状。
+                conn.execute("""INSERT OR IGNORE INTO platform_external_users
+                        (platform_id, external_user_id, display_name, updated_at)
+                    SELECT platform_id, external_user_id, display_name, updated_at FROM (
+                        SELECT c.platform_id, c.external_user_id, c.updated_at,
+                            trim(json_extract(c.metadata_json, '$.external_user_name')) AS display_name,
+                            row_number() OVER (PARTITION BY c.platform_id, c.external_user_id
+                                ORDER BY c.updated_at DESC, c.conversation_id) AS rank
+                        FROM conversations c JOIN (SELECT DISTINCT platform_id, submitter_external_user_id
+                            FROM extension_entries WHERE submitter_external_user_id IS NOT NULL) e
+                        ON c.platform_id=e.platform_id AND c.external_user_id=e.submitter_external_user_id
+                        WHERE CASE WHEN json_valid(c.metadata_json) THEN
+                            trim(json_extract(c.metadata_json, '$.external_user_name')) NOT IN ('', 'Host User') END
+                    ) WHERE rank=1""")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_extensions_platform ON extension_entries(platform_id, status)")
             conn.execute("CREATE TABLE IF NOT EXISTS extension_audit_events (event_id INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, revision INTEGER NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL)")
             self._ensure_column(conn, "conversations", "visibility", "TEXT NOT NULL DEFAULT 'normal'")
@@ -550,6 +579,20 @@ class StoreService:
         if column_name in columns:
             return
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+    def sync_external_user(self, platform_id: int, external_user_id: str, user: dict[str, Any]) -> None:
+        name, account = (str(user[key]).strip()[:256] if isinstance(user.get(key), str) else ""
+                         for key in ("name", "username"))
+        if name == "Host User":
+            name = ""
+        if not (name or account):
+            return
+        with self._connect() as conn:
+            conn.execute("""INSERT INTO platform_external_users VALUES (?,?,?,?,?)
+                ON CONFLICT(platform_id, external_user_id) DO UPDATE SET
+                    display_name=COALESCE(NULLIF(excluded.display_name,''), platform_external_users.display_name),
+                    account=COALESCE(NULLIF(excluded.account,''), platform_external_users.account), updated_at=excluded.updated_at""",
+                (platform_id, external_user_id, name, account, utcnow_iso()))
 
     def _migrate_subagents_table(self, conn: sqlite3.Connection) -> None:
         """将旧的 run 语义表迁移为稳定的 subagent 实体表。"""

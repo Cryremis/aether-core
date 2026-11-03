@@ -34,7 +34,8 @@ class CapabilityService:
         return root
 
     def list_user_skills(self, *, user_id: int | None = None, platform_id: int | None = None, external_user_id: str | None = None) -> list[dict[str, Any]]:
-        root = self._root(self._principal_key(user_id=user_id, platform_id=platform_id, external_user_id=external_user_id)) / "skills"
+        principal = self._principal_key(user_id=user_id, platform_id=platform_id, external_user_id=external_user_id)
+        root = settings.resolved_storage_root / "users" / principal / "skills"
         return [dict(item, source="user", scope="user") for item in skill_loader.load_directory(root, source="user")]
 
     def install_skill(self, *, raw_bytes: bytes, filename: str, user_id: int | None = None, platform_id: int | None = None, external_user_id: str | None = None) -> list[dict[str, Any]]:

@@ -27,14 +27,20 @@ def _identity(auth: AuthContext) -> dict:
     raise HTTPException(status_code=401, detail="需要登录")
 
 
-def _session(session_id: str, auth: AuthContext):
+def _session_record(session_id: str, auth: AuthContext) -> dict:
+    _identity(auth)
     conversation = store_service.get_conversation_by_session(session_id)
-    if not conversation:
+    if not conversation or conversation.get("deleted_at") is not None:
         raise HTTPException(status_code=404, detail="会话不存在")
     if auth.kind == "user" and (not auth.user or conversation.get("owner_user_id") != auth.user.user_id):
         raise HTTPException(status_code=403, detail="无权访问该会话")
     if auth.kind == "embed" and (conversation.get("platform_id") != auth.platform_id or conversation.get("external_user_id") != auth.external_user_id):
         raise HTTPException(status_code=403, detail="无权访问该会话")
+    return conversation
+
+
+def _session(session_id: str, auth: AuthContext):
+    _session_record(session_id, auth)
     return session_service.get_or_create(session_id)
 
 

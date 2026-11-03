@@ -200,9 +200,21 @@ class SkillService:
                 return item
         return None
 
-    def _all_skill_definitions(self, session: AgentSession) -> list[dict[str, Any]]:
+    def inspect_skill(self, session: AgentSession, name: str, source: str, file_path: str | None) -> dict:
+        from app.services.skill_preview import preview_installed
+
+        for item in self._all_skill_definitions(session, readonly=True):
+            if item["name"] == name and item["source"] == source:
+                preview = preview_installed(item if source != "host" else dict(item, path=None), file_path)
+                return {**self._to_card(item).model_dump(), **preview}
+        raise FileNotFoundError("当前会话中没有该技能")
+
+    def _all_skill_definitions(self, session: AgentSession, *, readonly: bool = False) -> list[dict[str, Any]]:
         self._refresh_built_in_skills()
-        self._refresh_platform_skills(session)
+        if readonly and session.baseline_root:
+            session.platform_skills = self._load_skills_from_disk(Path(session.baseline_root) / "skills", source="platform")
+        elif not readonly:
+            self._refresh_platform_skills(session)
         skills = [*self._built_in_skills, *session.host_skills, *session.platform_skills]
         try:
             from app.services.capability_service import capability_service
@@ -218,7 +230,7 @@ class SkillService:
             workspace_skills = self._load_skills_from_disk(session.workspace.skills_dir, source="upload")
             workspace_skills.extend(self._load_skills_from_disk(self.session_skill_root(session), source="upload"))
             workspace_skills = [s for s in workspace_skills if self._slugify(s.get("name", "")) not in platform_skill_names]
-            if workspace_skills != session.uploaded_skills:
+            if not readonly and workspace_skills != session.uploaded_skills:
                 session.uploaded_skills = workspace_skills
             skills.extend(workspace_skills)
         else:
@@ -226,7 +238,7 @@ class SkillService:
         deduped: dict[str, dict[str, Any]] = {}
         disabled = set(session.disabled_capability_ids)
         for item in skills:
-            materialized = self._ensure_materialized(session, item)
+            materialized = item if readonly else self._ensure_materialized(session, item)
             key = self._slugify(str(materialized.get("name", "")))
             if key in disabled or f"skill:{key}" in disabled:
                 continue

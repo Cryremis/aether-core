@@ -1060,7 +1060,38 @@ export async function revokeMcpOAuth(name: string, sessionId: string) {
   return response.json();
 }
 
-export type ExtensionEntry = { maintenance_policy?: "creator_only" | "platform_members"; revision?: number; entry_id: string; kind: "skill" | "mcp"; name: string; description: string; submitter_user_id: number; submitter_name: string; current_version: string; usage_count: number; updated_at: string };
+export type ExtensionEntry = { maintenance_policy?: "creator_only" | "platform_members"; revision?: number; entry_id: string; kind: "skill" | "mcp"; name: string; description: string; submitter_user_id: number | null; submitter_name: string; submitter_account?: string | null; current_version: string; usage_count: number; updated_at: string };
+
+export type PreviewFile = { path: string; text: string | null; truncated: boolean };
+export type CapabilityPreview = {
+  files?: { path: string; size: number }[];
+  file?: PreviewFile;
+  version?: string;
+  versions?: { version: string; created_at: string }[];
+  submitter_name?: string;
+  submitter_account?: string | null;
+  allowed_tools?: string[];
+  tags?: string[];
+  mcp?: { transport: string; auth: string; hostname: string | null };
+};
+
+export async function getSkillPreview(sessionId: string, name: string, source: string, filePath?: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ session_id: sessionId, name, source });
+  if (filePath) query.set("file_path", filePath);
+  const response = await apiFetch(`/agent/skills/preview?${query}`, { signal });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `读取技能失败: ${response.status}`));
+  return response.json() as Promise<{ data: CapabilityPreview }>;
+}
+
+export async function getExtensionPreview(entryId: string, options: { sessionId?: string; platformId?: number; version: string; filePath?: string }, signal?: AbortSignal) {
+  const query = new URLSearchParams({ version: options.version });
+  if (options.sessionId) query.set("session_id", options.sessionId);
+  if (options.platformId) query.set("platform_id", String(options.platformId));
+  if (options.filePath) query.set("file_path", options.filePath);
+  const response = await apiFetch(`/extensions/${encodeURIComponent(entryId)}/preview?${query}`, { signal });
+  if (!response.ok) throw new Error(await readErrorMessage(response, `读取拓展失败: ${response.status}`));
+  return response.json() as Promise<{ data: CapabilityPreview }>;
+}
 
 export async function listExtensions(options: { sessionId?: string; platformId?: number } = {}) {
   const query = new URLSearchParams();
@@ -1071,10 +1102,11 @@ export async function listExtensions(options: { sessionId?: string; platformId?:
   return response.json() as Promise<{ data: ExtensionEntry[] }>;
 }
 
-export async function installExtension(entryId: string, scope: "user" | "session" | "platform", options: { sessionId?: string; platformId?: number } = {}) {
+export async function installExtension(entryId: string, scope: "user" | "session" | "platform", options: { sessionId?: string; platformId?: number; version?: string } = {}) {
   const query = new URLSearchParams({ scope });
   if (options.sessionId) query.set("session_id", options.sessionId);
   if (options.platformId) query.set("platform_id", String(options.platformId));
+  if (options.version) query.set("version", options.version);
   const response = await apiFetch(`/extensions/${encodeURIComponent(entryId)}/install?${query}`, { method: "POST" });
   if (!response.ok) throw new Error(await readErrorMessage(response, `安装拓展失败: ${response.status}`));
   return response.json();

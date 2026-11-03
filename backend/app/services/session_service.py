@@ -174,6 +174,34 @@ class SessionService:
         with self._metadata_locks_guard:
             return self._metadata_locks.setdefault(session_id, threading.RLock())
 
+    def read_skill_context(self, conversation: dict[str, Any]) -> AgentSession:
+        """读取预览所需的会话配置，不恢复消息或初始化沙箱。"""
+        from app.services.context.history_store import history_store
+
+        session_id = conversation["session_id"]
+        with self._metadata_lock(session_id):
+            live = self._sessions.get(session_id)
+            payload = vars(live) if live else history_store.snapshot(session_id)
+            if payload is None:
+                path = self._metadata_path(session_id)
+                payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+            identity_updates(session_id, payload, conversation)
+            workspace_id = self._find_workspace_id(session_id) or str(payload.get("workspace_id") or "")
+            workspace = store_service.get_workspace(workspace_id) if workspace_id else None
+            baseline = str(payload.get("baseline_root") or (workspace or {}).get("baseline_root") or "")
+            if not baseline and conversation.get("platform_id"):
+                platform = store_service.get_platform_by_id(conversation["platform_id"])
+                if platform:
+                    baseline = str(settings.platform_baselines_root / platform["platform_key"].strip().lower())
+            return AgentSession(
+                session_id=session_id, workspace_id=workspace_id, baseline_root=baseline,
+                owner_user_id=conversation.get("owner_user_id"), platform_id=conversation.get("platform_id"),
+                external_user_id=conversation.get("external_user_id"),
+                host_skills=list(payload.get("host_skills", [])), platform_skills=list(payload.get("platform_skills", [])),
+                uploaded_skills=list(payload.get("uploaded_skills", [])),
+                workspace=sandbox_manager.describe_workspace(workspace_id, workspace["owner_session_id"]) if workspace else None,
+            )
+
     def attach_host(
         self,
         session: AgentSession,

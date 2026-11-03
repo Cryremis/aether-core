@@ -16,12 +16,20 @@ from app.services.store import store_service, utcnow_iso
 class ExtensionStoreService:
     """拓展商店元数据、不可变版本和安装统计。"""
 
+    _ENTRY_QUERY = """SELECT e.*,
+        COALESCE(NULLIF(u.full_name,''), NULLIF(u.username,''), NULLIF(p.display_name,''),
+                 NULLIF(e.submitter_display_name_snapshot,''), NULLIF(p.account,''),
+                 NULLIF(e.submitter_account_snapshot,''),
+                 CASE WHEN e.author_key LIKE 'embed:%' THEN '平台用户' ELSE '未知用户' END) AS submitter_name,
+        COALESCE(NULLIF(p.account,''), NULLIF(e.submitter_account_snapshot,'')) AS submitter_account
+        FROM extension_entries e LEFT JOIN users u ON u.user_id=e.submitter_user_id
+        LEFT JOIN platform_external_users p ON p.platform_id=e.platform_id
+            AND p.external_user_id=e.submitter_external_user_id"""
+
     def list_entries(self, platform_id: int | None = None) -> list[dict[str, Any]]:
         with store_service._connect() as conn:
             rows = conn.execute(
-                "SELECT e.*, COALESCE(u.full_name, u.username, e.author_key, 'Unknown') AS submitter_name "
-                "FROM extension_entries e LEFT JOIN users u ON u.user_id=e.submitter_user_id "
-                "WHERE e.platform_id IS ? AND e.status='active' ORDER BY e.updated_at DESC",
+                self._ENTRY_QUERY + " WHERE e.platform_id IS ? AND e.status='active' ORDER BY e.updated_at DESC",
                 (platform_id,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -52,6 +60,22 @@ class ExtensionStoreService:
         with store_service._connect() as conn:
             # 在写事务中重新检查维护权限和基础版本，避免共同维护时丢失更新。
             conn.execute("BEGIN IMMEDIATE")
+            external_user_id = None
+            profile = None
+            if author_key.startswith("embed:"):
+                prefix = f"embed:{platform_id}:"
+                external_user_id = author_key.removeprefix(prefix)
+                if platform_id is None or not author_key.startswith(prefix) or not external_user_id:
+                    raise PermissionError("发布身份与市场平台不匹配")
+                submitter_user_id = None
+                profile = conn.execute(
+                    "SELECT display_name, account FROM platform_external_users WHERE platform_id=? AND external_user_id=?",
+                    (platform_id, external_user_id),
+                ).fetchone()
+            elif submitter_user_id:
+                profile = conn.execute("SELECT full_name AS display_name, username AS account FROM users WHERE user_id=?",
+                                       (submitter_user_id,)).fetchone()
+            publisher = dict(profile) if profile else {}
             existing = conn.execute("SELECT * FROM extension_entries WHERE entry_id=?", (entry_id,)).fetchone()
             maintenance_policy = maintenance_policy or (existing["maintenance_policy"] if existing else "creator_only")
             if existing:
@@ -79,18 +103,23 @@ class ExtensionStoreService:
             if existing:
                 conn.execute("UPDATE extension_entries SET description=?,current_version=?,updated_at=?,revision=revision+1,maintenance_policy=? WHERE entry_id=?", (description, version, now, maintenance_policy, entry_id))
             else:
-                conn.execute("INSERT INTO extension_entries (entry_id,kind,name,description,submitter_user_id,visibility,current_version,usage_count,created_at,updated_at,platform_id,author_key,maintenance_policy) VALUES (?,?,?,?,?,'platform',?,0,?,?,?,?,?)", (entry_id,kind,name,description,submitter_user_id or 0,version,now,now,platform_id,author_key,maintenance_policy))
+                conn.execute("""INSERT INTO extension_entries (entry_id,kind,name,description,submitter_user_id,
+                    visibility,current_version,usage_count,created_at,updated_at,platform_id,author_key,maintenance_policy,
+                    submitter_external_user_id,submitter_display_name_snapshot,submitter_account_snapshot)
+                    VALUES (?,?,?,?,?,'platform',?,0,?,?,?,?,?,?,?,?)""",
+                    (entry_id, kind, name, description, submitter_user_id, version, now, now, platform_id, author_key,
+                     maintenance_policy, external_user_id, publisher.get("display_name"), publisher.get("account")))
             manifest.update({"publisher": author_key, "base_version": base_version, "idempotency_key": idempotency_key, "request_fingerprint": hashlib.sha256(raw_bytes + json.dumps([name, description, maintenance_policy, author_key, base_version, expected_revision], ensure_ascii=False).encode()).hexdigest()})
             conn.execute(
                 "INSERT INTO extension_versions (entry_id, version, artifact_path, manifest_json, created_at) VALUES (?, ?, ?, ?, ?)",
                 (entry_id, version, str(artifact), json.dumps(manifest or {}, ensure_ascii=False), now),
             )
-            conn.execute("INSERT INTO extension_audit_events (entry_id,actor,action,revision,detail_json,created_at) VALUES (?,?,'publish',?,?,?)", (entry_id, author_key, existing["revision"] + 1 if existing else 1, json.dumps({"version": version, "base_version": base_version, "maintenance_policy": maintenance_policy}), now))
+            conn.execute("INSERT INTO extension_audit_events (entry_id,actor,action,revision,detail_json,created_at) VALUES (?,?,'publish',?,?,?)", (entry_id, author_key, existing["revision"] + 1 if existing else 1, json.dumps({"version": version, "base_version": base_version, "maintenance_policy": maintenance_policy, "publisher": publisher}, ensure_ascii=False), now))
         return next(item for item in self.list_entries(platform_id) if item["entry_id"] == entry_id)
 
     def inspect(self, entry_id: str, platform_id: int | None, version: str | None = None) -> dict[str, Any]:
         with store_service._connect() as conn:
-            entry = conn.execute("SELECT * FROM extension_entries WHERE entry_id=? AND platform_id IS ? AND status='active'", (entry_id, platform_id)).fetchone()
+            entry = conn.execute(self._ENTRY_QUERY + " WHERE e.entry_id=? AND e.platform_id IS ? AND e.status='active'", (entry_id, platform_id)).fetchone()
             if entry is None:
                 raise FileNotFoundError("拓展不存在或无权访问")
             versions = [dict(row) for row in conn.execute("SELECT version,manifest_json,created_at FROM extension_versions WHERE entry_id=? ORDER BY created_at DESC LIMIT 100", (entry_id,))]

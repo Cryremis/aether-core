@@ -100,6 +100,7 @@ class HostRegistry:
 
         session.conversation_id = conversation["conversation_id"]
         session_service.persist(session)
+        store_service.sync_external_user(int(platform["platform_id"]), str(external_user_id), request.context.user)
 
         token, _ = token_service.create_embed_token(
             platform_id=int(platform["platform_id"]),

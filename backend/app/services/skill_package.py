@@ -14,20 +14,27 @@ from app.services.skill_loader import skill_loader, SkillValidationError
 _lock = threading.RLock()
 
 
+def package_members(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
+    members = [member for member in archive.infolist() if not member.is_dir()]
+    if not members or len(members) > 1000 or sum(member.file_size for member in members) > 50 * 1024 * 1024:
+        raise SkillValidationError("技能包必须有文件，且不超过 1000 个文件或 50 MiB")
+    result = {}
+    for member in members:
+        path = PurePosixPath(member.filename.replace("\\", "/"))
+        if path.is_absolute() or ".." in path.parts or ":" in str(path) or stat.S_ISLNK(member.external_attr >> 16):
+            raise SkillValidationError("非法技能包路径或符号链接")
+        result[path.as_posix()] = member
+    return result
+
+
 def unpack_package(root: Path, filename: str, raw: bytes) -> list[Path]:
     if not raw or len(raw) > 20 * 1024 * 1024:
         raise SkillValidationError("技能文件必须介于 1 字节和 20 MiB 之间")
     if filename.lower().endswith(".zip"):
         try:
             with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-                members = [m for m in archive.infolist() if not m.is_dir()]
-                if not members or len(members) > 1000 or sum(m.file_size for m in members) > 50 * 1024 * 1024:
-                    raise SkillValidationError("技能包必须有文件，且不超过 1000 个文件或 50 MiB")
-                for member in members:
-                    path = PurePosixPath(member.filename.replace("\\", "/"))
-                    if path.is_absolute() or ".." in path.parts or ":" in str(path) or stat.S_ISLNK(member.external_attr >> 16):
-                        raise SkillValidationError("非法技能包路径或符号链接")
-                    target = root.joinpath(*path.parts)
+                for name, member in package_members(archive).items():
+                    target = root.joinpath(*PurePosixPath(name).parts)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(archive.read(member))
         except zipfile.BadZipFile as exc:

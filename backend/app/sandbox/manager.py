@@ -18,6 +18,21 @@ class SandboxManager:
         owner_session_id: str,
         baseline_root: Path | None = None,
     ) -> SandboxWorkspace:
+        workspace = self.describe_workspace(workspace_id, owner_session_id, baseline_root)
+        for directory in [workspace.skills_dir, workspace.work_dir, workspace.logs_dir, workspace.home_dir,
+                          workspace.cache_dir, workspace.overlay_work_dir, workspace.metadata_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
+            self._ensure_writable_permissions(directory)
+
+        for name in self._SESSION_ROOTS:
+            overlay_dir = workspace.overlay_work_dir / name
+            overlay_dir.mkdir(parents=True, exist_ok=True)
+            self._ensure_writable_permissions(overlay_dir)
+
+        self._ensure_writable_permissions(workspace.root)
+        return workspace
+
+    def describe_workspace(self, workspace_id: str, owner_session_id: str, baseline_root: Path | None = None) -> SandboxWorkspace:
         session_root = (settings.sessions_root / "workspaces" / workspace_id / "sandbox").resolve()
         skills_dir = session_root / "skills"
         work_dir = session_root / "work"
@@ -26,25 +41,6 @@ class SandboxManager:
         cache_dir = session_root / "cache"
         overlay_work_dir = session_root / ".overlay-work"
         metadata_dir = session_root / "metadata"
-
-        for directory in [
-            skills_dir,
-            work_dir,
-            logs_dir,
-            home_dir,
-            cache_dir,
-            overlay_work_dir,
-            metadata_dir,
-        ]:
-            directory.mkdir(parents=True, exist_ok=True)
-            self._ensure_writable_permissions(directory)
-
-        for name in self._SESSION_ROOTS:
-            overlay_dir = overlay_work_dir / name
-            overlay_dir.mkdir(parents=True, exist_ok=True)
-            self._ensure_writable_permissions(overlay_dir)
-
-        self._ensure_writable_permissions(session_root)
 
         return SandboxWorkspace(
             workspace_id=workspace_id,

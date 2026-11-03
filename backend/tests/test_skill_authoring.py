@@ -149,7 +149,9 @@ def test_embed_market_routes_enforce_platform_and_author(session):
         response = client.post("/api/v1/extensions", data={"kind": "skill", "name": "demo"}, files={"artifact": ("SKILL.md", SKILL)})
         assert response.status_code == 200
         entry = response.json()["data"]
-        assert entry["author_key"] == "embed:7:alice"
+        assert "author_key" not in entry
+        assert entry["submitter_user_id"] is None
+        assert market.inspect(entry["entry_id"], 7)["author_key"] == "embed:7:alice"
         auth.platform_id = 8
         assert client.get("/api/v1/extensions").json()["data"] == []
         assert client.get(f"/api/v1/extensions/{entry['entry_id']}").status_code == 404

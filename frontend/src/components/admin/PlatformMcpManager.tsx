@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 
 import { deleteMcp, installExtension, listExtensions, listPlatformCapabilities, saveMcp, type ExtensionEntry, type McpCapability } from "../../api/client";
 import { WorkbenchIcons as Icons } from "../workbench/WorkbenchIcons";
+import { CapabilityPreviewDialog } from "../workbench/CapabilityPreviewDialog";
 
 const emptyForm = { name: "", description: "", transport: "streamable_http", url: "", command: "" };
 
@@ -12,6 +13,7 @@ export function PlatformMcpManager({ platformId }: { platformId: number }) {
   const [storeOpen, setStoreOpen] = useState(false);
   const [storeLoading, setStoreLoading] = useState(false);
   const [extensions, setExtensions] = useState<ExtensionEntry[]>([]);
+  const [preview, setPreview] = useState<ExtensionEntry | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [form, setForm] = useState(emptyForm);
@@ -61,7 +63,7 @@ export function PlatformMcpManager({ platformId }: { platformId: number }) {
     setInstallingId(item.entry_id);
     setError("");
     try {
-      await installExtension(item.entry_id, "platform", { platformId });
+      await installExtension(item.entry_id, "platform", { platformId, version: item.current_version });
       await refresh();
       setStoreOpen(false);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "安装失败"); }
@@ -158,12 +160,12 @@ export function PlatformMcpManager({ platformId }: { platformId: number }) {
                 <article className={`market-card market-card--${item.kind}`} key={item.entry_id}>
                   <div className="market-card__head">
                     <span className="market-card__icon">{item.kind === "skill" ? <Icons.Sparkles /> : <Icons.Braces />}</span>
-                    <strong className="market-card__name" title={item.name}>{item.name}</strong>
+                    <button type="button" className="market-card__name capability-preview-link" title={`${item.name} 详情`} onClick={() => setPreview(item)}>{item.name}</button>
                     <span className="market-card__version">v{item.current_version}</span>
                   </div>
                   <p className="market-card__desc">{item.description || "暂无介绍"}</p>
                   <div className="market-card__meta">
-                    <span title="提交人"><Icons.User />{item.submitter_name}</span>
+                    <span title="发布者"><Icons.User />{item.submitter_name}{item.submitter_account && item.submitter_account !== item.submitter_name ? `（${item.submitter_account}）` : ""}</span>
                     <span title="使用次数"><Icons.Zap />{item.usage_count} 次使用</span>
                   </div>
                   <div className="market-card__foot">
@@ -178,5 +180,9 @@ export function PlatformMcpManager({ platformId }: { platformId: number }) {
           </div>
         </section>
       </div>, document.body) : null}
+    {preview ? createPortal(
+      <CapabilityPreviewDialog target={{ extension: preview }} platformId={platformId} onClose={() => setPreview(null)} onInstalled={refresh} />,
+      document.body,
+    ) : null}
   </section>;
 }
