@@ -18,6 +18,7 @@ from app.sandbox.models import SandboxCommandResult, SandboxWorkspace
 from app.services.platform_runtime_image_service import platform_runtime_image_service
 from app.services.platform_sandbox_proxy_service import EffectiveSandboxProxyConfig, platform_sandbox_proxy_service
 from app.services.workspace_sync_service import workspace_sync_service
+from app.services.shared_skill_service import shared_skill_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service, utcnow_iso
 
@@ -54,6 +55,7 @@ class WorkspaceRuntimeService:
     def __init__(self) -> None:
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._active_commands: defaultdict[str, int] = defaultdict(int)
+        self._running_commands: defaultdict[str, int] = defaultdict(int)
         self._gc_task: asyncio.Task[None] | None = None
         self._host_dns_servers_cache: tuple[str, ...] | None = None
 
@@ -87,6 +89,7 @@ class WorkspaceRuntimeService:
         workspace_id = workspace.workspace_id
         lock = self._locks[workspace_id]
         self._active_commands[workspace_id] += 1
+        admitted = False
         try:
             async with lock:
                 runtime_state = await self._ensure_runtime_locked(workspace)
@@ -104,11 +107,20 @@ class WorkspaceRuntimeService:
                             "destroy_reason": runtime.get("destroy_reason"),
                         },
                     )
-                await workspace_sync_service.hydrate_container(
-                    docker_binary=self._require_docker_binary(),
-                    container_name=str(runtime["container_name"]),
-                    workspace=workspace,
-                )
+                marker = workspace.metadata_dir / "workspace_sync_failed.json"
+                if marker.exists():
+                    await workspace_sync_service.capture_container_delta(
+                        docker_binary=self._require_docker_binary(), container_name=str(runtime["container_name"]), workspace=workspace,
+                    )
+                    marker.unlink(missing_ok=True)
+                if self._running_commands[workspace_id] == 0:
+                    await workspace_sync_service.hydrate_container(
+                        docker_binary=self._require_docker_binary(), container_name=str(runtime["container_name"]), workspace=workspace,
+                    )
+                elif workspace_sync_service.has_pending_host_changes(workspace, str(runtime["container_name"])):
+                    raise RuntimeBusyError(workspace_id, "宿主文件有新变化，等待当前命令完成同步后重试。", runtime)
+                self._running_commands[workspace_id] += 1
+                admitted = True
             return await self._run_shell_command(
                 workspace,
                 runtime=runtime,
@@ -122,6 +134,10 @@ class WorkspaceRuntimeService:
                 output_callback=output_callback,
             )
         finally:
+            if admitted:
+                self._running_commands[workspace_id] -= 1
+                if self._running_commands[workspace_id] <= 0:
+                    self._running_commands.pop(workspace_id, None)
             self._active_commands[workspace_id] -= 1
             if self._active_commands[workspace_id] <= 0:
                 self._active_commands.pop(workspace_id, None)
@@ -297,10 +313,16 @@ class WorkspaceRuntimeService:
             await self._collect_locked(workspace_id, reason=reason)
             store_service.delete_workspace_runtime(workspace_id)
 
+    def _has_unsynced_files(self, runtime: dict[str, Any]) -> bool:
+        root = Path(str(runtime.get("workspace_root") or "")) / "metadata"
+        return any((root / name).exists() for name in ("workspace_sync_failed.json", "workspace_sync_pending.json"))
+
     async def collect_expired_runtimes(self) -> None:
         now = self._now()
         items = store_service.list_workspace_runtimes()
         for item in items:
+            if self._has_unsynced_files(item):
+                continue
             if item.get("status") in {"executing", "provisioning", "syncing", "terminating"}:
                 continue
             workspace_id = str(item["workspace_id"])
@@ -320,6 +342,8 @@ class WorkspaceRuntimeService:
         items = store_service.list_workspace_runtimes()
         collected = 0
         for item in items:
+            if self._has_unsynced_files(item):
+                continue
             if int(item.get("platform_id") or 0) != int(platform_id):
                 continue
             if item.get("status") in {"missing", "collected", "expired"}:
@@ -335,12 +359,23 @@ class WorkspaceRuntimeService:
         while True:
             try:
                 await self.collect_expired_runtimes()
+                await asyncio.to_thread(shared_skill_service.collect_garbage)
             except Exception:
                 pass
             await asyncio.sleep(max(30, settings.sandbox_runtime_gc_interval_seconds))
 
     async def _ensure_runtime_locked(self, workspace: SandboxWorkspace) -> dict[str, Any]:
         current = await self.refresh_runtime(workspace.workspace_id)
+        marker = workspace.metadata_dir / "workspace_sync_failed.json"
+        pending = workspace.metadata_dir / "workspace_sync_pending.json"
+        if marker.exists() or (pending.exists() and not self._running_commands.get(workspace.workspace_id, 0)):
+            if self._running_commands.get(workspace.workspace_id, 0):
+                raise RuntimeBusyError(workspace.workspace_id, "等待执行中的命令结束后重试同步。", current)
+            await workspace_sync_service.capture_container_delta(
+                docker_binary=self._require_docker_binary(), container_name=str(current.get("container_name") or ""), workspace=workspace,
+            )
+            marker.unlink(missing_ok=True)
+            pending.unlink(missing_ok=True)
         now = self._now()
         recreate_reason = self._detect_runtime_recreate_reason(current, now, workspace)
         if current.get("status") == "running" and recreate_reason is None:
@@ -356,6 +391,9 @@ class WorkspaceRuntimeService:
         # 执行中的容器不因配置漂移(含镜像更新)被打断:
         # 状态刚被 refresh_runtime 校验过(容器确实活着),命令结束后下一次 ensure 会走重建迁移到新镜像。
         # 仅致命原因(过期/不可用)才允许打断执行中的命令。
+        if recreate_reason == "runtime_config_changed" and self._active_commands.get(workspace.workspace_id, 0) > 1:
+            raise RuntimeBusyError(workspace.workspace_id, "共享资源版本已变化，等待当前命令完成后重试。", current)
+
         if current.get("status") == "executing" and recreate_reason in {
             "runtime_config_changed",
             "runtime_spec_missing",
@@ -405,7 +443,8 @@ class WorkspaceRuntimeService:
     async def _create_runtime_locked(self, workspace: SandboxWorkspace, *, generation: int) -> dict[str, Any]:
         docker_binary = self._require_docker_binary()
         conversation = store_service.get_conversation_by_session(workspace.owner_session_id) or {}
-        runtime_image = await platform_runtime_image_service.ensure_platform_runtime_image(conversation.get("platform_id"))
+        baseline_root = shared_skill_service.pin_baseline(workspace)
+        runtime_image = await platform_runtime_image_service.ensure_workspace_runtime_image(conversation.get("platform_id"), baseline_root)
         proxy_config = platform_sandbox_proxy_service.resolve_for_platform(conversation.get("platform_id"))
         created_at = utcnow_iso()
         max_expires_at = self._to_iso(self._now() + timedelta(seconds=settings.sandbox_runtime_max_age_seconds))
@@ -563,6 +602,8 @@ class WorkspaceRuntimeService:
         record = store_service.get_workspace_runtime(workspace_id)
         if record is None:
             return None
+        if self._has_unsynced_files(record):
+            raise RuntimeBusyError(workspace_id, "同步尚未完成，保留容器以避免丢失会话文件。", record)
         container_name = str(record.get("container_name") or "")
         if container_name:
             docker_binary = self._resolve_docker_binary()
@@ -671,7 +712,7 @@ class WorkspaceRuntimeService:
             (
                 "type=bind,"
                 f"src={workspace.root.resolve()},"
-                "dst=/aether/session-host"
+                "dst=/aether/session-host,readonly"
             ),
             "--env",
             f"AETHER_WORKSPACE_ID={workspace.workspace_id}",
@@ -722,6 +763,11 @@ class WorkspaceRuntimeService:
             for dns_server in self._runtime_dns_servers():
                 if dns_server.strip():
                     args.extend(["--dns", dns_server.strip()])
+        args.extend(shared_skill_service.mounts(workspace))
+        for source, destination in ((workspace.home_dir, settings.sandbox_docker_home_dir),
+                                    (workspace.cache_dir, settings.sandbox_docker_cache_dir),
+                                    (workspace.logs_dir, settings.sandbox_docker_logs_dir)):
+            args.extend(["--mount", f"type=bind,src={source.resolve()},dst={destination}"])
         args.append(image)
         args.extend(
             [
@@ -878,6 +924,8 @@ class WorkspaceRuntimeService:
             "work_dir": settings.sandbox_docker_work_dir,
             "home_dir": settings.sandbox_docker_home_dir,
             "cache_dir": settings.sandbox_docker_cache_dir,
+            "workspace_sync_version": 2,
+            "shared_skills": sorted(shared_skill_service.references(workspace)) if workspace else [],
             "baseline_mode": "image" if workspace and workspace.baseline_root is not None else "direct",
             "baseline_root": str(workspace.baseline_root.resolve()) if workspace and workspace.baseline_root is not None else "",
         }
@@ -922,7 +970,7 @@ class WorkspaceRuntimeService:
         metadata = runtime.get("metadata") or {}
         current_spec = metadata.get("runtime_spec")
         desired_spec = self._build_runtime_spec(
-            self._resolve_runtime_image({"platform_id": runtime.get("platform_id")}),
+            self._resolve_runtime_image({"platform_id": runtime.get("platform_id")}, workspace),
             workspace,
         )
         if not current_spec:
@@ -931,8 +979,13 @@ class WorkspaceRuntimeService:
             return "runtime_config_changed"
         return None
 
-    def _resolve_runtime_image(self, conversation: dict[str, Any]) -> str:
+    def _resolve_runtime_image(self, conversation: dict[str, Any], workspace: SandboxWorkspace | None = None) -> str:
         platform_id = conversation.get("platform_id")
+        if workspace is not None and workspace.baseline_root is not None:
+            return platform_runtime_image_service.resolve_for_workspace(
+                int(platform_id) if platform_id is not None else None,
+                workspace.baseline_root if workspace.baseline_root.is_dir() else shared_skill_service.baseline_root(workspace),
+            )
         return platform_runtime_image_service.resolve_for_platform(int(platform_id)) if platform_id is not None else settings.sandbox_docker_image
 
     def _resolve_docker_binary(self) -> str | None:
@@ -1016,6 +1069,8 @@ class WorkspaceRuntimeService:
             last_used_at=now,
             idle_expires_at=self._to_iso(now + timedelta(seconds=settings.sandbox_runtime_idle_ttl_seconds)),
         )
+        # 命令执行前持久化待同步标记；即使随后磁盘写满或 API 崩溃也不会被 GC 当成已落盘。
+        workspace_sync_service._write_json(workspace.metadata_dir / "workspace_sync_pending.json", {"container": container_name})
         started_at = time.perf_counter()
         process: asyncio.subprocess.Process | None = None
         try:
@@ -1025,6 +1080,7 @@ class WorkspaceRuntimeService:
                 timeout=effective_timeout,
             )
         except asyncio.CancelledError:
+            workspace_sync_service._write_json(workspace.metadata_dir / "workspace_sync_failed.json", {"container": container_name, "error": "command_cancelled"})
             if process is not None:
                 await self._terminate_process(process, container_name=container_name)
             now = self._now()
@@ -1039,6 +1095,7 @@ class WorkspaceRuntimeService:
             )
             raise
         except asyncio.TimeoutError:
+            workspace_sync_service._write_json(workspace.metadata_dir / "workspace_sync_failed.json", {"container": container_name, "error": "command_timeout"})
             if process is not None:
                 await self._terminate_process(process, container_name=container_name)
             now = self._now()
@@ -1073,25 +1130,43 @@ class WorkspaceRuntimeService:
             and self._is_retryable_dns_failure(stdout_text, stderr_text)
             and self._active_commands.get(workspace.workspace_id, 1) <= 1
         ):
+            try:
+                await workspace_sync_service.capture_container_delta(
+                    docker_binary=self._require_docker_binary(), container_name=container_name, workspace=workspace,
+                )
+            except Exception as exc:
+                workspace_sync_service._write_json(workspace.metadata_dir / "workspace_sync_failed.json", {"container": container_name, "error": str(exc)})
+                raise
+            (workspace.metadata_dir / "workspace_sync_pending.json").unlink(missing_ok=True)
             await self._collect_locked(workspace.workspace_id, reason="dns_resolution_failure")
-            return await self.run_shell(
-                workspace,
-                command=command,
-                shell=shell,
-                timeout_seconds=effective_timeout,
-                allow_network_recovery=False,
-                session=session,
-                run_id=run_id,
-                output_callback=output_callback,
-            )
+            self._running_commands[workspace.workspace_id] -= 1
+            try:
+                return await self.run_shell(
+                    workspace,
+                    command=command,
+                    shell=shell,
+                    timeout_seconds=effective_timeout,
+                    allow_network_recovery=False,
+                    session=session,
+                    run_id=run_id,
+                    output_callback=output_callback,
+                )
+            finally:
+                self._running_commands[workspace.workspace_id] += 1
 
         now = self._now()
         async with self._locks[workspace.workspace_id]:
-            await workspace_sync_service.capture_container_delta(
-                docker_binary=self._require_docker_binary(),
-                container_name=container_name,
-                workspace=workspace,
-            )
+            if self._running_commands.get(workspace.workspace_id, 1) <= 1:
+                marker = workspace.metadata_dir / "workspace_sync_failed.json"
+                try:
+                    await workspace_sync_service.capture_container_delta(
+                        docker_binary=self._require_docker_binary(), container_name=container_name, workspace=workspace,
+                    )
+                    marker.unlink(missing_ok=True)
+                    (workspace.metadata_dir / "workspace_sync_pending.json").unlink(missing_ok=True)
+                except Exception as exc:
+                    workspace_sync_service._write_json(marker, {"container": container_name, "error": str(exc)})
+                    raise
             runtime = await self._persist_runtime(
                 workspace_id=workspace.workspace_id,
                 workspace=workspace,

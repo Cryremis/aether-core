@@ -251,6 +251,10 @@ class FileService:
         relative_dir = workspace_path_service.logical_to_relative_path(resolved.logical_path)
         workspace_dir = sandbox_manager.ensure_within_workspace(session.workspace, session.workspace.root / relative_dir)
         baseline_dir = self._baseline_path_for_relative(session, relative_dir)
+        from app.services.shared_skill_service import shared_skill_service
+        shared = shared_skill_service.resolve(session.workspace, relative_dir)
+        if shared is not None:
+            workspace_dir, baseline_dir = shared, None
         tombstones = set(workspace_sync_service.load_state(session.workspace).tombstones)
         merged_children = self._merge_directory_children(
             relative_dir=relative_dir,
@@ -355,7 +359,8 @@ class FileService:
         except ValueError:
             pass
 
-        baseline_root = session.workspace.baseline_root
+        from app.services.shared_skill_service import shared_skill_service
+        baseline_root = shared_skill_service.baseline_root(session.workspace)
         if baseline_root is not None:
             resolved_baseline = baseline_root.resolve(strict=False)
             try:
@@ -363,14 +368,23 @@ class FileService:
             except ValueError:
                 pass
 
+        from app.services.shared_skill_service import shared_skill_service
+        for digest in shared_skill_service.references(session.workspace):
+            root = (shared_skill_service.root() / digest).resolve()
+            if resolved_target.is_relative_to(root):
+                suffix = resolved_target.relative_to(root).as_posix()
+                return f".aether/skills/{digest}/{suffix}"
+
         raise ValueError("目标路径不属于当前会话工作区或平台基线。")
 
     def _baseline_path_for_relative(self, session: AgentSession, relative_path: str) -> Path | None:
         assert session.workspace is not None
-        if session.workspace.baseline_root is None:
+        from app.services.shared_skill_service import shared_skill_service
+        effective_baseline = shared_skill_service.baseline_root(session.workspace)
+        if effective_baseline is None:
             return None
-        candidate = (session.workspace.baseline_root / relative_path).resolve(strict=False)
-        baseline_root = session.workspace.baseline_root.resolve(strict=False)
+        candidate = (effective_baseline / relative_path).resolve(strict=False)
+        baseline_root = effective_baseline.resolve(strict=False)
         try:
             candidate.relative_to(baseline_root)
         except ValueError:

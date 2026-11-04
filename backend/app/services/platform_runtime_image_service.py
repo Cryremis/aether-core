@@ -163,6 +163,20 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
             return custom_image
         return await self._ensure_auto_image(platform)
 
+    def resolve_for_workspace(self, platform_id: int | None, baseline_root: Path | None) -> str:
+        if baseline_root is None:
+            return self.resolve_for_platform(platform_id)
+        platform = self._require_platform(platform_id) if platform_id is not None else {"platform_id": 0}
+        base = str(platform.get("sandbox_image") or settings.sandbox_docker_image)
+        version = hashlib.sha256((self._compute_baseline_hash(baseline_root) + "\0" + base).encode()).hexdigest()[:16]
+        return f"{self._AUTO_IMAGE_PREFIX}:{platform['platform_id']}-{version}"
+
+    async def ensure_workspace_runtime_image(self, platform_id: int | None, baseline_root: Path | None) -> str:
+        if baseline_root is None:
+            return await self.ensure_platform_runtime_image(platform_id)
+        platform = self._require_platform(platform_id) if platform_id is not None else {"platform_id": 0}
+        return await self._ensure_auto_image(platform, baseline_root=baseline_root)
+
     async def cleanup_replaced_image(self, image: str, *, keep_image: str) -> None:
         normalized_old = image.strip()
         normalized_keep = keep_image.strip()
@@ -236,19 +250,20 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
             raise RuntimeError("镜像名称不能包含空白字符")
         return normalized
 
-    async def _ensure_auto_image(self, platform: dict[str, Any]) -> str:
+    async def _ensure_auto_image(self, platform: dict[str, Any], *, baseline_root: Path | None = None) -> str:
         docker_binary = self._require_docker_binary()
-        image_name = self._resolve_platform_image_name(platform)
+        image_name = (self.resolve_for_workspace(int(platform["platform_id"]) or None, baseline_root)
+                      if baseline_root is not None else self._resolve_platform_image_name(platform))
         if await self._image_exists(docker_binary, image_name):
             return image_name
 
-        base_image = settings.sandbox_docker_image
+        base_image = str(platform.get("sandbox_image") or settings.sandbox_docker_image)
         await self._verify_image_available(docker_binary, base_image)
         build_root = Path(tempfile.mkdtemp(prefix="aethercore-platform-build-"))
         try:
             baseline_tar = build_root / "baseline.tar"
             dockerfile_path = build_root / "Dockerfile"
-            baseline_root = platform_baseline_service.ensure_platform_root(str(platform["platform_key"]))
+            baseline_root = baseline_root or platform_baseline_service.ensure_platform_root(str(platform["platform_key"]))
             self._write_baseline_tarball(baseline_root, baseline_tar)
             dockerfile_path.write_text(
                 self._build_auto_image_dockerfile(base_image),
@@ -355,17 +370,30 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
         return process.returncode == 0
 
     def _compute_baseline_hash(self, baseline_root: Path) -> str:
-        digest = hashlib.sha256()
-        for file_path in sorted(
-            (item for item in baseline_root.rglob("*") if item.is_file()),
-            key=lambda item: str(item.relative_to(baseline_root)).replace("\\", "/").lower(),
-        ):
-            relative = str(file_path.relative_to(baseline_root)).replace("\\", "/")
-            digest.update(relative.encode("utf-8"))
+        paths = sorted(baseline_root.rglob("*"), key=lambda item: item.relative_to(baseline_root).as_posix())
+        signature = tuple((path.relative_to(baseline_root).as_posix(), path.is_dir(), path.stat().st_size,
+                           path.stat().st_mtime_ns, path.stat().st_ctime_ns, path.stat().st_mode & 0o111)
+                          for path in paths)
+        cache = getattr(self, "_baseline_hash_cache", {})
+        key = str(baseline_root.resolve())
+        if key in cache and cache[key][0] == signature:
+            return cache[key][1]
+        digest = hashlib.sha256(b"image-layout-v2")
+        for path in paths:
+            relative = path.relative_to(baseline_root).as_posix()
+            digest.update(relative.encode("utf-8") + b"\0")
+            if path.is_dir():
+                digest.update(b"d")
+                continue
+            digest.update(b"x" if path.stat().st_mode & 0o111 else b"f")
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
             digest.update(b"\0")
-            digest.update(file_path.read_bytes())
-            digest.update(b"\0")
-        return digest.hexdigest()[:16]
+        result = digest.hexdigest()[:16]
+        cache[key] = (signature, result)
+        self._baseline_hash_cache = cache
+        return result
 
     def _resolve_platform_image_name(self, platform: dict[str, Any]) -> str:
         custom_image = str(platform.get("sandbox_image") or "").strip()
@@ -373,8 +401,7 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
             return custom_image
         platform_id = int(platform["platform_id"])
         baseline_root = platform_baseline_service.ensure_platform_root(str(platform["platform_key"]))
-        baseline_hash = self._compute_baseline_hash(baseline_root)
-        return f"{self._AUTO_IMAGE_PREFIX}:{platform_id}-{baseline_hash}"
+        return self.resolve_for_workspace(platform_id, baseline_root)
 
     def _write_baseline_tarball(self, baseline_root: Path, target_path: Path) -> None:
         with tarfile.open(target_path, mode="w") as handle:
@@ -383,21 +410,18 @@ CMD ["/bin/bash", "-lc", "while true; do sleep 3600; done"]
                 if not section_dir.exists():
                     continue
                 for child in sorted(section_dir.iterdir(), key=lambda item: item.name.lower()):
-                    handle.add(child, arcname=str(Path("baseline") / section / child.name))
+                    def writable_baseline(info: tarfile.TarInfo) -> tarfile.TarInfo:
+                        # 共享快照只读，镜像里的合并视图仍允许会话按文件写时复制。
+                        info.mode |= 0o200
+                        return info
+                    handle.add(child, arcname=str(Path(section) / child.name), filter=writable_baseline)
 
     def _build_auto_image_dockerfile(self, base_image: str) -> str:
         return f"""FROM {base_image}
-
 USER root
-COPY baseline.tar /tmp/aethercore-baseline.tar
-RUN mkdir -p /tmp/aethercore-baseline \\
-    && tar -xf /tmp/aethercore-baseline.tar -C /tmp/aethercore-baseline \\
-    && mkdir -p {settings.sandbox_docker_skills_dir} {settings.sandbox_docker_work_dir} {settings.sandbox_docker_logs_dir} {settings.sandbox_docker_home_dir} {settings.sandbox_docker_cache_dir} \\
-    && if [ -d /tmp/aethercore-baseline/baseline/skills ]; then cp -a /tmp/aethercore-baseline/baseline/skills/. {settings.sandbox_docker_skills_dir}/; fi \\
-    && if [ -d /tmp/aethercore-baseline/baseline/work ]; then cp -a /tmp/aethercore-baseline/baseline/work/. {settings.sandbox_docker_work_dir}/; fi \\
-    && if [ -d /tmp/aethercore-baseline/baseline/logs ]; then cp -a /tmp/aethercore-baseline/baseline/logs/. {settings.sandbox_docker_logs_dir}/; fi \\
-    && chown -R 10001:10001 {settings.sandbox_docker_workspace_mount} \\
-    && rm -rf /tmp/aethercore-baseline /tmp/aethercore-baseline.tar
+ADD --chown=10001:10001 baseline.tar {settings.sandbox_docker_workspace_mount}/
+RUN mkdir -p {settings.sandbox_docker_skills_dir} {settings.sandbox_docker_work_dir} {settings.sandbox_docker_logs_dir} {settings.sandbox_docker_home_dir} {settings.sandbox_docker_cache_dir} \
+    && chown 10001:10001 {settings.sandbox_docker_workspace_mount} {settings.sandbox_docker_skills_dir} {settings.sandbox_docker_work_dir} {settings.sandbox_docker_logs_dir} {settings.sandbox_docker_home_dir} {settings.sandbox_docker_cache_dir}
 USER sandbox
 """
 

@@ -277,7 +277,7 @@ def test_workspace_runtime_executes_commands_concurrently(tmp_path, monkeypatch)
 
     results = asyncio.run(execute_both())
     assert [result.exit_code for result in results] == [0, 0]
-    assert observed_active_counts == [1, 2]
+    assert observed_active_counts == [1]  # 并发命令复用运行视图，最后一个结束后统一同步。
 
 
 def test_host_workspace_api_exposes_members_and_runtime(tmp_path):

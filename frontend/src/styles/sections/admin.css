@@ -3979,3 +3979,16 @@
     grid-template-columns: 1fr;
   }
 }
+
+.baseline-size {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary, #64748b);
+}
+
+.baseline-size--warning {
+  color: var(--danger, #dc2626);
+  font-weight: 600;
+}

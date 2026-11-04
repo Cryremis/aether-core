@@ -9,6 +9,7 @@ type BaselineManagerProps = {
   /** 是否在基线管理器顶部内嵌平台 MCP 管理（详情页已拆分为独立 tab） */
   showMcp?: boolean;
   baselineError: string;
+  totalSizeBytes: number;
   fileManagerRef: RefObject<HTMLDivElement | null>;
   breadcrumbs: Array<{ name: string; path: string }>;
   currentDirectoryChildren: PlatformBaselineEntryItem[];
@@ -34,12 +35,22 @@ type BaselineManagerProps = {
 };
 
 export function BaselineManager(props: BaselineManagerProps) {
+  const sizeMB = props.totalSizeBytes / (1024 * 1024);
+  const overSize = props.totalSizeBytes > 200 * 1024 * 1024;
   return (
     <>
       <div className="manager-header">
         <div className="manager-header__info">
           <h4>基线资源管理器</h4>
-          <p>当前平台：{props.activePlatform.display_name}。预置文件将在新会话创建时注入到沙箱。</p>
+          <p>当前平台：{props.activePlatform.display_name}。基线资源由会话共享，修改保存在各自工作区。</p>
+          <span
+            className={`baseline-size${overSize ? " baseline-size--warning" : ""}`}
+            title="统计 skills、work、logs 中全部基线文件；超过 200 MB 提醒，不限制上传。1 MB = 1024 × 1024 字节。"
+            aria-live="polite"
+          >
+            当前基线大小：{sizeMB.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })} MB
+            {overSize ? " · 已超过 200 MB" : ""}
+          </span>
         </div>
         {props.baselineError ? <div className="baseline-error-toast">{props.baselineError}</div> : null}
       </div>

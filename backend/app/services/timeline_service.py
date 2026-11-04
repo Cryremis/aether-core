@@ -244,7 +244,7 @@ class TimelineService:
             return
         target_metadata.mkdir(parents=True, exist_ok=True)
         for item in source_metadata.iterdir():
-            if item.name == "session.json":
+            if item.name in {"session.json", "workspace_sync_checkpoint.json", "workspace_sync_failed.json", "workspace_sync_pending.json"}:
                 continue
             if item.is_file() and item.suffix == ".json":
                 target_file = target_metadata / item.name

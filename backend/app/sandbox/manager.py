@@ -76,13 +76,19 @@ class SandboxManager:
         if not normalized:
             return workspace.root
 
+        from app.services.shared_skill_service import shared_skill_service
+        shared = shared_skill_service.resolve(workspace, normalized)
+        if shared is not None:
+            return shared
+
         upper_candidate = self.ensure_within_workspace(workspace, workspace.root / normalized)
         if upper_candidate.exists():
             return upper_candidate
 
-        if workspace.baseline_root is not None:
-            baseline_candidate = (workspace.baseline_root / normalized).resolve(strict=False)
-            baseline_root = workspace.baseline_root.resolve(strict=False)
+        effective_baseline = shared_skill_service.baseline_root(workspace)
+        if effective_baseline is not None:
+            baseline_candidate = (effective_baseline / normalized).resolve(strict=False)
+            baseline_root = effective_baseline.resolve(strict=False)
             common = Path(os.path.commonpath([str(baseline_root), str(baseline_candidate)]))
             if common == baseline_root and baseline_candidate.exists():
                 return baseline_candidate

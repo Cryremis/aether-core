@@ -154,22 +154,16 @@ class SkillService:
             available = ", ".join(item["name"] for item in self._all_skill_definitions(session))
             raise RuntimeError(f"技能 {skill_name} 不存在。当前可用技能: {available}")
 
-        # 用户/内置技能原件位于 API 主机目录，调用时把完整资源放入当前沙箱。
         if session.workspace and skill.get("path"):
             source = Path(skill["path"]).parent.resolve()
-            if session.workspace.root.resolve() not in source.parents:
-                import hashlib
-                import shutil
-                resources = sorted(source.rglob("*"))
-                if any(path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()) for path in resources):
-                    raise RuntimeError("技能资源不能包含符号链接")
-                signature = repr([(str(path.relative_to(source)), path.stat().st_mtime_ns, path.stat().st_size) for path in resources if path.is_file()])
-                digest = hashlib.sha256((str(source) + signature).encode()).hexdigest()[:32]
-                destination = session.workspace.skills_dir / ".available" / digest
-                from app.sandbox.manager import sandbox_manager
-                sandbox_manager.ensure_within_workspace(session.workspace, destination)
-                shutil.copytree(source, destination, dirs_exist_ok=True)
-                skill = dict(skill, path=str(destination / "SKILL.md"), base_dir=str(destination))
+            if not source.is_relative_to(session.workspace.root.resolve()):
+                from app.services.shared_skill_service import shared_skill_service
+                destination, logical_dir = shared_skill_service.reference(session.workspace, source, name=str(skill["name"]))
+                # 从发布后的同一版本读取说明，避免注入旧正文、执行新资源。
+                published = skill_loader.load_file(destination / "SKILL.md", source=str(skill["source"]), fallback_name=str(skill["name"]))
+                if published is None:
+                    raise RuntimeError("共享技能内容为空。")
+                skill = dict(published, base_dir=str(destination), runtime_base_dir=logical_dir)
         final_content = self._render_skill_content(session, skill)
         return {
             "skill": {
@@ -212,7 +206,7 @@ class SkillService:
     def _all_skill_definitions(self, session: AgentSession, *, readonly: bool = False) -> list[dict[str, Any]]:
         self._refresh_built_in_skills()
         if readonly and session.baseline_root:
-            session.platform_skills = self._load_skills_from_disk(Path(session.baseline_root) / "skills", source="platform")
+            session.platform_skills = self._load_skills_from_disk(self._baseline_root(session) / "skills", source="platform")
         elif not readonly:
             self._refresh_platform_skills(session)
         skills = [*self._built_in_skills, *session.host_skills, *session.platform_skills]
@@ -259,10 +253,18 @@ class SkillService:
         )
         self._built_in_snapshot = snapshot
 
+    def _baseline_root(self, session: AgentSession) -> Path:
+        from app.services.shared_skill_service import shared_skill_service
+        if session.workspace is not None:
+            root = shared_skill_service.baseline_root(session.workspace)
+            if root is not None:
+                return root
+        return Path(session.baseline_root)
+
     def _refresh_platform_skills(self, session: AgentSession) -> None:
         if not session.baseline_root:
             return
-        latest_platform_skills = self._load_skills_from_disk(Path(session.baseline_root) / "skills", source="platform")
+        latest_platform_skills = self._load_skills_from_disk(self._baseline_root(session) / "skills", source="platform")
         if latest_platform_skills == session.platform_skills:
             return
         session_service.replace_platform_assets(
@@ -350,6 +352,8 @@ class SkillService:
                 normalized_dir = settings.sandbox_docker_workspace_mount.rstrip("/") + "/" + relative.as_posix()
             except ValueError:
                 pass
+        if settings.sandbox_executor == "docker" and skill.get("runtime_base_dir"):
+            normalized_dir = str(skill["runtime_base_dir"])
         body = str(skill.get("content", "")).strip()
         body = body.replace("${AETHER_SKILL_DIR}", normalized_dir)
         body = body.replace("${AETHER_WORKSPACE_ID}", session.workspace_id)

@@ -194,6 +194,10 @@ def test_user_skill_resources_are_available_inside_sandbox(session):
     capability_service.install_skill(raw_bytes=buffer.getvalue(), filename="demo.zip", user_id=session.owner_user_id)
     loaded = skill_service.invoke_skill(session, "resource-demo")
     content = loaded["injected_messages"][0]["content"]
-    assert "/workspace/skills/.available/" in content
-    resources = list((session.workspace.skills_dir / ".available").rglob("example.txt"))
-    assert resources[0].read_text("utf-8") == "sample data"
+    assert "/workspace/.aether/skills/" in content
+    from app.services.shared_skill_service import shared_skill_service
+    references = shared_skill_service.references(session.workspace)
+    assert len(references) == 1
+    resources = shared_skill_service.root() / next(iter(references)) / "references/example.txt"
+    assert resources.read_text("utf-8") == "sample data"
+    assert not (session.workspace.skills_dir / ".available").exists()

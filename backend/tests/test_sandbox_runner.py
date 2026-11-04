@@ -529,27 +529,21 @@ def test_capture_container_delta_keeps_unmodified_host_uploads(tmp_path, monkeyp
     async def fake_list_container_diff(*, docker_binary: str, container_name: str):
         return [("C", "work/generated.txt")]
 
-    async def fake_copy_path_from_container(
-        *,
-        docker_binary: str,
-        container_name: str,
-        relative_path: str,
-        staging_root: Path,
-    ) -> None:
-        target = staging_root / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("generated", encoding="utf-8")
+    from app.sandbox.workspace_sync_helper import describe
+    import tarfile
+    generated = tmp_path / "generated.txt"
+    generated.write_text("generated", encoding="utf-8")
 
-    monkeypatch.setattr(
-        workspace_sync_service,
-        "_list_container_diff",
-        fake_list_container_diff,
-    )
-    monkeypatch.setattr(
-        workspace_sync_service,
-        "_copy_path_from_container",
-        fake_copy_path_from_container,
-    )
+    async def fake_inspect(*args):
+        return {"work/generated.txt": describe(generated)}
+
+    async def fake_export(_docker, _container, entries, archive):
+        with tarfile.open(archive, "w") as handle:
+            handle.add(generated, arcname="work/generated.txt", recursive=False)
+
+    monkeypatch.setattr(workspace_sync_service, "_list_container_diff", fake_list_container_diff)
+    monkeypatch.setattr(workspace_sync_service, "_inspect_container_paths", fake_inspect)
+    monkeypatch.setattr(workspace_sync_service, "_export_container_entries", fake_export)
 
     asyncio.run(
         workspace_sync_service.capture_container_delta(

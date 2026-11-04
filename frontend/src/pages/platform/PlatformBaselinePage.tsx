@@ -47,6 +47,7 @@ export default function PlatformBaselinePage() {
         <BaselineManager
           activePlatform={platform}
           baselineError={baseline.error}
+          totalSizeBytes={baseline.entries.reduce((sum, item) => sum + (item.kind === "file" ? item.size ?? 0 : 0), 0)}
           fileManagerRef={baseline.fileManagerRef}
           breadcrumbs={breadcrumbs}
           currentDirectoryChildren={currentDirectoryChildren}
