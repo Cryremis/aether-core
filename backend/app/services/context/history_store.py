@@ -1,8 +1,11 @@
 """不可变历史与可重建快照。活动上下文压缩不会删除原始记录。"""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import threading
+from collections import OrderedDict
 from typing import Any
 
 from app.services.store import store_service
@@ -10,8 +13,15 @@ from app.core.config import settings
 
 
 class HistoryStore:
+    def __init__(self) -> None:
+        self._cache_lock = threading.Lock()
+        self._message_versions = OrderedDict()
+
     def _encode(self, value: Any) -> str:
         text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return self._encode_text(text)
+
+    def _encode_text(self, text: str) -> str:
         if settings.capability_secret_encryption_key:
             from app.services.secret_store_service import secret_store_service
             return "encrypted:" + secret_store_service._fernet().encrypt(text.encode()).decode("ascii")
@@ -72,37 +82,73 @@ class HistoryStore:
             ON context_attempts(session_id) WHERE committed=0""")
 
     def capture(self, session_id: str, payload: dict[str, Any], *, expected_revision: int | None = None) -> int:
-        body = {key: value for key, value in payload.items() if key != "ledger_revision"}
+        body = {key: value for key, value in payload.items() if key not in {"ledger_revision", "messages"}}
+        cache_key = (store_service._db_path, session_id)
+        with self._cache_lock:
+            cached = self._message_versions.get(cache_key)
+        cached_revision, cached_digest, previous = cached if cached else (None, None, {})
+        if cached_revision != expected_revision:
+            previous = {}
+
+        versions = {}
+        refs = []
+        new_records = []
+        committed_attempts = set()
+        for index, message in enumerate(payload.get("messages", [])):
+            # 既有调用方会原地编辑消息。用独立副本比较，不能仅按对象身份或列表长度复用。
+            message_id = message.get("message_id")
+            cache_id = (index if not message_id else None, str(message_id or ""))
+            old = previous.get(cache_id)
+            if old is not None and old[0] == message:
+                frozen, digest = old
+            else:
+                encoded = json.dumps(message, ensure_ascii=False, sort_keys=True)
+                digest = hashlib.sha256(encoded.encode()).hexdigest()
+                frozen = copy.deepcopy(message)
+                resolved_id = str(message_id or f"legacy_{index}_{digest[:16]}")
+                new_records.append((session_id, resolved_id, digest, self._encode_text(encoded)))
+                if message.get("attempt_id"):
+                    committed_attempts.add(message["attempt_id"])
+            versions[cache_id] = (frozen, digest)
+            refs.append([str(message_id or f"legacy_{index}_{digest[:16]}"), digest])
+        if "messages" in payload:
+            body["_message_refs"] = refs
+            # 旧读取器必须拒绝打开引用快照，避免把缺少内联 messages 误解为空历史。
+            body["_message_schema_version"] = body.get("message_schema_version")
+            body["message_schema_version"] = 4
         serialized = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
         digest = hashlib.sha256(serialized.encode()).hexdigest()
-        with store_service._connect() as conn:
-            self._ensure(conn)
+        encoded_body = self._encode_text(serialized)
+        with store_service._connect(independent=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT revision,digest FROM context_snapshots WHERE session_id=?", (session_id,)).fetchone()
             revision = int(row["revision"]) if row else 0
             if row is None and expected_revision not in (None, 0):
                 raise RuntimeError("会话账本已删除或更换，拒绝旧写入方重建上下文")
+            if previous and (row is None or row["digest"] != cached_digest):
+                raise RuntimeError("会话账本已变更，拒绝复用旧消息索引")
             if row and row["digest"] == digest:
                 return revision
             if row and expected_revision is not None and revision != expected_revision:
                 raise RuntimeError("会话账本版本冲突，拒绝覆盖其他写入方的上下文；请重新加载会话")
-            message_digests = []
-            for index, message in enumerate(payload.get("messages", [])):
-                encoded = json.dumps(message, ensure_ascii=False, sort_keys=True)
-                key = hashlib.sha256(encoded.encode()).hexdigest()
-                message_digests.append(key)
-                message_id = str(message.get("message_id") or f"legacy_{index}_{key[:16]}")
-                if not conn.execute("SELECT 1 FROM context_records WHERE session_id=? AND message_id=? AND digest=?", (session_id, message_id, key)).fetchone():
-                    conn.execute("INSERT INTO context_records(session_id,message_id,digest,payload) VALUES(?,?,?,?)",
-                                 (session_id, message_id, key, self._encode(message)))
-                if message.get("attempt_id"):
-                    conn.execute("UPDATE context_attempts SET committed=1 WHERE session_id=? AND attempt_id=?", (session_id, message["attempt_id"]))
+            conn.executemany(
+                "INSERT OR IGNORE INTO context_records(session_id,message_id,digest,payload) VALUES(?,?,?,?)",
+                new_records,
+            )
+            conn.executemany(
+                "UPDATE context_attempts SET committed=1 WHERE session_id=? AND attempt_id=? AND committed=0",
+                ((session_id, attempt) for attempt in committed_attempts),
+            )
             revision += 1
-            serialized = json.dumps({**body, "ledger_revision": revision}, ensure_ascii=False, separators=(",", ":"))
             conn.execute("INSERT INTO context_snapshots VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,digest=excluded.digest,payload=excluded.payload",
-                         (session_id, revision, digest, self._encode({**body, "ledger_revision": revision})))
-            self.sync_audit_source(conn, session_id, payload, revision, message_digests=message_digests)
-            return revision
+                         (session_id, revision, digest, encoded_body))
+            self.sync_audit_source(conn, session_id, payload, revision, message_digests=[ref[1] for ref in refs])
+        with self._cache_lock:
+            self._message_versions[cache_key] = (revision, digest, versions)
+            self._message_versions.move_to_end(cache_key)
+            if len(self._message_versions) > 16:
+                self._message_versions.popitem(last=False)
+        return revision
 
     def sync_audit_source(self, conn, session_id: str, payload: dict, revision: int, *, message_digests: list[str] | None = None) -> None:
         """复用 capture 已计算的消息摘要，访问时间等元数据更新不使展示索引失效。"""
@@ -124,11 +170,32 @@ class HistoryStore:
             (session_id, revision, fingerprint, self._encode(metadata)))
 
     def snapshot(self, session_id: str) -> dict[str, Any] | None:
-        with store_service._connect() as conn:
+        with store_service._connect(independent=True) as conn:
+            conn.execute("BEGIN")
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='context_snapshots'").fetchone():
                 return None
             row = conn.execute("SELECT revision,payload FROM context_snapshots WHERE session_id=?", (session_id,)).fetchone()
-            return {**self._decode(row["payload"]), "ledger_revision": int(row["revision"])} if row else None
+            if row is None:
+                return None
+            payload = self._decode(row["payload"])
+            refs = payload.pop("_message_refs", None)
+            if refs is not None:
+                message_schema = payload.pop("_message_schema_version", 3)
+                if message_schema is None:
+                    payload.pop("message_schema_version", None)
+                else:
+                    payload["message_schema_version"] = message_schema
+                messages = conn.execute("""
+                    SELECT record.payload FROM json_each(?) AS ref
+                    LEFT JOIN context_records AS record
+                      ON record.session_id=? AND record.message_id=json_extract(ref.value, '$[0]')
+                       AND record.digest=json_extract(ref.value, '$[1]')
+                    ORDER BY ref.key
+                """, (json.dumps(refs), session_id)).fetchall()
+                if any(message["payload"] is None for message in messages):
+                    raise RuntimeError("会话账本引用了缺失的消息版本")
+                payload["messages"] = [self._decode(message["payload"]) for message in messages]
+            return {**payload, "ledger_revision": int(row["revision"])}
 
     def read(self, session_id: str, *, message_id: str = "", query: str = "", version_digest: str = "", offset: int = 0, limit: int = 6000) -> dict[str, Any]:
         """当前会话内有界扫描；检索旧版本时显式标注，不把档案当新增指令。"""
@@ -139,7 +206,6 @@ class HistoryStore:
         match_limit = 1 if message_id else min(10, limit)
         snippet_limit = limit if message_id else max(1, min(800, limit // match_limit))
         with store_service._connect() as conn:
-            self._ensure(conn)
             sql = "SELECT seq,message_id,digest,payload FROM context_records WHERE session_id=?"
             parameters = [session_id]
             if message_id:
@@ -188,7 +254,6 @@ class HistoryStore:
                   "effective_parameters", "budget", "input_message_refs", "excluded_messages")
         items = []
         with store_service._connect() as conn:
-            self._ensure(conn)
             sql = "SELECT rowid AS cursor,attempt_id,manifest,response,status,committed FROM context_attempts WHERE session_id=?"
             parameters = [session_id]
             if before is not None:
@@ -218,8 +283,9 @@ class HistoryStore:
                 "real_service_verified": False}
 
     def delete(self, session_id: str) -> None:
+        with self._cache_lock:
+            self._message_versions.pop((store_service._db_path, session_id), None)
         with store_service._connect() as conn:
-            self._ensure(conn)
             conn.execute("DELETE FROM context_records WHERE session_id=?", (session_id,))
             conn.execute("DELETE FROM context_snapshots WHERE session_id=?", (session_id,))
             conn.execute("DELETE FROM context_tool_executions WHERE session_id=?", (session_id,))
@@ -232,7 +298,6 @@ class HistoryStore:
         result = []
         visited: set[str] = set()
         with store_service._connect() as conn:
-            self._ensure(conn)
 
             def archived(message_id):
                 for row in conn.execute("SELECT payload FROM context_records WHERE session_id=? AND message_id=? ORDER BY seq DESC", (session_id, message_id)):
@@ -262,8 +327,7 @@ class HistoryStore:
         return result
 
     def start_attempt(self, session_id: str, attempt_id: str, manifest: dict) -> None:
-        with store_service._connect() as conn:
-            self._ensure(conn)
+        with store_service._connect(independent=True) as conn:
             conn.execute("INSERT INTO context_attempts(session_id,attempt_id,manifest) VALUES(?,?,?)",
                          (session_id, attempt_id, json.dumps(manifest, ensure_ascii=False)))
 
@@ -271,7 +335,6 @@ class HistoryStore:
         """只从同一部署、同一 attempt 的完整响应恢复，绝不从正文推测思考。"""
         changed = False
         with store_service._connect() as conn:
-            self._ensure(conn)
             for message in session.messages:
                 if message.get("role") != "assistant" or message.get("projection_only") or isinstance(message.get("reasoning_content"), str) or not message.get("attempt_id"):
                     continue
@@ -291,15 +354,17 @@ class HistoryStore:
         return changed
 
     def save_attempt(self, session_id: str, attempt_id: str, response: dict, status: str = "streaming") -> None:
-        with store_service._connect() as conn:
+        encoded = self._encode(response)
+        with store_service._connect(independent=True) as conn:
             conn.execute("UPDATE context_attempts SET response=?,status=? WHERE session_id=? AND attempt_id=?",
-                         (self._encode(response), status, session_id, attempt_id))
+                         (encoded, status, session_id, attempt_id))
             conn.execute("""INSERT INTO audit_attempt_versions VALUES(?,?,1)
                 ON CONFLICT(session_id,attempt_id) DO UPDATE SET revision=revision+1""", (session_id, attempt_id))
 
     def claim_tool(self, session_id: str, run_id: str, call_id: str, digest: str) -> tuple[str, dict | None]:
-        with store_service._connect() as conn:
-            self._ensure(conn)
+        with store_service._connect(independent=True) as conn:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='context_tool_executions'").fetchone():
+                self._ensure(conn)
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT digest,status,payload FROM context_tool_executions WHERE session_id=? AND run_id=? AND call_id=?", (session_id, run_id, call_id)).fetchone()
             if row:
@@ -310,13 +375,13 @@ class HistoryStore:
             return "claimed", None
 
     def finish_tool(self, session_id: str, run_id: str, call_id: str, payload: dict) -> None:
-        with store_service._connect() as conn:
+        encoded = self._encode(payload)
+        with store_service._connect(independent=True) as conn:
             conn.execute("UPDATE context_tool_executions SET status='completed',payload=? WHERE session_id=? AND run_id=? AND call_id=?",
-                         (self._encode(payload), session_id, run_id, call_id))
+                         (encoded, session_id, run_id, call_id))
 
     def tool_receipt(self, session_id: str, run_id: str, call_id: str) -> dict | None:
-        with store_service._connect() as conn:
-            self._ensure(conn)
+        with store_service._connect(independent=True) as conn:
             row = conn.execute("SELECT status,payload FROM context_tool_executions WHERE session_id=? AND run_id=? AND call_id=?", (session_id, run_id, call_id)).fetchone()
             return self._decode(row["payload"]) if row and row["status"] == "completed" and row["payload"] else None
 
@@ -328,11 +393,12 @@ class HistoryStore:
         """
         content, reasoning = [], []
         calls: dict[str, dict] = {}
-        with store_service._connect() as conn:
+        with store_service._connect(independent=True) as conn:
             rows = conn.execute(
                 "SELECT type,payload_json FROM run_events WHERE run_id=? "
                 "AND type IN ('content_delta','reasoning_delta','tool_call_delta') "
-                "AND json_extract(payload_json,'$.attempt_id')=? ORDER BY seq",
+                "AND COALESCE(json_extract(payload_json,'$._runtime_envelope.attempt_id'), "
+                "json_extract(payload_json,'$.attempt_id'))=? ORDER BY seq",
                 (run_id, attempt_id),
             )
             for row in rows:
@@ -359,7 +425,6 @@ class HistoryStore:
     def recover_attempts(self, session, *, include_run_id: str | None = None) -> bool:
         from app.services.context.message_adapter import context_message_adapter
         with store_service._connect() as conn:
-            self._ensure(conn)
             rows = conn.execute("SELECT attempt_id,manifest,response,status FROM context_attempts WHERE session_id=? AND committed=0 ORDER BY rowid", (session.session_id,)).fetchall()
         known = {message.get("attempt_id") for message in session.messages}
         changed = False

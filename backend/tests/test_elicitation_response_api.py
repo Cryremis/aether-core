@@ -47,6 +47,9 @@ def isolate_session(session, monkeypatch) -> None:
         lambda session_id=None, **kwargs: session,
     )
     monkeypatch.setattr(session_service, "persist", lambda persisted_session: None)
+    async def persist_async(persisted_session):
+        session_service.persist(persisted_session)
+    monkeypatch.setattr(session_service, "persist_async", persist_async)
 
 
 def request_question(session) -> None:

@@ -177,6 +177,7 @@
 }
 
 .error-toast { margin: 16px 20px 0; padding: 12px 18px; background: var(--error-bg); border-left: 4px solid var(--error); color: var(--error); font-size: 13px; font-weight: 500; border-radius: 6px; box-shadow: var(--shadow-sm); }
+.connection-notice { margin: 16px 20px 0; padding: 12px 18px; color: var(--text-secondary); background: var(--bg-secondary); font-size: 13px; border-radius: 6px; }
 
 .chat-area {
   flex: 1;

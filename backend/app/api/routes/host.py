@@ -23,6 +23,7 @@ from app.schemas.agent import AgentEvent
 from app.services.agent_run_service import agent_run_service
 from app.services.host_control_service import host_control_service
 from app.services.session_service import session_service
+from app.services.durable_io import durable_io
 from app.services.store import store_service
 from app.services.tool_catalog_service import (
     ToolCatalogConflictError,
@@ -380,7 +381,7 @@ async def stream_host_run_events(
     async def event_stream():
         last_seq = after_seq
         try:
-            replay_events = agent_run_service.list_events_after(run_id, after_seq)
+            replay_events = await durable_io(agent_run_service.list_events_after, run_id, after_seq)
             queued_events: list[AgentEvent] = []
             closed_while_replaying = False
             while not queue.empty():

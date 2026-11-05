@@ -12,6 +12,7 @@ from app.services.agent_run_service import ElicitationResumeConflict, agent_run_
 from app.services.context.message_adapter import context_message_adapter
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
+from app.services.durable_io import durable_io
 from app.services.store import store_service
 from app.services.timeline_service import timeline_service
 from app.services.transcript_service import transcript_service
@@ -291,7 +292,7 @@ async def respond_to_elicitation(
             replay_after_seq = 0 if resume_seq == 0 else resume_seq - 1
             queue, live = await agent_run_service.subscribe_from(run_id, after_seq=replay_after_seq)
             try:
-                replay_events = agent_run_service.list_events_after(run_id, replay_after_seq)
+                replay_events = await durable_io(agent_run_service.list_events_after, run_id, replay_after_seq)
                 seen_seqs = {int(event.seq or 0) for event in replay_events}
                 for event in replay_events:
                     yield _sse(event)
@@ -425,7 +426,7 @@ async def stream_run_events(
             queue, live = await agent_run_service.subscribe_from(run_id, after_seq=after_seq)
             try:
                 cursor = after_seq
-                for event in agent_run_service.list_events_after(run_id, after_seq):
+                for event in await durable_io(agent_run_service.list_events_after, run_id, after_seq):
                     yield _sse(event)
                     cursor = int(event.seq or cursor)
                     if event.type == "completed":

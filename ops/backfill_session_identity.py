@@ -102,7 +102,11 @@ def audit_and_backfill(db: Path, sessions_root: Path, *, apply=False, offline=Fa
                 for source, payload in payloads.items():
                     if not isinstance(payload, dict) or payload.get("session_id") not in (None, "", sid):
                         raise ValueError("元数据格式或 session_id 不一致")
-                    if int(payload.get("message_schema_version", 1)) > 3:
+                    version = int(payload.get("message_schema_version", 1))
+                    if source == "snapshot" and version == 4 and isinstance(payload.get("_message_refs"), list):
+                        # 只回填身份，保持账本的消息引用与版本标记原样。
+                        version = int(payload.get("_message_schema_version") or 1)
+                    if version > 3:
                         raise ValueError("不支持更新版本的元数据")
                     counts = report["sources"].setdefault(source, {"total": 0, "platform_null": 0, "platform_mismatch": 0, "external_user_mismatch": 0})
                     counts["total"] += 1

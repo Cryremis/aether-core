@@ -187,11 +187,11 @@ def test_abort_keeps_database_lock_until_runtime_state_cleanup_finishes(tmp_path
         monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
         service = AgentRunService()
         publish = service._publish
-        async def paused_publish(run_id, event):
+        async def paused_publish(run_id, event, **kwargs):
             if event.type == "workboard_updated":
                 cleaning.set()
                 await release.wait()
-            await publish(run_id, event)
+            await publish(run_id, event, **kwargs)
         monkeypatch.setattr(service, "_publish", paused_publish)
         run_id = await service.start_chat_run(session, "执行")
         await asyncio.wait_for(entered.wait(), 5)

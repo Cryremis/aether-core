@@ -17,6 +17,8 @@ from process_control import (
     resolve_service_pid,
     start_service,
     stop_service,
+    restart_service,
+    RESTART_DRAIN_TIMEOUT_SECONDS,
 )
 
 def backend_service() -> ServiceSpec:
@@ -90,7 +92,12 @@ def main() -> int:
     parser.add_argument("target", nargs="?", default="all")
     parser.add_argument("--lines", type=int, default=50)
     parser.add_argument("-f", "--follow", action="store_true")
+    parser.add_argument("--drain-timeout", type=float, default=RESTART_DRAIN_TIMEOUT_SECONDS,
+                        help="restart: wait up to this many seconds for active work (default: 120)")
+    parser.add_argument("--force", action="store_true", help="restart immediately, interrupting active work")
     args = parser.parse_args()
+    if not 0 <= args.drain_timeout < float("inf"):
+        parser.error("--drain-timeout must be finite and non-negative")
 
     ensure_runtime_dirs()
     settings = load_runtime_settings()
@@ -106,10 +113,9 @@ def main() -> int:
         return 0 if stop_service(backend) else 1
 
     if args.action == "restart":
-        ok = stop_service(backend)
         if not frontend_dist_ready():
             print(f"warning: frontend dist is missing at {FRONTEND_DIST_ROOT}")
-        ok = start_service(backend) and ok
+        ok = restart_service(backend, timeout_seconds=args.drain_timeout, force=args.force)
         return 0 if ok else 1
 
     if args.action == "status":

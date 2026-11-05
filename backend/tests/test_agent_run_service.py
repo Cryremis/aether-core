@@ -190,6 +190,14 @@ def test_resume_elicitation_run_completes_without_sse_consumer(tmp_path, monkeyp
         payload={"subtype": "awaiting_user_input"},
         status="waiting_input",
     )
+    # 模拟服务重启：清空会话缓存并执行真实启动回收，原问题和 run 必须仍可恢复。
+    session_service.persist(session)
+    session_id = session.session_id
+    session_service._sessions.clear()
+    store_service.initialize()
+    session = session_service.get_or_create(session_id)
+    assert store_service.get_agent_run(run["run_id"])["status"] == "waiting_input"
+    assert runtime_state_service.get_elicitation(session).pending.id == "question"
     _, resume_message = runtime_state_service.resolve_elicitation(
         session,
         "question",

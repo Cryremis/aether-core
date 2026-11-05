@@ -29,7 +29,7 @@ type ComposerProps = {
   onStopSubagent: (subagent: SubagentRunSummary) => void;
   onDestroySubagent: (subagent: SubagentRunSummary) => void;
   onExitSubagent: () => void;
-  onSend: (text: string) => void;
+  onSend: (text: string) => void | boolean | Promise<void | boolean>;
   onStop: () => void;
   onRemoveQueued: (id: string) => void;
   onUpload: (file: File) => void;
@@ -105,8 +105,11 @@ export function Composer({
 
   const handleSend = () => {
     if (!canSend) return;
-    onSend(input.trim());
+    const submitted = input.trim();
     setInput("");
+    void Promise.resolve(onSend(submitted)).then((accepted) => {
+      if (accepted === false) setInput((current) => current ? `${submitted}\n\n${current}` : submitted);
+    });
     if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 

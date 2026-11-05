@@ -8,6 +8,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from app.services.session_identity import SessionIdentityConflict
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.lifecycle import AdmissionMiddleware, router as lifecycle_router
+from app.services.lifecycle_service import lifecycle_service
 
 from app.api.routes.agent import router as agent_router
 from app.api.routes.admin_audit import router as admin_audit_router
@@ -47,9 +49,11 @@ async def lifespan(_app: FastAPI):
     await workspace_runtime_service.start_background_tasks()
     if settings.scheduler_enabled:
         await schedule_scheduler.start()
+    lifecycle_service.start()
     try:
         yield
     finally:
+        lifecycle_service.stop()
         if settings.scheduler_enabled:
             await schedule_scheduler.stop()
         await agent_run_service.stop_background_tasks()
@@ -57,6 +61,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, debug=settings.app_debug, lifespan=lifespan)
+app.add_middleware(AdmissionMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -72,6 +77,7 @@ async def session_identity_conflict(_request: Request, exc: SessionIdentityConfl
 
 
 app.include_router(health_router)
+app.include_router(lifecycle_router)
 app.include_router(auth_router)
 app.include_router(admin_audit_router)
 app.include_router(admin_ips_router)

@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.services.scheduling.executor import ScheduleExecutor
 from app.services.scheduling.recurrence import next_occurrence
 from app.services.store import store_service
+from app.services.lifecycle_service import lifecycle_service
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,8 @@ class ScheduleScheduler:
         self._tasks = []
 
     async def tick_once(self) -> int:
+        if lifecycle_service.draining:
+            return 0
         now = datetime.now(timezone.utc)
         created = store_service.materialize_due_schedule_tasks(
             now_iso=now.isoformat(),
@@ -152,6 +155,9 @@ class ScheduleScheduler:
     async def _worker(self, worker_index: int) -> None:
         while self._running:
             try:
+                if lifecycle_service.draining:
+                    await asyncio.sleep(0.5)
+                    continue
                 lease_owner = f"{uuid.uuid4().hex}:{worker_index}"
                 lease_expires_at = (
                     datetime.now(timezone.utc) + timedelta(seconds=settings.scheduler_lease_seconds)
@@ -161,7 +167,8 @@ class ScheduleScheduler:
                     lease_expires_at=lease_expires_at,
                 )
                 if run is not None:
-                    await self._executor.execute(run)
+                    with lifecycle_service.operation("schedule_runs"):
+                        await self._executor.execute(run)
                 else:
                     await asyncio.sleep(min(0.5, settings.scheduler_tick_seconds))
             except asyncio.CancelledError:

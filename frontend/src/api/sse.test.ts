@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { SseDecoder, consumeEventStream, consumeResumableRun } from "./sse";
+import { describe, expect, it, vi } from "vitest";
+import { SseDecoder, consumeEventStream, consumeResumableRun, RunStreamHttpError } from "./sse";
 
 describe("SSE framing", () => {
   it("preserves multi-line JSON through every character boundary", () => {
@@ -31,6 +31,54 @@ const eventBody = (events: Record<string, unknown>[]) => new ReadableStream<Uint
 } });
 
 describe("durable run replay", () => {
+  it("survives more than three unavailable subscriptions without duplicating events", async () => {
+    let attempts = 0;
+    const statuses: string[] = [];
+    const seen: number[] = [];
+    await consumeResumableRun(eventBody([{ run_id: "r", seq: 1 }]), async (runId, cursor) => {
+      expect([runId, cursor]).toEqual(["r", 1]);
+      if (++attempts <= 5) throw new RunStreamHttpError(503);
+      return eventBody([{ run_id: "r", seq: 1 }, { run_id: "r", seq: 2, type: "completed" }]);
+    }, (event) => { seen.push(event.seq as number); }, { retryDelayMs: 0, onTransportStatus: (state) => statuses.push(state) });
+    expect(attempts).toBe(6);
+    expect(seen).toEqual([1, 2]);
+    expect(statuses).toEqual(["reconnecting", "connected"]);
+  });
+  it("retries the first subscription for a known run but stops on authorization errors", async () => {
+    const resume = vi.fn().mockRejectedValueOnce(new RunStreamHttpError(503))
+      .mockResolvedValueOnce(eventBody([{ run_id: "r", seq: 3, type: "completed" }]));
+    await consumeResumableRun(undefined, resume, () => {}, { runId: "r", afterSeq: 2, retryDelayMs: 0 });
+    expect(resume).toHaveBeenCalledTimes(2);
+    const denied = vi.fn().mockRejectedValue(new RunStreamHttpError(401));
+    await expect(consumeResumableRun(undefined, denied, () => {}, { runId: "r" })).rejects.toThrow("401");
+    expect(denied).toHaveBeenCalledTimes(1);
+  });
+  it("bounds an outage by time and clears its reconnecting notice", async () => {
+    vi.useFakeTimers();
+    try {
+      const statuses: string[] = [];
+      const pending = consumeResumableRun(undefined, async () => { throw new Error("offline"); }, () => {},
+        { runId: "r", retryWindowMs: 2000, retryDelayMs: 500, onTransportStatus: (state) => statuses.push(state) });
+      const assertion = expect(pending).rejects.toThrow("offline");
+      await vi.advanceTimersByTimeAsync(2500);
+      await assertion;
+      expect(statuses).toEqual(["reconnecting", "stopped"]);
+    } finally { vi.useRealTimers(); }
+  });
+  it("keeps cancellation connected after a resumed response has opened", async () => {
+    const abort = new AbortController();
+    let opened!: () => void;
+    const ready = new Promise<void>((resolve) => { opened = resolve; });
+    const pending = consumeResumableRun(undefined, async (_id, _cursor, signal) => {
+      return new ReadableStream<Uint8Array>({ start(controller) {
+        signal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")));
+        opened();
+      } });
+    }, () => {}, { runId: "r", signal: abort.signal });
+    await ready;
+    abort.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
   it("stops at the durable terminal without waiting for HTTP EOF or replaying the tail", async () => {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({ start(controller) {

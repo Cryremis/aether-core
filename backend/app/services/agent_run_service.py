@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import logging
-import uuid
 import json
+import logging
+import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from weakref import WeakValueDictionary
 
 from app.runtime.engine import agent_engine
 from app.runtime.event_protocol import make_event
@@ -18,8 +20,9 @@ from app.services.session_service import session_service
 from app.services.runtime_state import runtime_state_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
-from app.services.tool_execution_service import tool_execution_service
 from app.services.transcript_service import transcript_service
+from app.services.lifecycle_service import lifecycle_service
+from app.services.durable_io import durable_io, finish_on_cancel
 
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,8 @@ class AgentRunService:
         self._runs: dict[str, LiveRunState] = {}
         self._session_runs: dict[str, str] = {}
         self._lock = asyncio.Lock()
+        self._publish_locks = WeakValueDictionary()
+        self._view_lock = threading.Lock()
         self._waiting_input_sweeper_task: asyncio.Task[None] | None = None
 
     async def start_background_tasks(self) -> None:
@@ -107,11 +112,13 @@ class AgentRunService:
     async def _sweep_waiting_inputs(self) -> None:
         while True:
             try:
-                self.expire_waiting_inputs_once()
+                if not lifecycle_service.draining:
+                    self.expire_waiting_inputs_once()
             except Exception:
                 logger.exception("Failed to sweep waiting agent runs")
             await asyncio.sleep(settings.agent_waiting_input_sweep_interval_seconds)
 
+    @lifecycle_service.admitted("run_admission")
     async def start_chat_run(
         self,
         session: AgentSession,
@@ -168,9 +175,14 @@ class AgentRunService:
                     "response_started_at": None,
                 },
             }
-            session_service.persist(session)
+            try:
+                await session_service.persist_async(session)
+            except (Exception, asyncio.CancelledError):
+                session.active_run_view = None
+                await durable_io(store_service.fail_agent_run, run_id, message="启动前会话持久化失败")
+                raise
 
-            task = asyncio.create_task(
+            task = lifecycle_service.create_task(
                 self._drive_run(
                     run_id,
                     session,
@@ -180,13 +192,15 @@ class AgentRunService:
                     reasoning_effort=reasoning_effort,
                     visible_user_message=visible_user_message,
                     user_message_kind=user_message_kind,
-                )
+                ),
+                label="agent_runs",
             )
             state = LiveRunState(run_id=run_id, session_id=session.session_id, task=task)
             self._runs[run_id] = state
             self._session_runs[session.session_id] = run_id
             return run_id
 
+    @lifecycle_service.admitted("run_admission")
     async def resume_elicitation_run(
         self,
         session: AgentSession,
@@ -228,8 +242,8 @@ class AgentRunService:
                     },
                 }
                 try:
-                    session_service.persist(session)
-                except Exception:
+                    await session_service.persist_async(session)
+                except (Exception, asyncio.CancelledError):
                     logger.exception("Failed to persist session before resuming agent run %s", run_id)
                     session.active_run_view = None
                     store_service.fail_agent_run(
@@ -251,11 +265,11 @@ class AgentRunService:
                     },
                 )
                 resume_seq = await self._publish(run_id, resume_event)
-            except Exception:
+            except (Exception, asyncio.CancelledError):
                 logger.exception("Failed to publish resume event for agent run %s", run_id)
                 session.active_run_view = None
                 try:
-                    session_service.persist(session)
+                    await session_service.persist_async(session)
                 except Exception:
                     logger.exception("Failed to persist session before failing agent run %s", run_id)
                 finally:
@@ -274,7 +288,7 @@ class AgentRunService:
                         interrupt_point="resume_session_conflict",
                     )
                     raise ElicitationResumeConflict("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
-                task = asyncio.create_task(
+                task = lifecycle_service.create_task(
                     self._drive_run(
                         run_id,
                         session,
@@ -283,7 +297,8 @@ class AgentRunService:
                         reasoning_effort=reasoning_effort,
                         visible_user_message=False,
                         user_message_kind="elicitation_resume",
-                    )
+                    ),
+                    label="agent_runs",
                 )
                 state = LiveRunState(run_id=run_id, session_id=session.session_id, task=task)
                 state.history.append(resume_event)
@@ -385,7 +400,7 @@ class AgentRunService:
             if active is not None:
                 run_id = str(active["run_id"])
                 await self.cancel_run(session, run_id)
-            session_service.persist(session)
+            await session_service.persist_async(session)
         return {"success": True, "run_id": run_id, "status": "stopped",
                 "partial_content": session.last_abort.partial_content if session.last_abort else "",
                 "workboard": runtime_state_service.get_workboard(session).model_dump(mode="json"),
@@ -463,7 +478,8 @@ class AgentRunService:
             state.subscribers.discard(queue)
 
     def get_active_run_view(self, session: AgentSession) -> dict[str, Any] | None:
-        return session.active_run_view
+        with self._view_lock:
+            return copy.deepcopy(session.active_run_view)
 
     def get_session_run_id(self, session_id: str) -> str | None:
         return self._session_runs.get(session_id)
@@ -496,8 +512,7 @@ class AgentRunService:
                     # 清理完成后再发布终态，避免前端立即续聊撞上旧运行。
                     terminal_event = event
                     continue
-                self._apply_event_to_active_view(session, event)
-                await self._publish(run_id, event)
+                await self._publish(run_id, event, session=session)
         except asyncio.CancelledError:
             aborted_event = make_event(
                 session,
@@ -505,8 +520,7 @@ class AgentRunService:
                 partial_content=session.get_partial_content(run_id),
                 interrupt_point="run_task_cancelled",
             )
-            self._apply_event_to_active_view(session, aborted_event)
-            await self._publish(run_id, aborted_event)
+            await self._publish(run_id, aborted_event, session=session)
             completed_event = make_event(
                 session,
                 "completed",
@@ -523,8 +537,7 @@ class AgentRunService:
                 error_code=public_run_error_code(exc),
                 error_id=run_id,
             )
-            self._apply_event_to_active_view(session, error_event)
-            await self._publish(run_id, error_event)
+            await self._publish(run_id, error_event, session=session)
             completed_event = make_event(
                 session,
                 "completed",
@@ -536,7 +549,7 @@ class AgentRunService:
         finally:
             try:
                 if terminal_event is None:
-                    terminal_event = make_event(session, "completed", elapsed_ms=self._active_elapsed_ms(session), subtype="completed")
+                    terminal_event = make_event(session, "completed", elapsed_ms=self._active_elapsed_ms(session), subtype="error_cleanup")
                 if self._status_for_event(terminal_event) == "cancelled":
                     try:
                         board, elicitation = runtime_state_service.settle_stopped_run(session)
@@ -545,7 +558,6 @@ class AgentRunService:
                     except Exception:
                         logger.exception("Failed to settle runtime state for agent run %s", run_id)
                         terminal_event = make_event(session, "completed", elapsed_ms=self._active_elapsed_ms(session), subtype="error_cleanup")
-                self._apply_event_to_active_view(session, terminal_event)
                 # 保留上游的异常隔离，记录/持久化失败不能阻止运行锁的释放。
                 try:
                     from app.services.context.history_store import history_store
@@ -556,11 +568,11 @@ class AgentRunService:
                 except Exception:
                     logger.exception("Failed to finalize transcript for agent run %s", run_id)
                 session.finish_run(run_id)
-                session.active_run_view = None
                 try:
-                    session_service.persist(session)
+                    await session_service.persist_async(session)
                 except Exception:
                     logger.exception("Failed to persist session after agent run %s", run_id)
+                    terminal_event = make_event(session, "completed", elapsed_ms=0, subtype="error_cleanup")
                 if self._status_for_event(terminal_event) in {"failed", "cancelled", "timed_out"}:
                     from app.services.subagent_service import subagent_service
 
@@ -578,6 +590,8 @@ class AgentRunService:
                     except Exception:
                         logger.exception("Failed to finalize agent run %s in database", run_id)
             finally:
+                if (session.active_run_view or {}).get("run_id") == run_id:
+                    session.active_run_view = None
                 await self._close_run(run_id, session.session_id)
 
     _ENVELOPE_FIELDS = ("protocol_version", "turn_id", "step_id", "attempt_id", "message_id", "part_id", "context_epoch_id", "continuation_of")
@@ -592,7 +606,15 @@ class AgentRunService:
             seq=int(row["seq"]), event_id=f"{run_id}:{row['seq']}", timestamp=str(row["created_at"]),
             payload=payload, **metadata)
 
-    async def _publish(self, run_id: str, event: AgentEvent) -> int:
+    async def _publish(self, run_id: str, event: AgentEvent, *, session: AgentSession | None = None) -> int:
+        # 已入队的发布在取消时也要完成提交与投影，避免留下游标空洞。
+        lock = self._publish_locks.get(run_id)
+        if lock is None:
+            lock = self._publish_locks[run_id] = asyncio.Lock()
+        async with lock:
+            return await finish_on_cancel(self._commit_and_publish(run_id, event, session))
+
+    async def _commit_and_publish(self, run_id: str, event: AgentEvent, session: AgentSession | None) -> int:
         subscribers: list[asyncio.Queue[AgentEvent | None]] = []
         event.run_id = run_id
         status = self._status_for_event(event)
@@ -605,20 +627,24 @@ class AgentRunService:
             if event.type == "error"
             else None
         )
-        event.seq = store_service.append_agent_run_event(
+        event.seq = await durable_io(
+            store_service.append_agent_run_event,
             run_id=run_id,
             event_type=event.type,
-            payload={**event.payload, "_runtime_envelope": {key: getattr(event, key) for key in self._ENVELOPE_FIELDS}},
+            payload={**copy.deepcopy(event.payload), "_runtime_envelope": {key: getattr(event, key) for key in self._ENVELOPE_FIELDS}},
             status=status,
             result=result,
             error=error,
         )
         published_seq = event.seq
         event.event_id = f"{run_id}:{published_seq}"
-        current_session = session_service._sessions.get(event.session_id)
-        if current_session is not None and current_session.active_run_view:
-            current_session.active_run_view["last_seq"] = published_seq
-            session_service.persist(current_session)
+        current_session = session or session_service._sessions.get(event.session_id)
+        if current_session is not None:
+            with self._view_lock:
+                view = current_session.active_run_view
+                if view is not None and view.get("run_id") == run_id:
+                    self._apply_event_to_active_view(current_session, event)
+                    view["last_seq"] = published_seq
         async with self._lock:
             state = self._runs.get(run_id)
             if state is None:
@@ -737,7 +763,7 @@ class AgentRunService:
                 "meta": str(((payload.get("tool_display") or {}) if isinstance(payload.get("tool_display"), dict) else {}).get("meta") or "tool"),
                 "argumentsText": self._pretty_json(payload.get("input")),
                 "outputText": "",
-                "liveOutputText": tool_execution_service.read_active_output(session, tool_call_id=tool_call_id),
+                "liveOutputText": "",
                 "status": "running",
             }
             blocks.append(tool_block)

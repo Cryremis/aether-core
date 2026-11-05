@@ -17,10 +17,12 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Any
+from weakref import WeakValueDictionary
 
 from app.core.config import settings
 from app.sandbox.manager import sandbox_manager
 from app.services.context.bootstrap import configure_context_runtime
+from app.services.durable_io import durable_io
 from app.services.session_types import AgentSession
 from app.services.session_identity import IDENTITY_FIELDS, identity_updates
 from app.services.store import store_service
@@ -36,6 +38,7 @@ class SessionService:
         self._sessions: dict[str, AgentSession] = {}
         self._metadata_locks: dict[str, threading.RLock] = {}
         self._metadata_locks_guard = threading.Lock()
+        self._async_writes = WeakValueDictionary()
 
     def get_or_create(
         self,
@@ -235,6 +238,25 @@ class SessionService:
         store_service.touch_workspace_session(session.session_id)
         self._write_metadata(session)
 
+    async def persist_async(self, session: AgentSession) -> None:
+        key = (asyncio.get_running_loop(), session.session_id)
+        lock = self._async_writes.get(key)
+        if lock is None:
+            lock = self._async_writes[key] = asyncio.Lock()
+        async with lock:
+            session.touch()
+            # 后台线程只读取冻结的 payload，不能遍历仍在更新的 AgentSession。
+            revision = session.ledger_revision
+            payload = copy.deepcopy(self._metadata_payload(session))
+            await durable_io(self._persist_snapshot, session, payload, revision)
+
+    def _persist_snapshot(self, session: AgentSession, payload: dict, expected_revision: int) -> None:
+        with self._metadata_lock(session.session_id):
+            conversation = store_service.get_conversation_by_session(session.session_id)
+            payload.update(identity_updates(session.session_id, payload, conversation))
+            store_service.touch_workspace_session(session.session_id)
+            self._commit_metadata(session, payload, expected_revision)
+
     def clone_host_state(self, source: AgentSession, target: AgentSession) -> None:
         """克隆宿主绑定，不克隆消息历史，也不改变 Workspace 归属。"""
         target.host_name = source.host_name
@@ -401,7 +423,7 @@ class SessionService:
             session.active_run_view = None
             return
         run = store_service.get_agent_run(run_id)
-        if run is None or str(run.get("status")) in store_service.TERMINAL_AGENT_RUN_STATUSES:
+        if run is None or str(run.get("status")) in store_service.TERMINAL_AGENT_RUN_STATUSES | {"waiting_input"}:
             session.active_run_view = None
 
     def _write_metadata(self, session: AgentSession) -> None:
@@ -412,9 +434,13 @@ class SessionService:
     def _write_metadata_locked(self, session: AgentSession) -> None:
         # 创建 conversation 后的第一次 persist 也走这里；旧内存态不能再写回空身份。
         self._reconcile_identity(session)
+        self._commit_metadata(session, self._metadata_payload(session), session.ledger_revision)
+
+    @staticmethod
+    def _metadata_payload(session: AgentSession) -> dict[str, Any]:
         if not session.workspace_id:
             raise RuntimeError("会话尚未绑定 Workspace")
-        payload = {
+        return {
             "session_id": session.session_id,
             "workspace_id": session.workspace_id,
             "conversation_id": session.conversation_id,
@@ -456,34 +482,33 @@ class SessionService:
             "subagent_tools_enabled": session.subagent_tools_enabled,
             "created_at": session.created_at,
             "last_access": session.last_access,
-            "active_run_view": session.active_run_view,
+            "active_run_view": None,
         }
+    def _commit_metadata(self, session: AgentSession, payload: dict, expected_revision: int) -> None:
         metadata_path = self._metadata_path(session.session_id)
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
-        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
         temporary_path = metadata_path.with_name(
             f"{metadata_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         )
 
-        # Windows 下目标文件可能被短暂的杀毒/索引/读取占用；串行化同会话写入，
-        # 并用唯一临时文件避免两个写入方抢占同一个 .tmp。
-        with self._metadata_lock(session.session_id):
-            from app.services.context.history_store import history_store
-            session.ledger_revision = history_store.capture(session.session_id, payload, expected_revision=session.ledger_revision)
-            payload["ledger_revision"] = session.ledger_revision
-            serialized = json.dumps(payload, ensure_ascii=False, indent=2)
-            try:
-                temporary_path.write_text(serialized, encoding="utf-8")
-                for attempt in range(20):
-                    try:
-                        os.replace(temporary_path, metadata_path)
-                        return
-                    except PermissionError:
-                        if attempt == 19:
-                            raise
-                        time.sleep(0.05)
-            finally:
-                temporary_path.unlink(missing_ok=True)
+        # 账本是恢复来源，磁盘 JSON 是兼容投影。版本冲突时不覆盖较新的投影。
+        from app.services.context.history_store import history_store
+        ledger = {key: value for key, value in payload.items() if key != "transcript"}
+        session.ledger_revision = history_store.capture(session.session_id, ledger, expected_revision=expected_revision)
+        payload["ledger_revision"] = session.ledger_revision
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        try:
+            temporary_path.write_text(serialized, encoding="utf-8")
+            for attempt in range(20):
+                try:
+                    os.replace(temporary_path, metadata_path)
+                    return
+                except PermissionError:
+                    if attempt == 19:
+                        raise
+                    time.sleep(0.05)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def delete_session(self, session_id: str) -> bool:
         from app.services.context.history_store import history_store

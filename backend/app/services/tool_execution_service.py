@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.services.durable_io import durable_io
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 
@@ -50,9 +51,9 @@ class ToolExecutionService:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._seq_by_tool_call: dict[str, int] = {}
+        self._seq_by_execution: dict[str, int] = {}
 
-    def begin_execution(self, session: AgentSession, *, tool_call_id: str, tool_name: str) -> ToolExecutionRecord:
+    async def begin_execution(self, session: AgentSession, *, tool_call_id: str, tool_name: str) -> ToolExecutionRecord:
         workspace = session.workspace
         if workspace is None:
             raise RuntimeError("会话工作区尚未初始化。")
@@ -60,7 +61,7 @@ class ToolExecutionService:
         output_filename = f"tool_output_{tool_call_id}.log"
         output_path = workspace.logs_dir / output_filename
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text("", encoding="utf-8")
+        await durable_io(output_path.write_text, "", encoding="utf-8")
         record = ToolExecutionRecord(
             execution_id=execution_id,
             session_id=session.session_id,
@@ -74,8 +75,8 @@ class ToolExecutionService:
         )
         executions = self._get_session_execution_map(session)
         executions[tool_call_id] = self._dump_record(record)
-        self._seq_by_tool_call[tool_call_id] = 0
-        session_service.persist(session)
+        self._seq_by_execution[execution_id] = 0
+        await session_service.persist_async(session)
         return record
 
     async def append_output(
@@ -100,18 +101,16 @@ class ToolExecutionService:
                 raise RuntimeError("会话工作区尚未初始化。")
             output_file = workspace.root / record.output_path
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            with output_file.open("a", encoding="utf-8", errors="replace") as handle:
-                handle.write(text)
+            await durable_io(self._append_log, output_file, text)
             if stream == "stderr":
                 record.stderr_bytes += len(text.encode("utf-8", errors="replace"))
             else:
                 record.stdout_bytes += len(text.encode("utf-8", errors="replace"))
             record.preview_text = self._merge_preview(record.preview_text, text)
             record.updated_at = _utcnow_iso()
-            seq = self._seq_by_tool_call.get(tool_call_id, 0) + 1
-            self._seq_by_tool_call[tool_call_id] = seq
+            seq = self._seq_by_execution.get(record.execution_id, 0) + 1
+            self._seq_by_execution[record.execution_id] = seq
             executions[tool_call_id] = self._dump_record(record)
-            session_service.persist(session)
             return ToolOutputEvent(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -121,7 +120,12 @@ class ToolExecutionService:
                 timestamp=_utcnow_iso(),
             )
 
-    def finish_execution(
+    @staticmethod
+    def _append_log(path: Path, text: str) -> None:
+        with path.open("a", encoding="utf-8", errors="replace") as handle:
+            handle.write(text)
+
+    async def finish_execution(
         self,
         session: AgentSession,
         *,
@@ -140,7 +144,7 @@ class ToolExecutionService:
         record.finished_at = _utcnow_iso()
         record.updated_at = record.finished_at
         executions[tool_call_id] = self._dump_record(record)
-        self._seq_by_tool_call.pop(tool_call_id, None)
+        self._seq_by_execution.pop(record.execution_id, None)
 
         history = self._get_session_execution_history(session)
         history.append(
@@ -158,17 +162,17 @@ class ToolExecutionService:
         )
 
         executions.pop(tool_call_id, None)
-        session_service.persist(session)
+        await session_service.persist_async(session)
         return history[-1]
 
-    def fail_execution(
+    async def fail_execution(
         self,
         session: AgentSession,
         *,
         tool_call_id: str,
         error: str,
     ) -> dict[str, Any] | None:
-        return self.finish_execution(
+        return await self.finish_execution(
             session,
             tool_call_id=tool_call_id,
             exit_code=None,
@@ -176,13 +180,13 @@ class ToolExecutionService:
             status="failed",
         )
 
-    def abort_execution(
+    async def abort_execution(
         self,
         session: AgentSession,
         *,
         tool_call_id: str,
     ) -> dict[str, Any] | None:
-        return self.finish_execution(
+        return await self.finish_execution(
             session,
             tool_call_id=tool_call_id,
             exit_code=None,

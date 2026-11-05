@@ -24,6 +24,7 @@ import {
   streamElicitationResponse,
   streamChat,
   streamRunEvents,
+  ServiceRestartingError,
   type ActiveRunSummary,
   type CommittedChatMessage,
   type SubagentRunSummary,
@@ -311,6 +312,7 @@ export function WorkbenchPage({
   const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [connectionNotice, setConnectionNotice] = useState("");
     // 支持通过 ?sidebar=schedules 深链到指定工作台侧栏，便于用户和测试直达定时任务。
     const [sidebarView, setSidebarView] = useState<SidebarView>(() => {
       const view = new URLSearchParams(window.location.search).get("sidebar");
@@ -1019,6 +1021,7 @@ window.addEventListener("resize", handleResize);
     previousScrollTopRef.current = 0;
     setLoading(true);
     setError("");
+    setConnectionNotice("");
     const isChildView = Boolean(activeSubagentSessionId);
     if (!isChildView && isStreamingRef.current && returningFromSubagentRef.current) {
       returningFromSubagentRef.current = false;
@@ -1265,6 +1268,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       }
       const eventType = String(event.type ?? "");
       const payload = (event.payload ?? {}) as Record<string, unknown>;
+      if (eventType === "transport_status") {
+        setConnectionNotice(payload.state === "reconnecting" ? "连接暂时中断，正在重新连接并恢复进度…" : "");
+        return;
+      }
       const previewMetadata = {
         runId: typeof event.run_id === "string" ? event.run_id : undefined,
         attemptId: typeof event.attempt_id === "string" ? event.attempt_id : undefined,
@@ -1780,7 +1787,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         newlyCreatedSessionRef.current = effectiveSessionId;
       } catch (err) {
         setError(err instanceof Error ? err.message : "创建会话失败");
-        return;
+        return err instanceof ServiceRestartingError ? false : undefined;
       }
     }
 
@@ -1882,6 +1889,15 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         wasAborted = true;
       } else {
         setError(chatError instanceof Error ? chatError.message : "对话执行失败");
+        if (chatError instanceof ServiceRestartingError) {
+          setTranscriptMessages((current) => current.filter((item) => item.id !== assistantId));
+          if (skipAddUserBubble) {
+            const unsent = { id: pendingUserBubble?.id ?? primaryClientMessageId, content: userText, queuedAt: Date.now() };
+            queuedMessagesRef.current = [unsent, ...queuedMessagesRef.current];
+            setQueuedMessages(queuedMessagesRef.current);
+          }
+          return false;
+        }
       }
     } finally {
       setTranscriptMessages((current) =>
@@ -1913,7 +1929,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       void onSessionRefresh?.(effectiveSessionId || undefined);
       
       const currentQueue = queuedMessagesRef.current;
-      if (currentQueue.length > 0) {
+      if (!streamEndedWithError && currentQueue.length > 0) {
         const mergedContent = currentQueue.map((msg) => msg.content).join("\n\n");
         const mergedBubble = {
           id: `client-user-queued-${Date.now()}-${randomIdSegment()}`,
@@ -2149,16 +2165,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
       streaming: true,
       responseStartedAt: undefined,
     }));
-    setElicitation((current) =>
-      current
-        ? {
-            ...current,
-            revision: current.revision + 1,
-            pending: null,
-            updated_at: new Date().toISOString(),
-          }
-        : current,
-    );
+    // 收到 ask_resolved 后再清除问题；维护期拒绝请求时保留用户填写的答案。
 
     let activeReasoningId = "";
     let activeContentId = "";
@@ -2489,6 +2496,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           </div>
         </header>
 
+        {connectionNotice ? <div className="connection-notice" role="status">{connectionNotice}</div> : null}
         {error ? <div className="error-toast anim-shake">{error}</div> : null}
 
         <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll} onWheel={handleHistoryWheel}>
@@ -2557,7 +2565,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           onStopSubagent={(subagent) => void handleStopSubagent(subagent)}
           onDestroySubagent={(subagent) => void handleDestroySubagent(subagent)}
           onExitSubagent={exitSubagentSession}
-          onSend={(text) => void handleSend(text)}
+          onSend={(text) => handleSend(text)}
           onStop={() => void handleStop()}
           onRemoveQueued={handleRemoveQueued}
           onUpload={(file) => void handleUpload(file)}

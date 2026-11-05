@@ -23,6 +23,7 @@ from app.services.context.context_pipeline import context_pipeline
 from app.services.context.message_adapter import context_message_adapter
 from app.services.context.model_profile import model_text, recover_optional_parameter, resolve_model_profile
 from app.services.context.runtime_types import ContextEventType, ContextOverflowError
+from app.services.durable_io import durable_io
 from app.services.file_service import file_service
 from app.services.llm_client import llm_client
 from app.services.llm_config_service import llm_config_service
@@ -76,7 +77,7 @@ class AgentEngine:
             block["started_at"] = started_at_iso
         blocks.insert(0, block)
 
-    def _persist_assistant_round(
+    async def _persist_assistant_round(
         self,
         session: AgentSession,
         *,
@@ -136,7 +137,7 @@ class AgentEngine:
                     streaming=False,
                 ),
             )
-        session_service.persist(session)
+        await session_service.persist_async(session)
 
     def _append_runtime_notice_block(self, blocks: list[dict[str, Any]], payload: dict[str, Any]) -> None:
         if str(payload.get("status") or "") != "recreated":
@@ -326,7 +327,8 @@ class AgentEngine:
             execute_kwargs["output_event_callback"] = emit_output_event
         if signature is not None and "catalog_snapshot" in signature.parameters:
             execute_kwargs["catalog_snapshot"] = catalog_snapshot
-        return asyncio.create_task(tool_service.execute(session, tool_name, tool_input, **execute_kwargs))
+        from app.services.lifecycle_service import lifecycle_service
+        return lifecycle_service.create_task(tool_service.execute(session, tool_name, tool_input, **execute_kwargs), label="tool_calls")
 
     async def _stream_llm_until_abort(
         self,
@@ -455,7 +457,7 @@ class AgentEngine:
                     )
                 session.messages.append(committed_user_message)
         session.touch()
-        session_service.persist(session)
+        await session_service.persist_async(session)
         if persist_user_message and committed_user_message is None:
             for index in range(len(session.messages) - 1, -1, -1):
                 candidate = session.messages[index]
@@ -485,7 +487,7 @@ class AgentEngine:
                 else None,
             )
             session.conversation_id = conversation.get("conversation_id")
-            session_service.persist(session)
+            await session_service.persist_async(session)
         new_title = (
             message.strip()[:80] or "新对话"
             if is_new_conversation and not conversation_metadata.get("subagent")
@@ -501,7 +503,7 @@ class AgentEngine:
                 session.transcript,
                 transcript_service.transcript_item_from_committed_message(committed_user_message),
             )
-            session_service.persist(session)
+            await session_service.persist_async(session)
             yield make_event(
                 session,
                 "message_committed",
@@ -520,11 +522,11 @@ class AgentEngine:
         current_binding = binding(llm_runtime)
         if session.provider_binding != current_binding:
             if (session.provider_binding or llm_runtime.api_format != "openai-compatible") and any(m.get("role") == "assistant" for m in session.messages):
-                session_service.persist(session)
+                await session_service.persist_async(session)
                 rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
                                reason="模型、协议、账户或历史版本变化")
             session.provider_binding = current_binding
-            session_service.persist(session)
+            await session_service.persist_async(session)
         try:
             from app.services.mcp_runtime_service import mcp_runtime_service
             await mcp_runtime_service.ensure_catalog(session)
@@ -615,7 +617,7 @@ class AgentEngine:
                         int((time.perf_counter() - started_at) * 1000),
                         response_started_at_iso or started_at_iso,
                     )
-                    self._persist_assistant_round(
+                    await self._persist_assistant_round(
                         session,
                         turn_index=request_turn_index,
                         content=partial_text,
@@ -689,7 +691,7 @@ class AgentEngine:
                 if ((session.frozen_system_messages and session.frozen_system_messages != system_messages)
                     or (session.frozen_tools_hash and session.frozen_tools_hash != tools_hash)
                     or (session.frozen_history_prefix_hash and session.frozen_history_prefix_hash != history_prefix_hash)):
-                    session_service.persist(session)
+                    await session_service.persist_async(session)
                     rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
                                    reason="系统指令或工具目录前缀变化")
                     visible_messages = list(session.messages)
@@ -707,17 +709,17 @@ class AgentEngine:
             tools_for_estimation = [*tools, context_compact_schema] if context_compact_allowed else tools
             effective_tools = [] if llm_runtime.extra_body.get("tools") == [] else tools_for_estimation
             if resolve_model_profile(llm_runtime).requires_reasoning(llm_runtime, effective_tools) and history_store.restore_reasoning(session, llm_runtime):
-                session_service.persist(session)
+                await session_service.persist_async(session)
             if llm_runtime.api_format != "openai-compatible" and any(
                 message.get("role") == "assistant" and message.get("status") == "incomplete"
                 and not message.get("provider_payload") and not message.get("projection_only") for message in visible_messages
             ):
-                session_service.persist(session)
+                await session_service.persist_async(session)
                 rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
                                reason="上次原生响应中断，尚未取得完整签名状态")
                 visible_messages = list(session.messages)
                 raw_messages = [*system_messages, *visible_messages]
-                session_service.persist(session)
+                await session_service.persist_async(session)
             try:
                 prepared = await self._await_operation(session, run_id, context_pipeline.prepare_for_llm_async(
                     session=session,
@@ -789,7 +791,7 @@ class AgentEngine:
             if active:
                 active.context_system_messages = copy.deepcopy(system_messages)
                 active.context_tools = copy.deepcopy(tools) if prepared_payload.get("tools") else []
-            history_store.start_attempt(session.session_id, attempt_id, {
+            await durable_io(history_store.start_attempt, session.session_id, attempt_id, {
                 "purpose": "conversation",
                 "model": llm_runtime.model, "api_format": llm_runtime.api_format,
                 "run_id": run_id, "turn_index": request_turn_index,
@@ -839,7 +841,7 @@ class AgentEngine:
                                 int((time.perf_counter() - started_at) * 1000),
                                 response_started_at_iso or started_at_iso,
                             )
-                            self._persist_assistant_round(
+                            await self._persist_assistant_round(
                                 session,
                                 turn_index=request_turn_index,
                                 content=partial_text,
@@ -967,7 +969,7 @@ class AgentEngine:
                             attempt_id=attempt_id,
                         )
             except httpx.HTTPStatusError as exc:
-                history_store.save_attempt(session.session_id, attempt_id,
+                await durable_io(history_store.save_attempt, session.session_id, attempt_id,
                     {"error_type": type(exc).__name__, "http_status": exc.response.status_code}, "failed")
                 error_message = self._extract_llm_error_message(exc)
                 negotiation_config = replace(llm_runtime, sampling={**llm_runtime.sampling, "reasoning_effort": reasoning_effort}) if reasoning_effort is not None else llm_runtime
@@ -979,10 +981,10 @@ class AgentEngine:
                         reasoning_effort = None
                     from app.services.context.provider_adapters import binding
                     if llm_runtime.api_format != "openai-compatible":
-                        session_service.persist(session)
+                        await session_service.persist_async(session)
                         rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None, reason="服务参数兼容恢复")
                     session.provider_binding = binding(llm_runtime)
-                    session_service.persist(session)
+                    await session_service.persist_async(session)
                     continue
                 if self._is_context_overflow_error(error_message):
                     try:
@@ -1037,7 +1039,7 @@ class AgentEngine:
                 raise RuntimeError(error_message) from exc
             except (httpx.TransportError, ModelStreamError) as exc:
                 # 保留已发布片段后续写；当前生成的工具尚未执行，不能把残缺参数当成调用。
-                history_store.save_attempt(session.session_id, attempt_id,
+                await durable_io(history_store.save_attempt, session.session_id, attempt_id,
                     {"content": assistant_content, "reasoning_content": assistant_reasoning,
                      "provider_payload": provider_payload, "tool_calls": tool_calls, "error_type": type(exc).__name__}, "incomplete")
                 delay = take_llm_retry_delay()
@@ -1046,7 +1048,7 @@ class AgentEngine:
                         if active_content_block_id:
                             self._update_assistant_block(persisted_assistant_blocks, active_content_block_id, status="incomplete")
                             yield make_event(session, "content_completed", part_id=active_content_block_id, status="incomplete")
-                        self._persist_assistant_round(session, turn_index=request_turn_index,
+                        await self._persist_assistant_round(session, turn_index=request_turn_index,
                             content=assistant_content or None, blocks=persisted_assistant_blocks, run_id=run_id,
                             reasoning_content=assistant_reasoning, provider_payload=None, attempt_id=attempt_id,
                             status="incomplete", visible_in_transcript=False)
@@ -1055,7 +1057,7 @@ class AgentEngine:
                             "[运行状态] 上次生成中断，该次提出的工具尚未执行。请基于已保留的正文和已完成工具回执继续当前任务，不要重复已完成操作；需要工具时重新生成完整调用。",
                             turn_index=request_turn_index, kind="continuation_notice"))
                         session.messages[-1]["run_id"] = run_id
-                        session_service.persist(session)
+                        await session_service.persist_async(session)
                         next_continuation_of = attempt_id
                     logger.warning("Recovering model stream: run=%s attempt=%s type=%s", run_id, attempt_id, type(exc).__name__)
                     yield make_event(
@@ -1075,11 +1077,11 @@ class AgentEngine:
                     raise
             except Exception:
                 # SSE 格式错误等非传输错误也必须保存已发布片段，不能等用户下一轮才恢复。
-                history_store.save_attempt(session.session_id, attempt_id,
+                await durable_io(history_store.save_attempt, session.session_id, attempt_id,
                     {"content": assistant_content, "reasoning_content": assistant_reasoning,
                      "provider_payload": provider_payload, "tool_calls": tool_calls}, "incomplete")
                 if assistant_content or assistant_reasoning:
-                    self._persist_assistant_round(session, turn_index=request_turn_index,
+                    await self._persist_assistant_round(session, turn_index=request_turn_index,
                         content=assistant_content, blocks=persisted_assistant_blocks, run_id=run_id,
                         reasoning_content=assistant_reasoning, provider_payload=provider_payload,
                         attempt_id=attempt_id, status="incomplete")
@@ -1092,7 +1094,7 @@ class AgentEngine:
                         int((time.perf_counter() - started_at) * 1000),
                         response_started_at_iso or started_at_iso,
                     )
-                    self._persist_assistant_round(
+                    await self._persist_assistant_round(
                         session,
                         turn_index=request_turn_index,
                         content=session.get_partial_content(run_id) or None,
@@ -1123,7 +1125,7 @@ class AgentEngine:
                     seen_calls[call_id] = call
                     if call_id in historical_ids:
                         call["id"] = f"call_{uuid.uuid4().hex}"
-            history_store.save_attempt(session.session_id, attempt_id,
+            await durable_io(history_store.save_attempt, session.session_id, attempt_id,
                 {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls,
                  "provider_payload": provider_payload, "stop_reason": last_stop_reason, "usage": last_usage_payload or {}},
                 "completed" if last_stop_reason in {"stop", "tool_calls"} else "incomplete")
@@ -1135,20 +1137,20 @@ class AgentEngine:
                     continue
             invalid_calls = bool(tool_calls) and (llm_runtime.extra_body.get("tools") == [] or last_stop_reason not in {"tool_calls", "stop"})
             if invalid_calls:
-                history_store.save_attempt(session.session_id, attempt_id,
+                await durable_io(history_store.save_attempt, session.session_id, attempt_id,
                     {"content": assistant_content, "reasoning_content": assistant_reasoning, "tool_calls": tool_calls}, "invalid")
                 delay = take_llm_retry_delay()
                 tool_calls, provider_payload = {}, None
                 if delay is not None:
                     if assistant_content or assistant_reasoning:
-                        self._persist_assistant_round(session, turn_index=request_turn_index, content=assistant_content or None,
+                        await self._persist_assistant_round(session, turn_index=request_turn_index, content=assistant_content or None,
                             blocks=persisted_assistant_blocks, run_id=run_id, reasoning_content=assistant_reasoning,
                             provider_payload=None, attempt_id=attempt_id, status="incomplete", visible_in_transcript=False)
                     notice = "本次工具提议未执行：当前请求未开放工具，请直接回答。" if llm_runtime.extra_body.get("tools") == [] else "上次工具调用未完整生成且尚未执行，请继续当前任务，需要工具时重新生成完整参数。"
                     session.messages.append(context_message_adapter.make_internal_user_message(
                         "[运行状态] " + notice + "不要重复已完成的工具操作。", turn_index=request_turn_index, kind="continuation_notice"))
                     session.messages[-1]["run_id"] = run_id
-                    session_service.persist(session)
+                    await session_service.persist_async(session)
                     next_continuation_of = attempt_id
                     yield make_event(session, "stream_retry", round=turn_count, attempt=llm_retry_count, delay=delay, reason="tool_call_recovery")
                     await self._await_operation(session, run_id, asyncio.sleep(delay))
@@ -1223,7 +1225,7 @@ class AgentEngine:
                     }
                     for _, tool_call in sorted(tool_calls.items())
                 ]
-                self._persist_assistant_round(
+                await self._persist_assistant_round(
                     session,
                     turn_index=request_turn_index,
                     content=str(assistant_message.get("content")) if assistant_message.get("content") else None,
@@ -1314,7 +1316,7 @@ class AgentEngine:
                                     int((time.perf_counter() - started_at) * 1000),
                                     response_started_at_iso or started_at_iso,
                                 )
-                                self._persist_assistant_round(
+                                await self._persist_assistant_round(
                                     session,
                                     turn_index=request_turn_index,
                                     content=session.get_partial_content(run_id) or None,
@@ -1449,7 +1451,7 @@ class AgentEngine:
                             turn_index=request_turn_index,
                         )
                     )
-                    session_service.persist(session)
+                    await session_service.persist_async(session)
                     injected_messages = result.injected_messages
                     if injected_messages:
                         for injected_message in injected_messages:
@@ -1460,7 +1462,7 @@ class AgentEngine:
                                     kind="skill_context" if tool_name == "invoke_skill" else None,
                                 )
                             )
-                        session_service.persist(session)
+                        await session_service.persist_async(session)
 
                     control = result.control or {}
                     if control.get("type") == "compact_context":
@@ -1471,7 +1473,7 @@ class AgentEngine:
                             int((time.perf_counter() - started_at) * 1000),
                             response_started_at_iso or started_at_iso,
                         )
-                        self._persist_assistant_round(
+                        await self._persist_assistant_round(
                             session,
                             turn_index=request_turn_index,
                             content=session.get_partial_content(run_id) or None,
@@ -1494,7 +1496,7 @@ class AgentEngine:
                             int((time.perf_counter() - started_at) * 1000),
                             response_started_at_iso or started_at_iso,
                         )
-                        self._persist_assistant_round(
+                        await self._persist_assistant_round(
                             session,
                             turn_index=request_turn_index,
                             content=session.get_partial_content(run_id) or None,
@@ -1524,7 +1526,7 @@ class AgentEngine:
                         session.messages.append(context_message_adapter.make_internal_user_message(
                             "[运行状态] 本次上下文整理未提交，原始资料保留；请继续当前任务，必要时稍后重试整理。",
                             turn_index=request_turn_index, kind="compaction_result"))
-                        session_service.persist(session)
+                        await session_service.persist_async(session)
                     else:
                         for context_event in compacted.events:
                             yield self._emit_context_event(session, context_event.type, context_event.payload)
@@ -1554,7 +1556,7 @@ class AgentEngine:
                     int((time.perf_counter() - started_at) * 1000),
                     response_started_at_iso or started_at_iso,
                 )
-                self._persist_assistant_round(
+                await self._persist_assistant_round(
                     session,
                     turn_index=request_turn_index,
                     content=assistant_content or None,
@@ -1593,7 +1595,7 @@ class AgentEngine:
                     final_elapsed_ms,
                     response_started_at_iso or started_at_iso,
                 )
-                self._persist_assistant_round(
+                await self._persist_assistant_round(
                     session,
                     turn_index=request_turn_index,
                     content=final_answer,

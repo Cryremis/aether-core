@@ -20,6 +20,7 @@ import httpx
 from app.core.config import settings
 from app.sandbox.runner import sandbox_runner
 from app.services.artifact_service import artifact_service
+from app.services.durable_io import durable_io
 from app.services.file_service import file_service
 from app.services.llm_config_service import RuntimeLlmConfig, llm_config_service
 from app.services.network_service import network_service
@@ -979,7 +980,7 @@ class ToolService:
         }
         streaming_enabled = bool(tool_call_id)
         if streaming_enabled:
-            tool_execution_service.begin_execution(
+            await tool_execution_service.begin_execution(
                 session,
                 tool_call_id=tool_call_id,
                 tool_name="sandbox_shell",
@@ -1013,14 +1014,14 @@ class ToolService:
             result = await sandbox_runner.run_shell(**runner_kwargs)
         except asyncio.CancelledError:
             if streaming_enabled and tool_call_id is not None:
-                tool_execution_service.abort_execution(
+                await tool_execution_service.abort_execution(
                     session,
                     tool_call_id=tool_call_id,
                 )
             raise
         except RuntimeBusyError as exc:
             if streaming_enabled and tool_call_id is not None:
-                tool_execution_service.fail_execution(
+                await tool_execution_service.fail_execution(
                     session,
                     tool_call_id=tool_call_id,
                     error=exc.summary,
@@ -1036,7 +1037,7 @@ class ToolService:
             )
         except RuntimeStartError as exc:
             if streaming_enabled and tool_call_id is not None:
-                tool_execution_service.fail_execution(
+                await tool_execution_service.fail_execution(
                     session,
                     tool_call_id=tool_call_id,
                     error=exc.summary,
@@ -1074,7 +1075,7 @@ class ToolService:
         else:
             runtime_events = []
         if streaming_enabled and tool_call_id is not None:
-            tool_execution_service.finish_execution(
+            await tool_execution_service.finish_execution(
                 session,
                 tool_call_id=tool_call_id,
                 exit_code=result.exit_code,
@@ -1380,7 +1381,7 @@ class ToolService:
                     next_action="按返回的字段路径修正参数后重试；保持对象和数组原生结构，不要反复提交相同输入。")
         if run_id and tool_call_id:
             digest = hashlib.sha256(json.dumps([tool_name, arguments], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-            state, saved = history_store.claim_tool(session.session_id, run_id, tool_call_id, digest)
+            state, saved = await durable_io(history_store.claim_tool, session.session_id, run_id, tool_call_id, digest)
             if saved:
                 if saved.get("error"):
                     saved["error"] = ToolExecutionError(**saved["error"])
@@ -1392,7 +1393,7 @@ class ToolService:
             tool_call_id=tool_call_id, output_event_callback=output_event_callback, catalog_snapshot=catalog_snapshot)
         if run_id and tool_call_id:
             result = replace(result, result_ref={"run_id": run_id, "tool_call_id": tool_call_id})
-            history_store.finish_tool(session.session_id, run_id, tool_call_id, asdict(result))
+            await durable_io(history_store.finish_tool, session.session_id, run_id, tool_call_id, asdict(result))
         return result
 
     async def _execute_with_timeout(

@@ -1,4 +1,14 @@
-import { consumeResumableRun } from "./sse";
+import { consumeResumableRun, RunStreamHttpError } from "./sse";
+
+export class ServiceRestartingError extends Error {}
+
+async function checkServiceAvailability(response: Response) {
+  if (response.status !== 503) return;
+  const payload = await response.clone().json().catch(() => null);
+  if (payload?.code === "service_restarting") {
+    throw new ServiceRestartingError("服务正在更新，请稍后重试。");
+  }
+}
 // frontend/src/api/client.ts
 export type PasswordLoginPayload = {
   username: string;
@@ -757,6 +767,7 @@ async function apiFetch(input: string, init: RequestInit = {}) {
     headers,
   });
 
+  await checkServiceAvailability(response);
   return response;
 }
 
@@ -1350,41 +1361,25 @@ export async function streamRunEvents(
   abortSignal?: AbortSignal,
   afterSeq = 0,
 ) {
-  const headers = new Headers();
-  const token = getAccessToken();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-  let streamOpened = false;
-
   try {
-    const response = await fetch(`${API_BASE}/agent/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?after_seq=${afterSeq}`, {
-      method: "GET",
-      headers,
-      signal: abortSignal,
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`恢复运行订阅失败: ${response.status}`);
-    }
-
-    streamOpened = true;
-    await consumeResumableRun(response.body, (id, cursor) => resumeRunBody(sessionId, id, cursor, abortSignal), onEvent,
-      { sessionId, runId, afterSeq, signal: abortSignal });
+    await consumeResumableRun(undefined, (id, cursor, signal) => resumeRunBody(sessionId, id, cursor, signal), onEvent,
+      { sessionId, runId, afterSeq, signal: abortSignal,
+        onTransportStatus: (state) => onEvent({ type: "transport_status", payload: { state } }) });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw error;
     }
     const detail = error instanceof Error && error.message ? error.message : "unknown error";
-    if (streamOpened) {
-      throw new Error(`运行订阅已中断: ${detail}`);
-    }
     throw new Error(`恢复运行订阅失败: ${detail}`);
   }
 }
 
 async function resumeRunBody(sessionId: string, runId: string, cursor: number, signal?: AbortSignal) {
   const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events?after_seq=${cursor}`, { signal });
-  if (!response.ok || !response.body) throw new Error(`恢复运行订阅失败: ${response.status}`);
+  if (!response.ok || !response.body) {
+    await response.body?.cancel();
+    throw new RunStreamHttpError(response.status);
+  }
   return response.body;
 }
 
@@ -2031,14 +2026,17 @@ async function streamSse(
       signal: abortSignal,
     });
 
+    await checkServiceAvailability(response);
     if (!response.ok || !response.body) {
-      throw new Error(`对话请求失败: ${response.status}`);
+      throw new Error(await readErrorMessage(response, `对话请求失败: ${response.status}`));
     }
 
     streamOpened = true;
-    await consumeResumableRun(response.body, (id, cursor) => resumeRunBody(String(payload.session_id ?? path.split("/")[2]), id, cursor, abortSignal), onEvent,
-      { sessionId: typeof payload.session_id === "string" ? payload.session_id : undefined, signal: abortSignal });
+    await consumeResumableRun(response.body, (id, cursor, signal) => resumeRunBody(String(payload.session_id ?? path.split("/")[2]), id, cursor, signal), onEvent,
+      { sessionId: typeof payload.session_id === "string" ? payload.session_id : undefined, signal: abortSignal,
+        onTransportStatus: (state) => onEvent({ type: "transport_status", payload: { state } }) });
   } catch (error) {
+    if (error instanceof ServiceRestartingError) throw error;
     if (error instanceof Error && error.name === "AbortError") {
       throw error;
     }

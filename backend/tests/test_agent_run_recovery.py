@@ -73,3 +73,13 @@ def test_session_loading_clears_terminal_active_run_view(tmp_path):
     SessionService().reconcile_active_run_view(session)
 
     assert session.active_run_view is None
+
+
+def test_waiting_input_survives_startup_without_a_stale_streaming_view(tmp_path):
+    initialize_store(tmp_path)
+    store_service.create_agent_run(run_id="waiting", session_id="waiting_session", status="waiting_input")
+    session = AgentSession(session_id="waiting_session", active_run_view={"run_id": "waiting", "status": "running"})
+    assert store_service.recover_interrupted_agent_runs() == 0
+    SessionService().reconcile_active_run_view(session)
+    assert session.active_run_view is None
+    assert store_service.get_active_agent_run_for_session("waiting_session")["status"] == "waiting_input"

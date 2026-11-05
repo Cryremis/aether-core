@@ -7,9 +7,13 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import ProxyHandler, Request, build_opener
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -29,6 +33,108 @@ GRACEFUL_STOP_TIMEOUT_SECONDS = 15
 SIGKILL_TIMEOUT_SECONDS = 5
 # 进程退出后等待端口释放的窗口(TIME_WAIT/内核清理)
 PORT_RELEASE_TIMEOUT_SECONDS = 5
+RESTART_DRAIN_TIMEOUT_SECONDS = 120
+
+
+def _control_file(spec: ServiceSpec) -> Path:
+    return spec.pid_file.with_suffix(".control.json")
+
+
+def _read_control(spec: ServiceSpec, pid: int) -> dict:
+    control = json.loads(_control_file(spec).read_text(encoding="utf-8"))
+    if (not isinstance(control, dict) or control.get("pid") != pid
+            or not isinstance(control.get("token"), str) or not control.get("instance_id")):
+        raise ValueError("lifecycle credential does not match the running process")
+    return control
+
+
+def _lifecycle_request(spec: ServiceSpec, control: dict, *, method: str = "GET", owner: str | None = None) -> dict:
+    url = f"http://127.0.0.1:{spec.port}/api/v1/internal/lifecycle"
+    body = None
+    if owner is not None:
+        url += "/drain"
+        body = json.dumps({"owner": owner}).encode("utf-8")
+    request = Request(url, data=body, method=method, headers={
+        "Content-Type": "application/json", "X-AetherCore-Control": control["token"],
+    })
+    # 本机控制请求不经过用户配置的 HTTP 代理，控制凭据不离开本机。
+    with build_opener(ProxyHandler({})).open(request, timeout=3) as response:
+        result = json.load(response)
+    if not isinstance(result, dict) or result.get("pid") != control["pid"] or result.get("instance_id") != control["instance_id"]:
+        raise ValueError("lifecycle response belongs to another process")
+    return result
+
+
+def _backend_ready(spec: ServiceSpec, pid: int) -> bool:
+    try:
+        return bool(_lifecycle_request(spec, _read_control(spec, pid)).get("ready"))
+    except (OSError, ValueError, URLError):
+        return False
+
+
+@contextmanager
+def restart_guard(spec: ServiceSpec, *, timeout_seconds: float = RESTART_DRAIN_TIMEOUT_SECONDS, force: bool = False):
+    """排空确认前绝不停止进程；脚本异常退出由服务端租约自动解除维护状态。"""
+    if force or spec.name != "backend":
+        if force and spec.name == "backend":
+            print("WARNING: forced restart may interrupt active conversations and tools")
+        yield True
+        return
+    pid = resolve_service_pid(spec)
+    if pid is None and not port_is_open(spec.port):
+        yield True
+        return
+    owner = uuid.uuid4().hex
+    control = None
+    admitted = False
+    try:
+        if pid is None:
+            raise ValueError("cannot identify backend process")
+        control = _read_control(spec, pid)
+        deadline = time.monotonic() + timeout_seconds
+        last_active = None
+        while True:
+            status = _lifecycle_request(spec, control, method="POST", owner=owner)
+            if not status.get("ready"):
+                raise ValueError("backend is not ready for a coordinated restart")
+            if status.get("drained"):
+                print("backend drained; restarting")
+                admitted = True
+                break
+            active = status.get("active", {})
+            if active != last_active:
+                print(f"waiting for backend work to finish: {active}")
+                last_active = active
+            if time.monotonic() >= deadline:
+                print(f"restart cancelled after {timeout_seconds:g}s; active work was left running")
+                break
+            time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+    except (OSError, ValueError, URLError) as exc:
+        print(f"safe restart unavailable: {exc}; backend was not stopped. Use --force only to intentionally interrupt work.")
+    finally:
+        # yield 放在另一个 try 内，调用方的异常不能被误认为握手失败而吞掉。
+        if not admitted and control is not None:
+            _cancel_restart(spec, control, owner)
+    try:
+        yield admitted
+    finally:
+        if admitted and control is not None:
+            _cancel_restart(spec, control, owner)
+
+
+def _cancel_restart(spec: ServiceSpec, control: dict, owner: str) -> None:
+    try:
+        _lifecycle_request(spec, control, method="DELETE", owner=owner)
+    except (OSError, ValueError, URLError):
+        # 旧进程正常退出时控制端点已消失；异常情况下维护租约也会自动到期。
+        pass
+
+
+def restart_service(spec: ServiceSpec, *, timeout_seconds: float = RESTART_DRAIN_TIMEOUT_SECONDS, force: bool = False) -> bool:
+    with restart_guard(spec, timeout_seconds=timeout_seconds, force=force) as ready:
+        if not ready or not stop_service(spec):
+            return False
+        return start_service(spec)
 
 
 class ProcessState(Enum):
@@ -431,19 +537,23 @@ def start_service(spec: ServiceSpec) -> bool:
         popen_kwargs["start_new_session"] = 1
 
     with spec.stdout_log.open("ab") as stdout, spec.stderr_log.open("ab") as stderr:
+        child_env = os.environ.copy()
+        if spec.name == "backend":
+            child_env["AETHERCORE_CONTROL_FILE"] = str(_control_file(spec).resolve())
         process = subprocess.Popen(
             spec.command,
             cwd=spec.workdir,
             stdout=stdout,
             stderr=stderr,
             shell=False,
+            env=child_env,
             **popen_kwargs,  # type: ignore[arg-type]
         )
     write_pid(spec.pid_file, spec, process.pid)
 
     deadline = time.monotonic() + START_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        if port_is_open(spec.port):
+        if port_is_open(spec.port) and (spec.name != "backend" or _backend_ready(spec, process.pid)):
             print(f"{spec.name} started, pid={process.pid}")
             return True
         if process.poll() is not None:

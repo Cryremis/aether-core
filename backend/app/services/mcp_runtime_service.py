@@ -23,6 +23,7 @@ from app.services.session_types import AgentSession
 from app.services.store import store_service
 from app.services.workspace_runtime_service import workspace_runtime_service
 from app.services.secret_store_service import secret_store_service
+from app.services.lifecycle_service import lifecycle_service
 
 
 class McpRuntimeError(RuntimeError):
@@ -180,7 +181,7 @@ class McpRuntimeService:
         provider = self._oauth_provider(
             config, redirect_handler=redirect_handler, callback_handler=callback_handler
         )
-        task = asyncio.create_task(self.discover(session, config, auth_provider=provider))
+        task = lifecycle_service.create_task(self.discover(session, config, auth_provider=provider), label="mcp_oauth")
         flow = {"id": flow_id, "callback": callback_ready, "task": task, "state": None}
         self._oauth_flows[flow_id] = flow
         try:

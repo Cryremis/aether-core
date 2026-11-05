@@ -21,6 +21,7 @@ from app.services.workspace_sync_service import workspace_sync_service
 from app.services.shared_skill_service import shared_skill_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service, utcnow_iso
+from app.services.lifecycle_service import lifecycle_service
 
 
 SandboxOutputCallback = Callable[[str, str], Awaitable[None]]
@@ -74,6 +75,7 @@ class WorkspaceRuntimeService:
             pass
         self._gc_task = None
 
+    @lifecycle_service.admitted("sandbox_commands")
     async def run_shell(
         self,
         workspace: SandboxWorkspace,
@@ -358,8 +360,10 @@ class WorkspaceRuntimeService:
     async def _gc_loop(self) -> None:
         while True:
             try:
-                await self.collect_expired_runtimes()
-                await asyncio.to_thread(shared_skill_service.collect_garbage)
+                if not lifecycle_service.draining:
+                    with lifecycle_service.operation("runtime_gc"):
+                        await self.collect_expired_runtimes()
+                        await asyncio.to_thread(shared_skill_service.collect_garbage)
             except Exception:
                 pass
             await asyncio.sleep(max(30, settings.sandbox_runtime_gc_interval_seconds))

@@ -5,7 +5,7 @@ import secrets
 import sqlite3
 import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
@@ -45,8 +45,8 @@ class StoreService:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
-        with self._lock:
+    def _connect(self, *, independent: bool = False) -> Iterator[sqlite3.Connection]:
+        with (nullcontext() if independent else self._lock):
             conn = sqlite3.connect(self._db_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             try:
@@ -566,6 +566,10 @@ class StoreService:
             self._backfill_platform_admin_metadata(conn)
         # 服务进程重启后，内存中的执行任务已经不存在；数据库里的 active run
         # 只能是崩溃/重启遗留的孤儿状态，必须在服务可用前统一收敛为 failed。
+        from app.services.context.history_store import history_store
+
+        with self._connect() as conn:
+            history_store._ensure(conn)
         self.recover_interrupted_agent_runs()
         # 文件迁移放在 DB schema 迁移之后、服务可用之前；失败必须阻断启动，避免双轨读取。
         from app.services.workspace_service import workspace_service
@@ -2308,9 +2312,11 @@ class StoreService:
         return self.get_agent_run(run_id) or {}
 
     def recover_interrupted_agent_runs(self) -> int:
-        placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
-        active_statuses = tuple(self.ACTIVE_AGENT_RUN_STATUSES)
-        with self._connect() as conn:
+        # waiting_input 已完成执行并持久化提问，重启后可继续回答，不属于中断任务。
+        active_statuses = ("queued", "running")
+        placeholders = ",".join("?" for _ in active_statuses)
+        with self._connect(independent=True) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 f"""
                 SELECT run_id, event_cursor
@@ -2411,14 +2417,15 @@ class StoreService:
         return dict(row) if row else None
 
     def get_agent_run(self, run_id: str) -> dict[str, Any] | None:
-        with self._connect() as conn:
+        with self._connect(independent=True) as conn:
             row = conn.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
 
     def cancel_orphan_agent_run(self, run_id: str) -> dict[str, Any] | None:
         """取消已无内存 worker 的 active run，并原子写入终态事件。"""
         now = utcnow_iso()
-        with self._connect() as conn:
+        with self._connect(independent=True) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT event_cursor FROM agent_runs
@@ -2493,7 +2500,8 @@ class StoreService:
     def timeout_waiting_agent_run(self, run_id: str, *, timeout_seconds: int) -> dict[str, Any] | None:
         """将超时等待用户输入的 run 原子收敛为 cancelled。"""
         now = utcnow_iso()
-        with self._connect() as conn:
+        with self._connect(independent=True) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT event_cursor FROM agent_runs
@@ -2565,7 +2573,8 @@ class StoreService:
         placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
         active_statuses = tuple(self.ACTIVE_AGENT_RUN_STATUSES)
         now = utcnow_iso()
-        with self._connect() as conn:
+        with self._connect(independent=True) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 f"""
                 SELECT event_cursor FROM agent_runs
@@ -2630,7 +2639,11 @@ class StoreService:
         error: Any | None = None,
     ) -> int:
         now = utcnow_iso()
-        with self._connect() as conn:
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        result_json = json.dumps(result, ensure_ascii=False) if result is not None else None
+        error_json = json.dumps(error, ensure_ascii=False) if error is not None else None
+        with self._connect(independent=True) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT event_cursor FROM agent_runs WHERE run_id = ?",
                 (run_id,),
@@ -2647,7 +2660,7 @@ class StoreService:
                     run_id,
                     seq,
                     event_type,
-                    json.dumps(payload, ensure_ascii=False),
+                    payload_json,
                     visibility,
                     now,
                 ),
@@ -2656,9 +2669,9 @@ class StoreService:
             if status is not None:
                 updates["status"] = status
             if result is not None:
-                updates["result_json"] = json.dumps(result, ensure_ascii=False)
+                updates["result_json"] = result_json
             if error is not None:
-                updates["error_json"] = json.dumps(error, ensure_ascii=False)
+                updates["error_json"] = error_json
             if status in {"completed", "failed", "cancelled", "timed_out"}:
                 updates["finished_at"] = now
             set_sql = ", ".join(f"{key} = ?" for key in updates)
@@ -2675,7 +2688,7 @@ class StoreService:
         after_seq: int = 0,
         limit: int = 1000,
     ) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._connect(independent=True) as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM run_events

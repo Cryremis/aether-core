@@ -19,6 +19,8 @@ from process_control import (
     show_log_file,
     start_service,
     stop_service,
+    restart_service,
+    RESTART_DRAIN_TIMEOUT_SECONDS,
 )
 
 def backend_service() -> ServiceSpec:
@@ -114,7 +116,12 @@ def main() -> int:
     parser.add_argument("target", choices=["all", "backend", "frontend"], nargs="?", default="all")
     parser.add_argument("--lines", type=int, default=50)
     parser.add_argument("-f", "--follow", action="store_true")
+    parser.add_argument("--drain-timeout", type=float, default=RESTART_DRAIN_TIMEOUT_SECONDS,
+                        help="restart: wait up to this many seconds for active work (default: 120)")
+    parser.add_argument("--force", action="store_true", help="restart immediately, interrupting active work")
     args = parser.parse_args()
+    if not 0 <= args.drain_timeout < float("inf"):
+        parser.error("--drain-timeout must be finite and non-negative")
 
     ensure_runtime_dirs()
     backend = backend_service()
@@ -136,16 +143,13 @@ def main() -> int:
         return 0 if ok else 1
 
     if args.action == "restart":
-        ok = True
-        if args.target in {"all", "frontend"}:
-            ok = stop_service(frontend) and ok
         if args.target in {"all", "backend"}:
-            ok = stop_service(backend) and ok
-        if args.target in {"all", "backend"}:
-            ok = start_service(backend) and ok
+            if not restart_service(backend, timeout_seconds=args.drain_timeout, force=args.force):
+                return 1
         if args.target in {"all", "frontend"}:
-            ok = start_service(frontend) and ok
-        return 0 if ok else 1
+            if not restart_service(frontend):
+                return 1
+        return 0
 
     if args.action == "status":
         show_status()

@@ -63,48 +63,91 @@ export async function consumeEventStream(body: ReadableStream<Uint8Array>, onEve
 
 class EventGap extends Error {}
 
+export class RunStreamHttpError extends Error {
+  constructor(public status: number) { super(`恢复运行订阅失败: ${status}`); }
+  get retryable() { return this.status === 408 || this.status === 429 || this.status >= 500; }
+}
+
 /** 断线只续订已经创建的 run，绝不重发创建任务的 POST。 */
 export async function consumeResumableRun(
-  initialBody: ReadableStream<Uint8Array>,
-  resume: (runId: string, afterSeq: number) => Promise<ReadableStream<Uint8Array>>,
+  initialBody: ReadableStream<Uint8Array> | undefined,
+  resume: (runId: string, afterSeq: number, signal?: AbortSignal) => Promise<ReadableStream<Uint8Array>>,
   onEvent: (event: Record<string, unknown>) => void,
-  options: { sessionId?: string; runId?: string; afterSeq?: number; signal?: AbortSignal; retryDelayMs?: number } = {},
+  options: { sessionId?: string; runId?: string; afterSeq?: number; signal?: AbortSignal; retryDelayMs?: number; retryWindowMs?: number;
+    onTransportStatus?: (state: "reconnecting" | "connected" | "stopped") => void } = {},
 ) {
   let body: ReadableStream<Uint8Array> | undefined = initialBody;
   let runId = options.runId;
   let cursor = options.afterSeq ?? 0;
   let completed = false;
   let callbackFailed = false;
-  for (let attempt = 0; ; attempt++) {
-    options.signal?.throwIfAborted();
-    try {
-      if (!body) body = await resume(runId!, cursor);
-      await consumeEventStream(body, (event) => {
-        if (options.sessionId && event.session_id && event.session_id !== options.sessionId) throw new ProtocolStreamError("运行事件属于其他会话");
-        const payload = event.payload as Record<string, unknown> | undefined;
-        const incoming = typeof event.run_id === "string" ? event.run_id : event.type === "run_started" && typeof payload?.run_id === "string" ? payload.run_id : undefined;
-        if (incoming && runId && incoming !== runId) throw new ProtocolStreamError("运行事件标识不匹配");
-        runId = incoming ?? runId;
-        if (typeof event.seq === "number") {
-          if (event.seq <= cursor) return;
-          if (event.seq !== cursor + 1) throw new EventGap("运行事件缺少连续片段");
+  let outageStartedAt: number | undefined;
+  let reconnecting = false;
+  const transportStatus = (state: "reconnecting" | "connected" | "stopped") => {
+    try { options.onTransportStatus?.(state); }
+    catch (error) { callbackFailed = true; throw error; }
+  };
+  try {
+    for (let attempt = 0; ; attempt++) {
+      options.signal?.throwIfAborted();
+      let releaseConnection = () => {};
+      try {
+        if (!body) {
+          const controller = new AbortController();
+          const abort = () => controller.abort(options.signal?.reason);
+          options.signal?.addEventListener("abort", abort, { once: true });
+          releaseConnection = () => options.signal?.removeEventListener("abort", abort);
+          if (options.signal?.aborted) abort();
+          const remaining = (options.retryWindowMs ?? 120_000) - (outageStartedAt === undefined ? 0 : Date.now() - outageStartedAt);
+          const timer = setTimeout(() => controller.abort(), Math.min(10_000, Math.max(1, remaining)));
+          try { body = await resume(runId!, cursor, controller.signal); }
+          finally { clearTimeout(timer); }
         }
-        try { onEvent(event); } catch (error) { callbackFailed = true; throw error; }
-        if (typeof event.seq === "number") cursor = event.seq;
-        if (event.type === "completed" || (event.type === "error" && event.seq == null)) completed = true;
-        if (completed) return false;
-      });
-      if (completed) return;
-      throw new EventGap("运行流在终态前结束");
-    } catch (error) {
-      if (callbackFailed || options.signal?.aborted || error instanceof SyntaxError || error instanceof ProtocolStreamError || !runId || attempt >= 3) throw error;
-      await new Promise<void>((resolve, reject) => {
-        const done = () => { options.signal?.removeEventListener("abort", abort); resolve(); };
-        const timer = setTimeout(done, (options.retryDelayMs ?? 500) * (attempt + 1));
-        const abort = () => { clearTimeout(timer); reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError")); };
-        options.signal?.addEventListener("abort", abort, { once: true });
-      });
-      body = undefined;
+        await consumeEventStream(body, (event) => {
+          if (options.sessionId && event.session_id && event.session_id !== options.sessionId) throw new ProtocolStreamError("运行事件属于其他会话");
+          const payload = event.payload as Record<string, unknown> | undefined;
+          const incoming = typeof event.run_id === "string" ? event.run_id : event.type === "run_started" && typeof payload?.run_id === "string" ? payload.run_id : undefined;
+          if (incoming && runId && incoming !== runId) throw new ProtocolStreamError("运行事件标识不匹配");
+          runId = incoming ?? runId;
+          if (typeof event.seq === "number") {
+            if (event.seq <= cursor) return;
+            if (event.seq !== cursor + 1) throw new EventGap("运行事件缺少连续片段");
+          }
+          try { onEvent(event); } catch (error) { callbackFailed = true; throw error; }
+          if (typeof event.seq === "number") {
+            cursor = event.seq;
+            outageStartedAt = undefined;
+            attempt = 0;
+            if (reconnecting) { reconnecting = false; transportStatus("connected"); }
+          }
+          if (event.type === "completed" || (event.type === "error" && event.seq == null)) completed = true;
+          if (completed) return false;
+        });
+        if (completed) return;
+        throw new EventGap("运行流在终态前结束");
+      } catch (error) {
+        if (callbackFailed || options.signal?.aborted || error instanceof SyntaxError || error instanceof ProtocolStreamError
+            || (error instanceof RunStreamHttpError && !error.retryable) || !runId) throw error;
+        outageStartedAt ??= Date.now();
+        const remaining = (options.retryWindowMs ?? 120_000) - (Date.now() - outageStartedAt);
+        if (remaining <= 0) throw error;
+        if (!reconnecting) { reconnecting = true; transportStatus("reconnecting"); }
+        const delay = Math.min(remaining, options.retryDelayMs === undefined
+          ? Math.min(5000, 500 * 2 ** Math.min(attempt, 4)) * (0.8 + Math.random() * 0.4)
+          : options.retryDelayMs);
+        await new Promise<void>((resolve, reject) => {
+          const done = () => { options.signal?.removeEventListener("abort", abort); resolve(); };
+          const timer = setTimeout(done, delay);
+          const abort = () => { clearTimeout(timer); reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError")); };
+          options.signal?.addEventListener("abort", abort, { once: true });
+          if (options.signal?.aborted) abort();
+        });
+        body = undefined;
+      } finally {
+        releaseConnection();
+      }
     }
+  } finally {
+    if (reconnecting && !callbackFailed) transportStatus("stopped");
   }
 }

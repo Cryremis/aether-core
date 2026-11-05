@@ -11,6 +11,7 @@ from app.services.context.message_adapter import context_message_adapter
 from app.services.session_service import session_service
 from app.services.session_types import AgentSession
 from app.services.store import store_service
+from app.services.lifecycle_service import lifecycle_service
 
 
 class SubagentService:
@@ -411,7 +412,7 @@ class SubagentService:
             finally:
                 self._futures.pop(subagent_id, None)
 
-        watcher = asyncio.create_task(watch())
+        watcher = lifecycle_service.create_task(watch(), label="subagent_results")
         self._watchers.add(watcher)
         watcher.add_done_callback(self._watchers.discard)
 
@@ -445,7 +446,7 @@ class SubagentService:
                 kind="subagent_result",
             )
         )
-        session_service.persist(parent)
+        await session_service.persist_async(parent)
 
         await self._publish_parent_event(
             parent,
