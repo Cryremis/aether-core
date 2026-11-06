@@ -6,12 +6,14 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import AuthContext, get_auth_context
 from app.core.model_errors import public_run_error
+from app.schemas.common import ApiResponse
 from app.schemas.agent import AgentChatRequest, AgentElicitationResponseRequest, AgentEvent
 from app.schemas.session import TimelineEditRequest, TimelineForkRequest, TimelineRerunRequest
 from app.services.agent_run_service import ElicitationResumeConflict, agent_run_service
 from app.services.context.message_adapter import context_message_adapter
 from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
+from app.services.session_inspection import inspect_context, inspect_tools
 from app.services.durable_io import durable_io
 from app.services.store import store_service
 from app.services.timeline_service import timeline_service
@@ -62,6 +64,16 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
 def _ensure_session_mutable(session_id: str) -> None:
     if agent_run_service.get_session_run_id(session_id):
         raise HTTPException(status_code=409, detail="当前会话正在执行，请等待当前任务结束后再操作。")
+
+
+@router.get("/{session_id}/context/status")
+def context_status(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    return ApiResponse(data=inspect_context(_ensure_session_access(session_id, auth)))
+
+
+@router.get("/{session_id}/tools")
+def effective_tools(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    return ApiResponse(data=inspect_tools(_ensure_session_access(session_id, auth)))
 
 
 @router.get("/{session_id}/context/diagnostics")

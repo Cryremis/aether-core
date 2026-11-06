@@ -761,6 +761,37 @@
   border-bottom: 1px solid rgba(226, 232, 240, 0.5) !important;
 }
 
+.composer-command-menu {
+  display: grid;
+  max-height: 250px;
+  overflow: auto;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+.composer-command-menu button {
+  display: flex;
+  gap: 12px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.composer-command-menu button:hover,
+.composer-command-menu button.is-selected { background: var(--bg-body); }
+.composer-command-menu button[aria-disabled="true"] { color: var(--text-tertiary); }
+.composer-command-menu code { min-width: 5em; }
+.composer-command-error,
+.workbench-command-notice { padding: 6px 16px; font-size: 13px; color: var(--text-secondary); }
+.session-inspection__body { padding: 16px 24px; overflow: auto; }
+.session-inspection__body dl { display: grid; grid-template-columns: auto 1fr; gap: 10px 18px; }
+.session-inspection__body dd { margin: 0; }
+.session-inspection__body ul { padding: 0; max-height: 50vh; overflow: auto; list-style: none; }
+.session-inspection__body li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.session-inspection__body li code { overflow-wrap: anywhere; }
+
 .composer-area {
   background: transparent !important;
   position: relative;

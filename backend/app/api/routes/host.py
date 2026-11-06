@@ -24,6 +24,8 @@ from app.schemas.agent import AgentEvent
 from app.services.agent_run_service import agent_run_service
 from app.services.host_control_service import host_control_service
 from app.services.session_service import session_service
+from app.services.session_inspection import inspect_context, inspect_tools
+from app.services.session_types import AgentSession
 from app.services.durable_io import durable_io
 from app.services.store import store_service
 from app.services.tool_catalog_service import (
@@ -37,9 +39,9 @@ router = APIRouter(prefix="/api/v1/host", tags=["host"])
 logger = logging.getLogger(__name__)
 
 
-def _host_session(session_id: str, platform: dict) -> object:
+def _host_session(session_id: str, platform: dict) -> AgentSession:
     conversation = store_service.get_conversation_by_session(session_id)
-    if conversation is None or int(conversation.get("platform_id") or 0) != int(platform["platform_id"]):
+    if conversation is None or conversation.get("deleted_at") or int(conversation.get("platform_id") or 0) != int(platform["platform_id"]):
         raise HTTPException(status_code=404, detail="目标宿主会话不存在")
     return session_service.get_or_create(session_id)
 
@@ -93,6 +95,8 @@ def bind_host(
         raise HTTPException(status_code=403, detail="平台密钥与目标平台不匹配")
     try:
         summary = host_registry.bind(request, platform=platform)
+    except ToolCatalogConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         logger.warning("[host/bind] rejected: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -105,6 +109,8 @@ def bind_host(
     except Exception as exc:
         logger.exception("[host/bind] unexpected error: %s", exc)
         raise HTTPException(status_code=500, detail=f"绑定失败: {type(exc).__name__}: {str(exc)}") from exc
+    if request.tool_refresh_revision is not None:
+        return ApiResponse(message="工具目录已刷新", data=summary)
     summary["workbench_url"] = (
         f"{settings.resolved_manage_frontend_public_base_url}"
         f"?embed_token={summary['token']}&session_id={summary['session_id']}"
@@ -467,6 +473,16 @@ async def cancel_host_run(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="运行不存在") from exc
     return ApiResponse(message="运行取消请求已提交", data=result)
+
+
+@router.get("/sessions/{session_id}/context/status")
+def host_context_status(session_id: str, platform: dict = Depends(require_platform_secret)) -> ApiResponse:
+    return ApiResponse(data=inspect_context(_host_session(session_id, platform)))
+
+
+@router.get("/sessions/{session_id}/effective-tools")
+def host_effective_tools(session_id: str, platform: dict = Depends(require_platform_secret)) -> ApiResponse:
+    return ApiResponse(data=inspect_tools(_host_session(session_id, platform)))
 
 
 @router.get("/sessions/{session_id}/tools")

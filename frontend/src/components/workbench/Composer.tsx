@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { QueuedMessage } from "../../pages/workbench/types";
+import { parseWorkbenchCommand, workbenchCommands, type CommandAvailability, type WorkbenchCommand } from "../../pages/workbench/commands";
 import type { SubagentRunSummary } from "../../api/client";
 import { SubagentPopover } from "./SubagentPopover";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
@@ -30,6 +31,8 @@ type ComposerProps = {
   onDestroySubagent: (subagent: SubagentRunSummary) => void;
   onExitSubagent: () => void;
   onSend: (text: string) => void | boolean | Promise<void | boolean>;
+  onCommand?: (name: WorkbenchCommand) => void;
+  commandAvailability?: CommandAvailability;
   onStop: () => void;
   onRemoveQueued: (id: string) => void;
   onUpload: (file: File) => void;
@@ -77,11 +80,16 @@ export function Composer({
   onDestroySubagent,
   onExitSubagent,
   onSend,
+  onCommand,
+  commandAvailability,
   onStop,
   onRemoveQueued,
   onUpload,
 }: ComposerProps) {
   const [input, setInput] = useState("");
+  const [menuDismissed, setMenuDismissed] = useState(false);
+  const [commandIndex, setCommandIndex] = useState(-1);
+  const [commandError, setCommandError] = useState("");
   const [effortOpen, setEffortOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const effortRef = useRef<HTMLDivElement | null>(null);
@@ -101,12 +109,40 @@ export function Composer({
     return () => document.removeEventListener("mousedown", handler);
   }, [effortOpen]);
 
-  const canSend = input.trim().length > 0 && !disabled;
+  const trimmed = input.trim();
+  const typedCommand = onCommand ? parseWorkbenchCommand(trimmed) : null;
+  const matches = onCommand && !menuDismissed && /^\/[a-z]*$/i.test(trimmed)
+    ? workbenchCommands.filter(({ name }) => `/${name}`.startsWith(trimmed.toLowerCase()))
+    : [];
+  const canSend = !!trimmed && trimmed !== "/" && (!disabled || !!typedCommand);
+
+  const updateInput = (text: string) => {
+    setInput(text);
+    setMenuDismissed(false);
+    setCommandIndex(-1);
+    setCommandError("");
+  };
+
+  const runCommand = (name: WorkbenchCommand, hasArguments = false) => {
+    const unavailable = commandAvailability?.[name];
+    const error = hasArguments ? `请单独输入 /${name}` : unavailable;
+    if (error) {
+      setCommandError(error);
+      return;
+    }
+    updateInput(name === "help" ? "/" : "");
+    if (name === "help") textareaRef.current?.focus();
+    else onCommand?.(name);
+  };
 
   const handleSend = () => {
+    if (typedCommand) {
+      runCommand(typedCommand.name, typedCommand.hasArguments);
+      return;
+    }
     if (!canSend) return;
-    const submitted = input.trim();
-    setInput("");
+    const submitted = trimmed;
+    updateInput("");
     void Promise.resolve(onSend(submitted)).then((accepted) => {
       if (accepted === false) setInput((current) => current ? `${submitted}\n\n${current}` : submitted);
     });
@@ -124,6 +160,22 @@ export function Composer({
     <div className="composer-area">
       {!readOnlySubagentView ? <QueuedMessagesDock messages={queuedMessages} onRemove={onRemoveQueued} /> : null}
       <div className="composer-box">
+        {!readOnlySubagentView && matches.length > 0 && (
+          <div className="composer-command-menu" role="group" aria-label="工作台指令">
+            {matches.map(({ name, label }, index) => (
+              <button
+                key={name}
+                type="button"
+                aria-disabled={Boolean(commandAvailability?.[name])}
+                className={index === commandIndex ? "is-selected" : undefined}
+                onClick={() => runCommand(name)}
+              >
+                <code>/{name}</code><span>{label}{commandAvailability?.[name] ? ` · ${commandAvailability[name]}` : ""}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {commandError && <div className="composer-command-error" role="status">{commandError}</div>}
         {readOnlySubagentView ? (
           <div className="composer-readonly">子代理会话为只读，请在主会话继续对话。</div>
         ) : (
@@ -131,14 +183,31 @@ export function Composer({
             ref={textareaRef}
             className="composer-input"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => updateInput(e.target.value)}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
+              if (matches.length > 0 && ["ArrowDown", "ArrowUp", "Escape"].includes(e.key)) {
+                e.preventDefault();
+                if (e.key === "Escape") {
+                  setMenuDismissed(true);
+                  setCommandIndex(-1);
+                } else {
+                  const direction = e.key === "ArrowDown" ? 1 : -1;
+                  setCommandIndex((index) => {
+                    if (index < 0) return direction > 0 ? 0 : matches.length - 1;
+                    return (index + direction + matches.length) % matches.length;
+                  });
+                }
+                return;
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                handleSend();
+                const selected = matches[commandIndex];
+                if (selected) runCommand(selected.name);
+                else handleSend();
               }
             }}
-            placeholder={busy ? "输入消息将在工具执行后发送..." : "发送指令，与系统深度交互..."}
+            placeholder={busy ? "消息将排队，输入 / 可查看指令" : "输入消息，或输入 / 查看指令"}
             rows={1}
           />
         )}

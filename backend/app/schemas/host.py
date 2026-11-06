@@ -88,6 +88,7 @@ class HostBindRequest(BaseModel):
         "replace_all_if_source_missing",
     ] = "replace_all"
     tool_refresh_policy: Literal["static_run", "round_boundary"] = "static_run"
+    tool_refresh_revision: int | None = Field(default=None, ge=0)
 
 
 class HostConversationCreateRequest(BaseModel):

@@ -383,6 +383,80 @@ def test_host_compact_is_scoped_and_idempotent(tmp_path, monkeypatch):
     assert calls == [("sess_host_compact", "/compact", "compact-request")]
 
 
+def test_session_inspection_and_refresh_stay_in_current_conversation(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    foreign = create_platform("foreign-inspection")
+    client = TestClient(app)
+    headers = {"X-Aether-Platform-Secret": platform["host_secret"]}
+    foreign_headers = {"X-Aether-Platform-Secret": foreign["host_secret"]}
+
+    def tool(name):
+        return {"name": name, "description": name, "endpoint": f"https://host.example/{name}"}
+
+    bind = {
+        "platform_key": platform["platform_key"],
+        "host_name": "Host Control",
+        "context": {"user": {"id": "inspect-user"}},
+        "tools": [tool("tool_old")],
+    }
+    created = client.post("/api/v1/host/bind", json=bind, headers=headers)
+    assert created.status_code == 200, created.text
+    current = created.json()["data"]
+    session_id = current["session_id"]
+    tools_url = f"/api/v1/host/sessions/{session_id}/effective-tools"
+    context_url = f"/api/v1/host/sessions/{session_id}/context/status"
+    assert client.get(tools_url, headers=foreign_headers).status_code == 404
+    assert client.get(context_url, headers=foreign_headers).status_code == 404
+    context = client.get(context_url, headers=headers)
+    assert context.status_code == 200, context.text
+    assert context.json()["data"]["estimated_tokens"] is None
+    assert context.json()["data"]["output_reserve"] > 0
+    embed_headers = {"Authorization": f"Bearer {current['token']}"}
+    workbench_status = client.get(f"/api/v1/agent/{session_id}/context/status", headers=embed_headers)
+    assert workbench_status.status_code == 200, workbench_status.text
+    assert workbench_status.json()["data"] == context.json()["data"]
+    extra = client.put(
+        f"/api/v1/host/sessions/{session_id}/tools",
+        headers=headers,
+        json={"source_id": "other-source", "tools": [tool("tool_keep")]},
+    )
+    assert extra.status_code == 200, extra.text
+    before = client.get(tools_url, headers=headers).json()["data"]
+    workbench_tools = client.get(f"/api/v1/agent/{session_id}/tools", headers=embed_headers)
+    assert workbench_tools.status_code == 200, workbench_tools.text
+    assert workbench_tools.json()["data"] == before
+    assert {tool["name"] for tool in before["tools"] if tool["source"] == "host"} == {"tool_old", "tool_keep"}
+    refresh = {
+        **bind,
+        "session_id": session_id,
+        "conversation_id": current["conversation_id"],
+        "tool_refresh_revision": before["revision"],
+        "tools": [tool("tool_new")],
+    }
+    missing_list = {key: value for key, value in refresh.items() if key != "tools"}
+    assert client.post("/api/v1/host/bind", json=missing_list, headers=headers).status_code == 400
+
+    store_service.create_agent_run(
+        run_id="run_inspection_busy", session_id=session_id,
+        conversation_id=current["conversation_id"], status="running",
+    )
+    assert client.post("/api/v1/host/bind", json=refresh, headers=headers).status_code == 409
+    store_service.fail_agent_run("run_inspection_busy", message="test done")
+
+    result = client.post("/api/v1/host/bind", json=refresh, headers=headers)
+    assert result.status_code == 200, result.text
+    assert result.json()["data"] == {
+        "session_id": session_id, "conversation_id": current["conversation_id"],
+        "tool_catalog_refresh": {"revision": before["revision"] + 1, "added": 1, "updated": 0, "removed": 1},
+    }
+    assert client.post("/api/v1/host/bind", json=refresh, headers=headers).status_code == 409
+    session_service._sessions.clear()
+    after = client.get(tools_url, headers=headers).json()["data"]
+    assert after["revision"] == before["revision"] + 1
+    assert {tool["name"] for tool in after["tools"] if tool["source"] == "host"} == {"tool_new", "tool_keep"}
+
+
 def test_host_cancel_stops_waiting_question_and_preserves_context(tmp_path):
     initialize_isolated_runtime(tmp_path)
     platform = create_platform()

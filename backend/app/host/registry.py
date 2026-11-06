@@ -4,6 +4,7 @@ from app.services.platform_baseline_service import platform_baseline_service
 from app.services.session_service import session_service
 from app.services.store import store_service
 from app.services.token_service import token_service
+from app.services.tool_catalog_service import ToolCatalogConflictError, tool_catalog_service
 
 
 def _to_dict(item):
@@ -20,6 +21,10 @@ class HostRegistry:
         if not external_user_id:
             raise ValueError("context.user.id 或 context.user.account_id 不能为空")
         external_user_name = request.context.user.get("name", "Host User")
+        if request.tool_refresh_revision is not None and (
+            not request.session_id or not request.conversation_id or "tools" not in request.model_fields_set
+        ):
+            raise ValueError("刷新工具需要提供原会话 ID、对话 ID 和完整的来源工具列表")
 
         if request.session_id:
             conversation = store_service.get_conversation_by_session(request.session_id)
@@ -43,6 +48,30 @@ class HostRegistry:
                 or (request.conversation_id and conversation.get("conversation_id") != request.conversation_id)
             ):
                 raise ValueError("目标会话不存在、已删除或与当前平台、用户、对话不匹配")
+
+        if request.tool_refresh_revision is not None:
+            session = session_service.get_or_create(conversation["session_id"])
+            if store_service.get_active_agent_run_for_session(session.session_id):
+                raise ToolCatalogConflictError("当前会话正在执行，请等待当前任务结束后刷新工具")
+            result = tool_catalog_service.replace(
+                session,
+                [_to_dict(item) for item in request.tools],
+                source_id=request.tool_source_id,
+                replace_all=False,
+                expected_revision=request.tool_refresh_revision,
+            )
+            if result.changed:
+                session_service.persist(session)
+            return {
+                "session_id": session.session_id,
+                "conversation_id": conversation["conversation_id"],
+                "tool_catalog_refresh": {
+                    "revision": result.revision,
+                    "added": len(result.added),
+                    "updated": len(result.updated),
+                    "removed": len(result.removed),
+                },
+            }
 
         if conversation is None:
             session = session_service.get_or_create()

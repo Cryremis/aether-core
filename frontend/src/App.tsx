@@ -1,5 +1,5 @@
 // frontend/src/App.tsx
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import {
@@ -55,6 +55,9 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<CurrentUserProfile | null>(null);
   const [isEmbedMode, setIsEmbedMode] = useState(false);
   const [embedHostOrigin, setEmbedHostOrigin] = useState("");
+  const [embedSupportsToolRefresh, setEmbedSupportsToolRefresh] = useState(false);
+  const workbenchGeneration = useRef(0);
+  const [workbenchKey, setWorkbenchKey] = useState(0);
   const [isNewSession, setIsNewSession] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingPath, setPendingPath] = useState("/workbench");
@@ -75,9 +78,11 @@ export default function App() {
   };
 
   const refreshConversations = async (preferredSessionId?: string) => {
+    const generation = workbenchGeneration.current;
     const result = await listConversations();
     const items = ((result.data ?? []) as ConversationItem[]) || [];
     setConversations(items);
+    if (generation !== workbenchGeneration.current) return items;
 
     if (preferredSessionId) {
       setSessionId(preferredSessionId);
@@ -180,6 +185,7 @@ export default function App() {
       const data = event.data;
       if (data?.source === "aethercore-host" && data.type === "aethercore:host-origin") {
         setEmbedHostOrigin(event.origin);
+        setEmbedSupportsToolRefresh(data.payload?.refresh_tools === true);
         return;
       }
       if (!data || data.source !== "aethercore-host" || data.type !== "aethercore:theme") return;
@@ -253,6 +259,8 @@ export default function App() {
   };
 
   const handleNewConversation = () => {
+    workbenchGeneration.current += 1;
+    setWorkbenchKey(workbenchGeneration.current);
     setSessionId("");
     setIsNewSession(true);
     updateWorkbenchQuery("", true);
@@ -376,10 +384,12 @@ export default function App() {
                 authed ? (
                   sessionId || isNewSession ? (
                     <WorkbenchPage
+                      key={workbenchKey}
                       conversations={conversations}
                       currentUser={currentUser}
                       isEmbedMode={isEmbedMode}
                       embedHostOrigin={embedHostOrigin}
+                      embedSupportsToolRefresh={embedSupportsToolRefresh}
                       sessionId={sessionId}
                       isNewSession={isNewSession}
                       adminEntryHref={currentUser?.can_manage_platforms ? "/platforms" : undefined}
@@ -387,8 +397,12 @@ export default function App() {
                       onNewConversation={handleNewConversation}
                       onDeleteSession={(id) => void handleDeleteSession(id)}
                       onRenameSession={(id, title) => void handleRenameSession(id, title)}
-                      onSessionCreated={handleCreateSessionAndSelect}
-                      onSessionRefresh={(id) => void refreshConversations(id || sessionId)}
+                      onSessionCreated={(id) => {
+                        if (workbenchKey === workbenchGeneration.current) handleCreateSessionAndSelect(id);
+                      }}
+                      onSessionRefresh={(id) => {
+                        if (workbenchKey === workbenchGeneration.current) void refreshConversations(id || sessionId);
+                      }}
                       onAssistantPreview={handleAssistantPreview}
                       onSessionSelect={(id) => {
                         setSessionId(id);

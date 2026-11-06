@@ -8,6 +8,8 @@
 (function () {
   const DEFAULTS = {
     bindUrl: "/api/v1/aethercore/embed/bind",
+    // 启用前，宿主 bind 须转发 tool_refresh_revision 并返回 AetherCore 的刷新回执。
+    refreshTools: false,
     workbenchUrl: "http://localhost:5178",
     platformKey: "custom",
     title: "AetherCore",
@@ -411,6 +413,10 @@
         return;
       }
       const payload = data.payload || {};
+      if (data.type === "aethercore:refresh-tools") {
+        if (this.config.refreshTools && event.origin) void this.refreshWorkbenchTools(payload);
+        return;
+      }
       if (data.type === "aethercore:session-changed") {
         if (payload.session_id) {
           this.setLastSessionId(String(payload.session_id));
@@ -715,8 +721,78 @@
       };
     }
 
+    async fetchBind(requestConfig, signal) {
+      const response = await fetch(requestConfig.url, {
+        method: requestConfig.method || "POST",
+        credentials: Object.prototype.hasOwnProperty.call(requestConfig, "credentials")
+          ? requestConfig.credentials
+          : this.config.credentials,
+        headers: Object.assign(
+          { "Content-Type": "application/json" },
+          this.config.headers,
+          requestConfig.headers || {}
+        ),
+        body: JSON.stringify(requestConfig.body || {}),
+        signal,
+      });
+      if (!response.ok) {
+        const error = new Error(`AetherCore bind failed: ${response.status} ${await response.text()}`);
+        error.status = response.status;
+        throw error;
+      }
+      return response.json();
+    }
+
+    async refreshWorkbenchTools(payload) {
+      const { request_id: requestId, session_id: sessionId, revision } = payload;
+      if (typeof requestId !== "string" || !Number.isSafeInteger(revision) || revision < 0) return;
+      const reply = (result) => this._postToFrame({
+        source: "aethercore-host",
+        type: "aethercore:refresh-tools-result",
+        payload: Object.assign({ request_id: requestId, session_id: sessionId }, result),
+      });
+      const conversationId = this.getLastConversationId();
+      if (!sessionId || sessionId !== this.getLastSessionId() || !conversationId) {
+        reply({ error: "宿主未绑定当前会话，无法刷新工具目录。" });
+        return;
+      }
+      if (this.state.binding || this.state.refreshingTools) {
+        reply({ error: "宿主正在更新会话，请稍后重试。" });
+        return;
+      }
+      this.state.refreshingTools = true;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      try {
+        const request = await this.buildBindRequest();
+        request.body = Object.assign({}, request.body, {
+          session_id: sessionId,
+          conversation_id: conversationId,
+          tool_refresh_revision: revision,
+        });
+        const payload = await this.fetchBind(request, controller.signal);
+        const data = payload && (payload.data || payload);
+        const result = data && data.tool_catalog_refresh;
+        if (payload?.success === false || data?.session_id !== sessionId || data?.conversation_id !== conversationId ||
+            !result || ![result.revision, result.added, result.updated, result.removed].every(
+              (value) => Number.isSafeInteger(value) && value >= 0
+            ) || result.revision < revision) {
+          reply({ error: "宿主未确认当前会话的工具目录版本，请检查刷新协议配置。" });
+          return;
+        }
+        reply({ revision: result.revision, added: result.added, updated: result.updated, removed: result.removed });
+      } catch (error) {
+        reply({ error: error?.status === 409
+          ? "会话状态或工具目录版本已变化，请稍后重试。"
+          : "宿主刷新工具目录失败，请稍后重试。" });
+      } finally {
+        clearTimeout(timer);
+        this.state.refreshingTools = false;
+      }
+    }
+
     async bindToAetherCore() {
-      if (this.state.binding) return;
+      if (this.state.binding || this.state.refreshingTools) return;
       const root = document.getElementById(this.config.rootId);
       const button = root.querySelector(".ac-embed-card");
       this.state.binding = true;
@@ -726,23 +802,7 @@
 
       try {
         const requestConfig = await this.buildBindRequest();
-        const response = await fetch(requestConfig.url, {
-          method: requestConfig.method || "POST",
-          credentials:
-            Object.prototype.hasOwnProperty.call(requestConfig, "credentials")
-              ? requestConfig.credentials
-              : this.config.credentials,
-          headers: Object.assign(
-            { "Content-Type": "application/json" },
-            this.config.headers,
-            requestConfig.headers || {}
-          ),
-          body: JSON.stringify(requestConfig.body || {}),
-        });
-        if (!response.ok) {
-          throw new Error(`AetherCore bind failed: ${response.status} ${await response.text()}`);
-        }
-        const result = parseBindResult(await response.json());
+        const result = parseBindResult(await this.fetchBind(requestConfig));
         this.setLastSessionId(result.sessionId);
         this.setLastConversationId(result.conversationId || null);
         this.state.embedUrl =
@@ -776,7 +836,7 @@
       this._postToFrame({
         source: "aethercore-host",
         type: "aethercore:host-origin",
-        payload: { origin: window.location.origin },
+        payload: { origin: window.location.origin, refresh_tools: this.config.refreshTools === true },
       });
     }
 

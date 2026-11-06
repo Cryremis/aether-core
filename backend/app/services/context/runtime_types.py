@@ -47,6 +47,7 @@ class ContextSessionState:
     context_window: int = 200_000
     budget_source: str = "catalog_or_fallback"
     effective_window: int = 180_000
+    output_reserve: int | None = None
     target_input_tokens: int = 144_000
     compact_target_tokens: int = 117_000
     warning_threshold: int = 147_000
@@ -83,6 +84,7 @@ class ContextSessionState:
             "context_window": self.context_window,
             "budget_source": self.budget_source,
             "effective_window": self.effective_window,
+            "output_reserve": self.output_reserve,
             "target_input_tokens": self.target_input_tokens,
             "compact_target_tokens": self.compact_target_tokens,
             "warning_threshold": self.warning_threshold,

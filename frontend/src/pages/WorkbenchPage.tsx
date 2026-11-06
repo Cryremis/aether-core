@@ -16,6 +16,7 @@ import {
   getDownloadUrl,
   getUserLlmConfig,
   getSessionSummary,
+  inspectSession,
   listSubagents,
   listFiles,
   listSkills,
@@ -43,10 +44,13 @@ import { Composer } from "../components/workbench/Composer";
 import { ContextStatusPill } from "../components/workbench/ContextStatusPill";
 import { LlmConfigDialog } from "../components/workbench/LlmConfigDialog";
 import { PersonalSettingsDialog } from "../components/workbench/PersonalSettingsDialog";
+import { SessionInspectionDialog } from "../components/workbench/SessionInspectionDialog";
 import { WorkbenchIcons as Icons } from "../components/workbench/WorkbenchIcons";
 import { WorkbenchSidebar } from "../components/workbench/WorkbenchSidebar";
 import { useAppPreferences } from "../i18n";
 import { formatTokenCount } from "./workbench/markdown";
+import type { CommandAvailability, WorkbenchCommand } from "./workbench/commands";
+import { requestHostToolRefresh } from "./workbench/hostToolRefresh";
 import type {
   AssistantBlock,
   ChatMessage,
@@ -255,6 +259,7 @@ export function WorkbenchPage({
   currentUser,
   isEmbedMode = false,
   embedHostOrigin = "",
+  embedSupportsToolRefresh = false,
   sessionId,
   isNewSession = false,
   adminEntryHref,
@@ -358,6 +363,11 @@ export function WorkbenchPage({
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
+  const [inspection, setInspection] = useState<{ sessionId: string; resource: "context/status" | "tools" } | null>(null);
+  const [refreshNotice, setRefreshNotice] = useState<{ sessionId: string; text: string } | null>(null);
+  const [refreshingTools, setRefreshingTools] = useState<string | null>(null);
+  const toolRefreshRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
   const transcriptMessagesRef = useRef<TranscriptMessage[]>([]);
@@ -370,7 +380,7 @@ export function WorkbenchPage({
   const lastMainSessionIdRef = useRef<string | null>(null);
 
   const notifyHost = (type: "aethercore:run-status" | "aethercore:tool-status", payload: Record<string, unknown>) => {
-    if (!isEmbedMode || !embedHostOrigin || window.parent === window) return;
+    if (!mountedRef.current || !isEmbedMode || !embedHostOrigin || window.parent === window) return;
     window.parent.postMessage({ source: "aethercore-workbench", type, payload }, embedHostOrigin);
   };
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -663,9 +673,13 @@ window.addEventListener("resize", handleResize);
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
       if (bottomAnchorFrameRef.current !== null) window.cancelAnimationFrame(bottomAnchorFrameRef.current);
+      abortControllerRef.current?.abort();
+      childAbortControllerRef.current?.abort();
     };
   }, []);
 
@@ -1039,7 +1053,7 @@ window.addEventListener("resize", handleResize);
       liveRunTarget: isChildView ? childLiveRunRef : liveRunRef,
     })
       .then((activeRun) => {
-        if (!activeRun) return;
+        if (!activeRun || !mountedRef.current) return;
         const reconnectAssistantId = activeRun.assistant.id || `live-${activeRun.run_id}`;
         const reconnectAbortController = new AbortController();
         if (isChildView) {
@@ -1769,6 +1783,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
     pendingUserBubble?: { id: string; content: string },
   ) => {
     if (!userText) return;
+    if (toolRefreshRef.current && toolRefreshRef.current === mainSessionId) return false;
     
     if (!skipAddUserBubble && isStreamingRef.current) {
       const newMsg = { id: `queued-${Date.now()}`, content: userText, queuedAt: Date.now() };
@@ -1786,6 +1801,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
     if (wasNewSession) {
       try {
         const created = await bootstrapAdminSession(isEmbedMode ? sessionId || undefined : undefined);
+        if (!mountedRef.current) return;
         effectiveSessionId = String(created.data?.session_id ?? "");
         setLocalSessionId(effectiveSessionId);
         newlyCreatedSessionRef.current = effectiveSessionId;
@@ -1933,7 +1949,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       void onSessionRefresh?.(effectiveSessionId || undefined);
       
       const currentQueue = queuedMessagesRef.current;
-      if (!streamEndedWithError && currentQueue.length > 0) {
+      if (mountedRef.current && !streamEndedWithError && currentQueue.length > 0) {
         const mergedContent = currentQueue.map((msg) => msg.content).join("\n\n");
         const mergedBubble = {
           id: `client-user-queued-${Date.now()}-${randomIdSegment()}`,
@@ -2305,8 +2321,76 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     }
   };
 
+  const currentToolRefresh = refreshingTools === mainSessionId;
+  const busyCommandReason = displayedBusy || pendingElicitationRequest?.blocking
+    ? "请等待当前任务结束"
+    : undefined;
+  const missingSessionReason = mainSessionId ? undefined : "请先开启会话";
+  const newSessionReason = queuedMessages.length ? "请先发送或移除排队中的消息" : undefined;
+  const commandAvailability: CommandAvailability = {
+    new: onNewConversation ? newSessionReason : "当前工作台无法新建会话",
+    stop: !displayedBusy && !pendingElicitationRequest?.blocking ? "当前没有运行中的任务" : undefined,
+    context: missingSessionReason,
+    tools: missingSessionReason,
+    compact: missingSessionReason ?? busyCommandReason ?? (currentToolRefresh ? "正在刷新工具目录" : undefined),
+    refresh: !isEmbedMode || !embedHostOrigin || !embedSupportsToolRefresh
+      ? "当前宿主未接入工具刷新"
+      : missingSessionReason ?? busyCommandReason ?? (currentToolRefresh ? "正在刷新工具目录" : undefined),
+  };
+
+  const requestNewConversation = () => {
+    if (newSessionReason) setError(newSessionReason);
+    else onNewConversation?.();
+  };
+
+  const refreshHostTools = async () => {
+    if (toolRefreshRef.current || isStreamingRef.current) return;
+    const target = mainSessionId;
+    toolRefreshRef.current = target;
+    setRefreshingTools(target);
+    const show = (text: string) => {
+      if (activeSessionIdRef.current === target) setRefreshNotice({ sessionId: target, text });
+    };
+    show("正在向宿主刷新工具目录…");
+    try {
+      const previous = await inspectSession(target, "tools");
+      if (activeSessionIdRef.current !== target) return;
+      const result = await requestHostToolRefresh(embedHostOrigin, target, previous.revision);
+      const confirmed = await inspectSession(target, "tools");
+      if (confirmed.revision < result.revision) throw new Error("AetherCore 尚未确认该工具目录版本，请重试。");
+      const changes = `新增 ${result.added} 项，移除 ${result.removed} 项，更新 ${result.updated} 项`;
+      show(result.revision === previous.revision ? "工具目录已是最新。" : `工具目录已刷新（${changes}）。`);
+    } catch (error) {
+      show(error instanceof Error ? error.message : "刷新工具目录失败。");
+    } finally {
+      toolRefreshRef.current = null;
+      setRefreshingTools(null);
+    }
+  };
+
+  const runWorkbenchCommand = (command: WorkbenchCommand) => {
+    if (commandAvailability[command]) return;
+    switch (command) {
+      case "new": requestNewConversation(); break;
+      case "stop": void handleStop(); break;
+      case "compact": if (!isStreamingRef.current) void handleSend("/compact"); break;
+      case "context": setInspection({ sessionId: mainSessionId, resource: "context/status" }); break;
+      case "tools": setInspection({ sessionId: mainSessionId, resource: "tools" }); break;
+      case "refresh": void refreshHostTools(); break;
+    }
+  };
+
   return (
     <main className="app-layout">
+      {inspection?.sessionId === mainSessionId && (
+        <SessionInspectionDialog
+          key={`${inspection.sessionId}:${inspection.resource}`}
+          sessionId={inspection.sessionId}
+          resource={inspection.resource}
+          onClose={() => setInspection(null)}
+          onManageTools={() => { setInspection(null); setSidebarView("skills"); setIsSidebarOpen(true); }}
+        />
+      )}
       <WorkbenchSidebar
         conversations={conversations}
         currentUser={currentUser}
@@ -2321,7 +2405,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         skills={skills}
         onCloseSidebar={() => setIsSidebarOpen(false)}
         onSidebarViewChange={setSidebarView}
-        onNewConversation={onNewConversation}
+        onNewConversation={onNewConversation ? requestNewConversation : undefined}
         onSessionSelect={onSessionSelect}
         onRenameSession={onRenameSession}
         onDeleteSession={onDeleteSession}
@@ -2538,11 +2622,16 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           />
         </div>
 
+        {refreshNotice?.sessionId === mainSessionId && (
+          <div className="workbench-command-notice" role="status">{refreshNotice.text}</div>
+        )}
         <Composer
           busy={displayedBusy}
           canStop={displayedBusy || Boolean(pendingElicitationRequest?.blocking)}
           stopping={stoppingSessionId === activeSessionId}
-          disabled={composerDisabled}
+          disabled={composerDisabled || currentToolRefresh}
+          onCommand={runWorkbenchCommand}
+          commandAvailability={commandAvailability}
           allowNetwork={allowNetwork}
           reasoningEffort={reasoningEffort}
           reasoningEffortOptions={reasoningEffortOptions}

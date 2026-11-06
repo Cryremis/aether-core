@@ -725,6 +725,7 @@ class ContextPipeline:
             state.context_window = self.budget.get_context_window_for_model(model)
             state.budget_source = "catalog_or_fallback"
             output = max_output_tokens or self.budget.config.max_output_tokens_for_summary
+        state.output_reserve = output
         state.effective_window = input_budget(state.context_window, output, self.budget.config.provider_safety_tokens)
         state.warning_threshold = int(state.effective_window * self.budget.config.warning_ratio)
         state.blocking_limit = state.effective_window
@@ -732,6 +733,27 @@ class ContextPipeline:
         state.compact_target_tokens = int(state.effective_window * self.budget.config.compact_target_ratio)
         state.target_input_tokens = state.compact_target_tokens
         return state
+
+    def inspect_status(self, session, resolve_runtime) -> dict:
+        """读取最近预算快照。首次请求前只展示配置预算，使用量保留为空。"""
+        state = self.state_store.get(session)
+        has_estimate = bool(state.model_id)
+        if not has_estimate:
+            runtime = resolve_runtime()
+            self._refresh_state_thresholds(state, str(runtime.model), runtime=runtime)
+        reserve = state.output_reserve
+        if reserve is None and state.effective_window > 0:
+            reserve = max(0, state.context_window - state.effective_window - self.budget.config.provider_safety_tokens)
+        audit = session.compaction_audit[-1] if session.compaction_audit else None
+        return {
+            "model": state.model_id,
+            "estimated_tokens": state.last_known_token_estimate if has_estimate else None,
+            "input_budget": state.effective_window,
+            "context_window": state.context_window,
+            "output_reserve": reserve,
+            "budget_source": state.budget_source,
+            "last_compaction": {key: audit.get(key) for key in ("timestamp", "tokens_before", "tokens_after")} if audit else None,
+        }
 
     def _build_status_events(self, state: ContextSessionState, token_estimate: int) -> list[ContextEvent]:
         events: list[ContextEvent] = []

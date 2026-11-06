@@ -998,6 +998,29 @@ export type McpCapability = {
   has_secrets?: boolean;
 };
 
+export type SessionContextStatus = {
+  model: string;
+  estimated_tokens: number | null;
+  input_budget: number;
+  context_window: number;
+  output_reserve: number | null;
+  budget_source: string;
+  last_compaction: { timestamp: string; tokens_before: number; tokens_after: number } | null;
+};
+
+export type SessionToolCatalog = {
+  revision: number;
+  tools: { name: string; source: "built_in" | "host" | "mcp" }[];
+};
+
+export async function inspectSession<K extends "context/status" | "tools">(
+  sessionId: string, resource: K, signal?: AbortSignal,
+): Promise<K extends "tools" ? SessionToolCatalog : SessionContextStatus> {
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/${resource}`, { signal });
+  if (!response.ok) throw new Error(await readErrorMessage(response, "读取会话信息失败"));
+  return (await response.json()).data;
+}
+
 export async function listCapabilities(sessionId?: string) {
   const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
   const response = await apiFetch(`/capabilities${query}`);

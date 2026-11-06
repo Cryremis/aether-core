@@ -153,6 +153,7 @@ export type WorkbenchPageProps = {
   currentUser?: CurrentUserProfile | null;
   isEmbedMode?: boolean;
   embedHostOrigin?: string;
+  embedSupportsToolRefresh?: boolean;
   sessionId: string;
   isNewSession?: boolean;
   adminEntryHref?: string;

@@ -118,6 +118,33 @@ test("accepts preview events only from the mounted workbench frame", () => {
   instance.destroy();
 });
 
+test("tool refresh binds the original IDs and requires a version receipt", async () => {
+  const fixture = createFixture();
+  const instance = new fixture.AetherCoreEmbed({ refreshTools: true });
+  instance.setLastSessionId("session-original");
+  instance.setLastConversationId("conversation-original");
+  const replies = [];
+  instance._postToFrame = (message) => replies.push(message.payload);
+  instance.fetchBind = async (request) => {
+    assert.equal(request.body.session_id, "session-original");
+    assert.equal(request.body.conversation_id, "conversation-original");
+    assert.equal(request.body.tool_refresh_revision, 5);
+    return { data: {
+      session_id: "session-original",
+      conversation_id: "conversation-original",
+      tool_catalog_refresh: { revision: 6, added: 2, removed: 0, updated: 1 },
+    } };
+  };
+  const request = { request_id: "refresh-one", session_id: "session-original", revision: 5 };
+  await instance.refreshWorkbenchTools(request);
+  assert.deepEqual(replies.pop(), { ...request, revision: 6, added: 2, removed: 0, updated: 1 });
+  instance.fetchBind = async () => ({ data: { session_id: "other", conversation_id: "other" } });
+  await instance.refreshWorkbenchTools(request);
+  assert.match(replies.pop().error, /未确认/);
+  assert.equal(instance.getLastSessionId(), "session-original");
+  instance.destroy();
+});
+
 test("ignores reasoning and tool events and accepts assistant正文 events", () => {
   const fixture = createFixture();
   const instance = new fixture.AetherCoreEmbed({ assistantPreview: { enabled: true } });
