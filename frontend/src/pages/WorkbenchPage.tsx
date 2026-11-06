@@ -1447,15 +1447,17 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       }
 
       if (eventType === "context_blocked") {
+        const estimated = Number(payload.estimated_tokens ?? 0);
+        const budget = Number(payload.effective_window ?? 0);
         setContextStatus((current) => ({
           model: current?.model ?? "",
           estimatedTokens: Number(payload.estimated_tokens ?? current?.estimatedTokens ?? 0),
           effectiveWindow: Number(payload.effective_window ?? current?.effectiveWindow ?? 0),
-          contextWindow: current?.contextWindow ?? 0,
+          contextWindow: Number(payload.context_window ?? current?.contextWindow ?? 0),
           targetInputTokens: current?.targetInputTokens ?? 0,
           warningThreshold: current?.warningThreshold ?? 0,
           blockingLimit: Number(payload.blocking_limit ?? current?.blockingLimit ?? 0),
-          percentUsed: 100,
+          percentUsed: budget > 0 ? Math.round(estimated / budget * 100) : 100,
           state: "blocked",
           detail: String(payload.message ?? "上下文已阻塞"),
         }));
@@ -1673,7 +1675,9 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         const subtype = String(payload.subtype ?? "");
         const stopReason = String(payload.stop_reason ?? "");
         if (subtype && subtype !== "success") {
-          setError(RESULT_MESSAGES[subtype] ?? "执行失败");
+          setError(subtype === "error_context_overflow" && typeof payload.message === "string"
+            ? payload.message
+            : RESULT_MESSAGES[subtype] ?? "执行失败");
         } else if (stopReason === "stream_interrupted") {
           setError("回复因网络中断被截断");
         }

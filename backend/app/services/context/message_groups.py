@@ -28,6 +28,12 @@ def api_groups(messages: list[dict]) -> list[list[dict]]:
     return groups
 
 
+def latest_user_message(messages: list[dict]) -> dict | None:
+    return next((message for message in reversed(messages) if message.get("role") == "user"
+                 and message.get("kind", "user") in {"user", "elicitation_resume"}
+                 and not message.get("is_compact_summary") and not message.get("projection_only")), None)
+
+
 def split_checkpoint(messages: list[dict], estimator, token_budget: int) -> tuple[list[dict], list[dict]]:
     groups = api_groups([m for m in messages if not m.get("is_boundary_marker")])
     kept = 0
@@ -44,7 +50,7 @@ def split_checkpoint(messages: list[dict], estimator, token_budget: int) -> tupl
     older = [message for group in groups[:split] for message in group]
     recent = [message for group in groups[split:] for message in group]
     # 当前任务的原始用户输入必须在工作集中，不依赖摘要记住用户目标。
-    latest_user = next((m for m in reversed(messages) if m.get("role") == "user" and m.get("kind", "user") == "user" and not m.get("is_compact_summary")), None)
+    latest_user = latest_user_message(messages)
     if latest_user in older:
         older.remove(latest_user)
         recent.insert(0, latest_user)

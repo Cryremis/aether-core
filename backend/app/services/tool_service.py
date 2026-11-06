@@ -1182,6 +1182,7 @@ class ToolService:
 
     async def _handle_get_context_remaining(self, session: AgentSession, arguments: dict[str, Any]) -> ToolExecutionResult:
         from app.services.context.context_pipeline import context_pipeline
+        from app.services.context.context_budget import calibrated_tokens
         if not session.context_state.get("model_id"):
             return ToolExecutionResult.success("context.remaining", "尚无模型请求预算", {"available": False, "tokens_left": None})
         state = context_pipeline.state_store.get(session)
@@ -1194,7 +1195,7 @@ class ToolService:
                 and (message.get("kind") != "continuation_notice" or message.get("run_id") == active.run_id)]
             state.last_heuristic_token_estimate = context_pipeline._estimate_request(
                 [*active.context_system_messages, *history], active.context_tools, runtime=self._resolve_runtime_config(session))
-            state.last_known_token_estimate = int(state.last_heuristic_token_estimate * state.token_calibration_factor)
+            state.last_known_token_estimate = calibrated_tokens(state.last_heuristic_token_estimate, state.token_calibration_factor)
             basis = "current_history_before_this_tool_result"
         report = context_pipeline.budget_snapshot(state, basis=basis)
         report["context_compact_available"] = bool(active and any(schema["function"]["name"] == "context_compact" for schema in active.context_tools))
@@ -1266,14 +1267,15 @@ class ToolService:
         raw_messages = [*raw_messages, *session.messages]
         try:
             from app.services.skill_tools import visible_schemas
+            runtime = await llm_client.discover_limits(self._resolve_runtime_config(session))
             request_tools = [*visible_schemas(session, self.list_tool_schemas(session)), self.get_context_compact_schema()]
             prepared = await context_pipeline.compact_session_async(
                 session=session,
-                llm_runtime=self._resolve_runtime_config(session),
+                llm_runtime=runtime,
                 messages=raw_messages,
                 turn_index=max([int(message.get("turn_index", 0)) for message in session.messages] or [0]),
                 tools=request_tools,
-                max_output_tokens=llm_client.output_limit(self._resolve_runtime_config(session)),
+                max_output_tokens=llm_client.output_limit(runtime),
                 cause="agent",
                 aggressive=strategy == "aggressive",
             )

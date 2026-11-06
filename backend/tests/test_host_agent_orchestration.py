@@ -344,6 +344,45 @@ def test_host_message_idempotency_key_replays_existing_run(tmp_path, monkeypatch
     assert second["idempotent_replay"] is True
 
 
+def test_host_compact_is_scoped_and_idempotent(tmp_path, monkeypatch):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    foreign = create_platform("foreign-compact")
+    conversation = store_service.create_conversation(
+        session_id="sess_host_compact",
+        title="Host compact",
+        host_name="Host Control",
+        platform_id=platform["platform_id"],
+        external_user_id="user-compact",
+    )
+    calls = []
+
+    async def start_run(session, message, **kwargs):
+        calls.append((session.session_id, message, kwargs.get("client_message_id")))
+        return store_service.create_agent_run(
+            run_id="run_host_compact",
+            session_id=session.session_id,
+            conversation_id=conversation["conversation_id"],
+            status="running",
+            request={"message": message},
+            idempotency_key=kwargs.get("idempotency_key"),
+        )["run_id"]
+
+    monkeypatch.setattr(agent_run_service, "start_chat_run", start_run)
+    client = TestClient(app)
+    path = f"/api/v1/host/conversations/{conversation['conversation_id']}/compact"
+    payload = {"client_message_id": "compact-request", "idempotency_key": "compact-key"}
+
+    assert client.post(path, json=payload, headers={"X-Aether-Platform-Secret": foreign["host_secret"]}).status_code == 404
+    headers = {"X-Aether-Platform-Secret": platform["host_secret"]}
+    first = client.post(path, json=payload, headers=headers)
+    second = client.post(path, json=payload, headers=headers)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["data"]["run_id"] == second.json()["data"]["run_id"] == "run_host_compact"
+    assert second.json()["data"]["idempotent_replay"] is True
+    assert calls == [("sess_host_compact", "/compact", "compact-request")]
+
+
 def test_host_cancel_stops_waiting_question_and_preserves_context(tmp_path):
     initialize_isolated_runtime(tmp_path)
     platform = create_platform()

@@ -27,6 +27,9 @@ class RuntimeLlmConfig:
     reasoning_effort_options: list[str] = field(default_factory=lambda: ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
     enabled: bool = True
     trace_context: dict[str, Any] = field(default_factory=dict)
+    discovered_context_window: int | None = None
+    discovered_output_limit: int | None = None
+    token_calibration_factor: float = 1.0
 
 
 class LlmConfigService:

@@ -11,17 +11,18 @@ from dataclasses import replace
 class CompactionSummarizer:
     async def summarize(self, messages: list[dict], runtime) -> str:
         from app.services.llm_client import llm_client
+        from app.services.context.context_budget import calibrated_tokens, input_budget
         from app.services.context.token_estimation import TokenEstimator
         estimator = TokenEstimator()
         excluded = {"tools", "tool_stream", "max_tokens", "max_output_tokens", "max_completion_tokens",
                     "response_format", "text", "instructions", "system", "stop", "stop_token_ids",
                     "guided_json", "guided_regex", "guided_grammar", "structured_outputs", "prediction"}
         options = {key: value for key, value in runtime.extra_body.items() if key not in excluded}
-        window = llm_client.context_window(runtime) or 200000
-        summary_output = runtime.sampling.get("compaction_max_output_tokens") or llm_client.output_limit(runtime)
-        input_budget = min(12000, int((window - summary_output - 5000) * 0.8))
-        if input_budget < 256:
-            raise ValueError("部署窗口不足以运行摘要任务，请调整部署限额或输出额度")
+        window = llm_client.context_window(runtime)
+        summary_output = runtime.sampling.get("compaction_max_output_tokens") or min(4096, llm_client.output_limit(runtime))
+        budget = min(12000, input_budget(window, summary_output))
+        if budget < 256:
+            raise RuntimeError("部署窗口不足以运行摘要任务，请调整部署限额或输出额度")
         if "max_completion_tokens" in runtime.extra_body:
             options["max_completion_tokens"] = summary_output
         summary_runtime = replace(runtime, extra_body=options,
@@ -33,25 +34,33 @@ class CompactionSummarizer:
                   "用简洁中文概括全部输入，必须包含【目标】【约束与事实】【已完成与证据】【待办与疑问】。"
                   "合并摘要时去重，保留仍然有效的任务状态与用户最新更正，不堆叠多份过期摘要。")
 
-        def chunks(texts):
+        def request_messages(text):
+            return [{"role": "system", "content": system}, {"role": "user", "content": text}]
+
+        def fits(text):
+            _, tokens = llm_client.compile_request(summary_runtime, request_messages(text), [], stream=False)
+            return calibrated_tokens(tokens, summary_runtime.token_calibration_factor) <= budget
+
+        def chunks(texts, prefix=""):
             result, current = [], ""
             for text in texts:
-                # 以 token 预算切分完整覆盖的片段，不能假设中文与英文具有相同字/token 比例。
                 while text:
-                    lo, hi = 1, min(len(text), input_budget * 4)
+                    if not fits(prefix + text[:1]):
+                        raise RuntimeError("摘要系统指令占满了输入预算")
+                    lo, hi = 1, min(len(text), budget * 4)
                     while lo < hi:
                         mid = (lo + hi + 1) // 2
-                        if estimator.rough_token_count(text[:mid]) <= input_budget:
+                        if fits(prefix + text[:mid]):
                             lo = mid
                         else:
                             hi = mid - 1
                     piece, text = text[:lo], text[lo:]
-                    if current and estimator.rough_token_count(current + "\n" + piece) > input_budget:
-                        result.append(current)
+                    if current and not fits(prefix + current + "\n" + piece):
+                        result.append(prefix + current)
                         current = ""
                     current = current + "\n" + piece if current else piece
             if current:
-                result.append(current)
+                result.append(prefix + current)
             return result
 
         source = []
@@ -76,8 +85,7 @@ class CompactionSummarizer:
                     raise RuntimeError("摘要合并达到调用上限，原始上下文保持不变")
                 calls += 1
                 try:
-                    result = await llm_client.create_chat_completion(summary_runtime,
-                        [{"role": "system", "content": system}, {"role": "user", "content": part}], [])
+                    result = await llm_client.create_chat_completion(summary_runtime, request_messages(part), [])
                 except Exception as exc:
                     negotiated = recover_optional_parameter(summary_runtime, str(exc)) if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {400, 422} else None
                     if negotiated:
@@ -93,10 +101,10 @@ class CompactionSummarizer:
                 await asyncio.sleep(0.5 * (attempt + 1))
 
         summaries = [await summarize_part(part) for part in parts]
-        target = min(2048, max(256, input_budget // 3))
+        target = min(2048, max(256, budget // 3))
         while estimator.rough_token_count("\n\n".join(summaries)) > target:
             previous_tokens = estimator.rough_token_count("\n\n".join(summaries))
-            summaries = [await summarize_part("合并以下检查点片段：\n" + part) for part in chunks(summaries)]
+            summaries = [await summarize_part(part) for part in chunks(summaries, prefix="合并以下检查点片段：\n")]
             if estimator.rough_token_count("\n\n".join(summaries)) >= previous_tokens:
                 raise RuntimeError("摘要没有收敛到有限工作集，原始上下文保持不变")
         return "\n\n".join(summaries)

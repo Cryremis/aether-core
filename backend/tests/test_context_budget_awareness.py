@@ -29,11 +29,11 @@ def test_chat_warning_has_numeric_budget_and_counts_its_own_overhead():
     original = copy.deepcopy(session.messages)
     prepared = pipeline.prepare_for_llm(session=session, llm_runtime=FakeLlmRuntime(),
         messages=[{"role": "system", "content": "root"}, *session.messages], turn_index=1, max_output_tokens=1000,
-        tools=[tool_service.get_context_compact_schema()])
+        tools=[tool_service.get_context_compact_schema()], allow_soft_compaction=False)
     report = report_from_text(prepared.messages[-1]["content"])
-    assert report["used_percent"] >= 75
+    assert report["used_percent"] >= 85
     assert report["remaining_input_tokens"] == report["input_budget_tokens"] - report["estimated_input_tokens"]
-    assert report["tokens_left"] == report["auto_compact_at_tokens"] - report["estimated_input_tokens"]
+    assert report["tokens_left"] == max(0, report["auto_compact_at_tokens"] - report["estimated_input_tokens"])
     assert report["output_reserved_tokens"] == 1000
     assert report["safety_reserved_tokens"] == 4000
     assert report["context_compact_available"] is True
@@ -48,9 +48,9 @@ def test_chat_warning_has_numeric_budget_and_counts_its_own_overhead():
 def test_native_warning_is_append_only_and_not_repeated_without_growth(protocol):
     pipeline = make_pipeline()
     config = replace(make_runtime_config(), api_format=protocol, sampling={"context_window": 20000, "max_output_tokens": 2000})
-    session = AgentSession("native_notice", messages=[context_message_adapter.make_user_message("a" * 34000, turn_index=1)])
+    session = AgentSession("native_notice", messages=[context_message_adapter.make_user_message("a" * 36000, turn_index=1)])
     def prepare():
-        return pipeline.prepare_for_llm(session=session, llm_runtime=config, messages=[{"role": "system", "content": "root"}, *session.messages], turn_index=1)
+        return pipeline.prepare_for_llm(session=session, llm_runtime=config, messages=[{"role": "system", "content": "root"}, *session.messages], turn_index=1, allow_soft_compaction=False)
     first = prepare()
     notice = copy.deepcopy(session.messages[-1])
     assert notice["kind"] == "context_budget" and notice["role"] == "user"
@@ -76,7 +76,7 @@ def test_native_notice_cannot_block_an_otherwise_valid_request(protocol):
     session = AgentSession("blocked_notice", messages=[context_message_adapter.make_user_message("a" * 14000, turn_index=1)])
     original = copy.deepcopy(session.messages)
     assert pipeline._estimate_request(session.messages, [], runtime=config) < 4750
-    prepared = pipeline.prepare_for_llm(session=session, llm_runtime=config, messages=session.messages, turn_index=1, allow_compaction=False)
+    prepared = pipeline.prepare_for_llm(session=session, llm_runtime=config, messages=session.messages, turn_index=1, allow_compaction=False, allow_soft_compaction=False)
     assert prepared.state.last_known_token_estimate < prepared.state.blocking_limit
     assert prepared.ephemeral_warning
     assert session.messages[:len(original)] == original
@@ -87,8 +87,8 @@ def test_native_notice_cannot_block_an_otherwise_valid_request(protocol):
 
 def test_warning_does_not_offer_tools_outside_the_current_allowlist():
     pipeline = make_pipeline()
-    session = AgentSession("unavailable", messages=[{"role": "user", "content": "a" * 12000}])
-    prepared = pipeline.prepare_for_llm(session=session, llm_runtime=FakeLlmRuntime(), messages=session.messages, turn_index=1, max_output_tokens=1000, tools=[])
+    session = AgentSession("unavailable", messages=[{"role": "user", "content": "a" * 13000}])
+    prepared = pipeline.prepare_for_llm(session=session, llm_runtime=FakeLlmRuntime(), messages=session.messages, turn_index=1, max_output_tokens=1000, tools=[], allow_soft_compaction=False)
     text = prepared.messages[-1]["content"]
     assert report_from_text(text)["context_compact_available"] is False
     assert "可调用 context_compact" not in text

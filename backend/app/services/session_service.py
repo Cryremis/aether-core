@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+from itertools import count
 import json
 import os
 import shutil
@@ -29,6 +30,9 @@ from app.services.store import store_service
 from app.services.transcript_service import transcript_service
 from app.services.tool_catalog_service import tool_catalog_service
 from app.services.workspace_service import workspace_service
+
+_checkpoint_generations = count(1)
+_checkpoint_capture_lock = threading.Lock()
 
 
 class SessionService:
@@ -246,16 +250,18 @@ class SessionService:
         async with lock:
             session.touch()
             # 后台线程只读取冻结的 payload，不能遍历仍在更新的 AgentSession。
-            revision = session.ledger_revision
-            payload = copy.deepcopy(self._metadata_payload(session))
-            await durable_io(self._persist_snapshot, session, payload, revision)
+            generation, payload = self._freeze_metadata(session)
+            await durable_io(self._persist_snapshot, session, payload, generation)
 
-    def _persist_snapshot(self, session: AgentSession, payload: dict, expected_revision: int) -> None:
+    def _persist_snapshot(self, session: AgentSession, payload: dict, generation: int) -> None:
         with self._metadata_lock(session.session_id):
+            # 同一内存会话可能已由同步 bind 保存了更新的快照。旧任务不能覆盖它。
+            if generation <= session.checkpoint_generation:
+                return
             conversation = store_service.get_conversation_by_session(session.session_id)
             payload.update(identity_updates(session.session_id, payload, conversation))
             store_service.touch_workspace_session(session.session_id)
-            self._commit_metadata(session, payload, expected_revision)
+            self._commit_metadata(session, payload, generation)
 
     def clone_host_state(self, source: AgentSession, target: AgentSession) -> None:
         """克隆宿主绑定，不克隆消息历史，也不改变 Workspace 归属。"""
@@ -434,7 +440,12 @@ class SessionService:
     def _write_metadata_locked(self, session: AgentSession) -> None:
         # 创建 conversation 后的第一次 persist 也走这里；旧内存态不能再写回空身份。
         self._reconcile_identity(session)
-        self._commit_metadata(session, self._metadata_payload(session), session.ledger_revision)
+        generation, payload = self._freeze_metadata(session)
+        self._commit_metadata(session, payload, generation)
+
+    def _freeze_metadata(self, session: AgentSession) -> tuple[int, dict[str, Any]]:
+        with _checkpoint_capture_lock:
+            return next(_checkpoint_generations), copy.deepcopy(self._metadata_payload(session))
 
     @staticmethod
     def _metadata_payload(session: AgentSession) -> dict[str, Any]:
@@ -484,7 +495,7 @@ class SessionService:
             "last_access": session.last_access,
             "active_run_view": None,
         }
-    def _commit_metadata(self, session: AgentSession, payload: dict, expected_revision: int) -> None:
+    def _commit_metadata(self, session: AgentSession, payload: dict, generation: int) -> None:
         metadata_path = self._metadata_path(session.session_id)
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = metadata_path.with_name(
@@ -494,7 +505,8 @@ class SessionService:
         # 账本是恢复来源，磁盘 JSON 是兼容投影。版本冲突时不覆盖较新的投影。
         from app.services.context.history_store import history_store
         ledger = {key: value for key, value in payload.items() if key != "transcript"}
-        session.ledger_revision = history_store.capture(session.session_id, ledger, expected_revision=expected_revision)
+        session.ledger_revision = history_store.capture(session.session_id, ledger, expected_revision=session.ledger_revision)
+        session.checkpoint_generation = generation
         payload["ledger_revision"] = session.ledger_revision
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         try:

@@ -161,6 +161,14 @@ class AgentEngine:
     def _emit_context_event(self, session: AgentSession, event_type: ContextEventType, payload: dict[str, Any]):
         return make_event(session, event_type.value, **payload)
 
+    def _blocked_context_events(self, session, error, turn_count, started_at):
+        detail = error.public_payload()
+        yield self._emit_context_event(session, ContextEventType.Blocked, detail)
+        yield make_event(session, "result", subtype="error_context_overflow", is_error=True,
+                         turn_count=turn_count, stop_reason="context_overflow", **detail)
+        yield make_event(session, "completed", elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                         subtype="error_context_overflow", stop_reason="context_overflow")
+
     def _build_runtime_state_sections(self, session: AgentSession) -> list[str]:
         return runtime_state_service.build_runtime_context_sections(session)
 
@@ -183,6 +191,8 @@ class AgentEngine:
 
     def _is_context_overflow_error(self, message: str) -> bool:
         lowered = message.lower()
+        if any(term in lowered for term in ("tokens per minute", "rate limit", "tpm limit")):
+            return False
         patterns = [
             "prompt is too long",
             "prompt_too_long",
@@ -375,6 +385,16 @@ class AgentEngine:
         started = time.perf_counter()
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         try:
+            if (
+                message.strip().lower() == "/compact"
+                and persist_user_message
+                and visible_user_message
+                and user_message_kind == "user"
+                and not replace_last_user_message
+            ):
+                async for event in self._stream_user_compaction(session, run_id, started):
+                    yield event
+                return
             async for event in self._stream_chat(session, message, run_id=run_id,
                 replace_last_user_message=replace_last_user_message, client_message_id=client_message_id,
                 persist_user_message=persist_user_message, visible_user_message=visible_user_message,
@@ -388,6 +408,80 @@ class AgentEngine:
             yield make_event(session, "result", subtype="error_runtime_limit", is_error=True, stop_reason="runtime_limit")
             yield make_event(session, "completed", subtype="error_runtime_limit", stop_reason="runtime_limit", elapsed_ms=int((time.perf_counter() - started) * 1000))
             session.finish_run(run_id)
+
+    def _recover_interrupted_tool_calls(self, session: AgentSession) -> None:
+        from app.services.context.history_store import history_store
+
+        history_store.recover_attempts(session)
+        context_message_adapter.normalize_session(session)
+        # 上一轮取消或崩溃可能留下未闭合调用。补充回执或未知结果，避免重跑有副作用的操作。
+        known_results = {str(m.get("tool_call_id")) for m in session.messages if m.get("role") == "tool"}
+        repaired = []
+        for previous in session.messages:
+            repaired.append(previous)
+            for call in previous.get("tool_calls", []) or []:
+                if str(call.get("id")) not in known_results:
+                    receipt = history_store.tool_receipt(session.session_id, str(previous.get("run_id") or ""), str(call["id"]))
+                    result_text = json.dumps(receipt, ensure_ascii=False) if receipt else '{"status":"unknown","message":"上一轮中断，缺少执行回执；先核对状态，禁止自动重复有副作用操作"}'
+                    repaired.append(context_message_adapter.make_tool_message(tool_call_id=str(call["id"]),
+                        content=result_text,
+                        tool_name=str(call.get("function", {}).get("name", "")), turn_index=int(previous.get("turn_index", 0))))
+        session.messages = repaired
+
+    def _tools_for_context_budget(self, session: AgentSession, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if session.allowed_tools is not None and "context_compact" not in session.allowed_tools:
+            return tools
+        compact_schema = tool_display_service.annotate_schemas([tool_service.get_context_compact_schema()])[0]
+        return [*tools, compact_schema]
+
+    async def _stream_user_compaction(self, session: AgentSession, run_id: str, started: float) -> AsyncGenerator:
+        """复用正常 run 的取消、审计和重连，命令文字不进入模型历史。"""
+        from app.services.skill_tools import visible_schemas
+
+        run = session.begin_run(run_id)
+        self._recover_interrupted_tool_calls(session)
+        conversation = store_service.get_conversation_by_session(session.session_id) or {}
+        config = await self._await_operation(
+            session, run_id, llm_client.discover_limits(llm_config_service.resolve_for_conversation(conversation))
+        )
+        config = replace(
+            config, token_calibration_factor=context_pipeline.state_store.get(session).token_calibration_factor
+        )
+        system = self._build_system_messages(
+            session, conversation=conversation,
+            runtime_sections=self._build_runtime_state_sections(session) if config.api_format == "openai-compatible" else [],
+        )
+        destroyed = store_service.list_destroyed_subagent_ids_for_session(session.session_id)
+        history = [
+            item for item in session.messages
+            if str(item.get("subagent_id") or "") not in destroyed and item.get("kind") != "continuation_notice"
+        ]
+        run.turn_index = max((int(item.get("turn_index", 0)) for item in history), default=0)
+        tools = tool_display_service.annotate_schemas(visible_schemas(session, tool_service.list_tool_schemas(session)))
+        try:
+            prepared = await self._await_operation(
+                session, run_id, context_pipeline.compact_session_async(
+                    session=session, llm_runtime=config, messages=[*system, *history], turn_index=run.turn_index,
+                    tools=self._tools_for_context_budget(session, tools), cause="user_command",
+                ),
+            )
+        except ContextOverflowError as exc:
+            if exc.reason == "pinned_over_budget" or exc.token_estimate > exc.state.effective_window:
+                for event in self._blocked_context_events(session, exc, 0, started):
+                    yield event
+                session.finish_run(run_id)
+                return
+            reply = "当前会话没有可进一步安全压缩的历史。"
+        else:
+            for event in prepared.events:
+                yield self._emit_context_event(session, event.type, event.payload)
+            plan = prepared.plan
+            reply = f"上下文已压缩，估算输入从 {plan.estimated_tokens_before:,} 降到 {plan.estimated_tokens_after:,} tokens。"
+        yield make_event(session, "content_delta", delta=reply)
+        yield make_event(session, "content_completed")
+        yield make_event(session, "result", subtype="success", is_error=False, result=reply)
+        yield make_event(session, "completed", subtype="success", elapsed_ms=int((time.perf_counter() - started) * 1000))
+        session.finish_run(run_id)
 
     async def _stream_chat(
         self,
@@ -410,21 +504,7 @@ class AgentEngine:
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         session.begin_run(run_id)
         from app.services.context.history_store import history_store
-        history_store.recover_attempts(session)
-        context_message_adapter.normalize_session(session)
-        # 上一轮取消/崩溃可能留下未闭合调用。补充明确的未知结果，而不是执行旧操作。
-        known_results = {str(m.get("tool_call_id")) for m in session.messages if m.get("role") == "tool"}
-        repaired = []
-        for previous in session.messages:
-            repaired.append(previous)
-            for call in previous.get("tool_calls", []) or []:
-                if str(call.get("id")) not in known_results:
-                    receipt = history_store.tool_receipt(session.session_id, str(previous.get("run_id") or ""), str(call["id"]))
-                    result_text = json.dumps(receipt, ensure_ascii=False) if receipt else '{"status":"unknown","message":"上一轮中断，缺少执行回执；先核对状态，禁止自动重复有副作用操作"}'
-                    repaired.append(context_message_adapter.make_tool_message(tool_call_id=str(call["id"]),
-                        content=result_text,
-                        tool_name=str(call.get("function", {}).get("name", "")), turn_index=int(previous.get("turn_index", 0))))
-        session.messages = repaired
+        self._recover_interrupted_tool_calls(session)
         request_turn_index = self._next_turn_index(session)
         session.get_run(run_id).turn_index = request_turn_index
         committed_user_message: dict[str, Any] | None = None
@@ -516,7 +596,8 @@ class AgentEngine:
                 replace_last_user_message=replace_last_user_message,
             )
 
-        llm_runtime = llm_config_service.resolve_for_conversation(conversation)
+        llm_runtime = await self._await_operation(session, run_id, llm_client.discover_limits(
+            llm_config_service.resolve_for_conversation(conversation)))
         from app.services.context.provider_adapters import binding
         from app.services.context.epoch import rebase_context
         current_binding = binding(llm_runtime)
@@ -525,6 +606,9 @@ class AgentEngine:
                 await session_service.persist_async(session)
                 rebase_context(session, current_user_id=str(committed_user_message.get("message_id")) if committed_user_message else None,
                                reason="模型、协议、账户或历史版本变化")
+            if session.provider_binding:
+                session.context_state.update(token_calibration_factor=1.0, last_api_usage={},
+                                             last_compaction_at=None, last_compaction_attempt_at=None)
             session.provider_binding = current_binding
             await session_service.persist_async(session)
         try:
@@ -702,11 +786,7 @@ class AgentEngine:
                 *system_messages,
                 *visible_messages,
             ]
-            context_compact_schema = tool_display_service.annotate_schemas([tool_service.get_context_compact_schema()])[0]
-            context_compact_allowed = (
-                session.allowed_tools is None or "context_compact" in set(session.allowed_tools)
-            )
-            tools_for_estimation = [*tools, context_compact_schema] if context_compact_allowed else tools
+            tools_for_estimation = self._tools_for_context_budget(session, tools)
             effective_tools = [] if llm_runtime.extra_body.get("tools") == [] else tools_for_estimation
             if resolve_model_profile(llm_runtime).requires_reasoning(llm_runtime, effective_tools) and history_store.restore_reasoning(session, llm_runtime):
                 await session_service.persist_async(session)
@@ -720,50 +800,27 @@ class AgentEngine:
                 visible_messages = list(session.messages)
                 raw_messages = [*system_messages, *visible_messages]
                 await session_service.persist_async(session)
+            llm_runtime = replace(llm_runtime, token_calibration_factor=context_pipeline.state_store.get(session).token_calibration_factor)
+            context_request = dict(session=session, llm_runtime=llm_runtime, messages=raw_messages,
+                turn_index=request_turn_index, tools=tools_for_estimation, max_output_tokens=llm_client.output_limit(llm_runtime))
             try:
-                prepared = await self._await_operation(session, run_id, context_pipeline.prepare_for_llm_async(
-                    session=session,
-                    llm_runtime=llm_runtime,
-                    messages=raw_messages,
-                    turn_index=request_turn_index,
-                    tools=tools_for_estimation,
-                    max_output_tokens=llm_client.output_limit(llm_runtime),
-                ))
+                prepared = await self._await_operation(session, run_id, context_pipeline.prepare_for_llm_async(**context_request))
+                selected_tools = tools_for_estimation if prepared.ephemeral_warning or llm_runtime.api_format != "openai-compatible" else tools
+                try:
+                    prepared_payload = llm_client._payload(llm_runtime, prepared.messages, selected_tools, stream=True, reasoning_effort=reasoning_effort)
+                except ContextOverflowError as exc:
+                    prepared = await self._await_operation(session, run_id, context_pipeline.recover_request_budget(
+                        exc, **{**context_request, "tools": selected_tools}))
+                    prepared_payload = llm_client._payload(llm_runtime, prepared.messages, selected_tools, stream=True, reasoning_effort=reasoning_effort)
             except ContextOverflowError as exc:
-                # prepare_for_llm 已尝试强制压缩；只有压缩后仍不可缩减时才真正阻断。
-                yield self._emit_context_event(
-                    session,
-                    ContextEventType.Blocked,
-                    {
-                        "message": str(exc),
-                        "estimated_tokens": exc.token_estimate,
-                        "blocking_limit": exc.state.blocking_limit,
-                        "effective_window": exc.state.effective_window,
-                    },
-                )
-                yield make_event(
-                    session,
-                    "result",
-                    subtype="error_context_overflow",
-                    is_error=True,
-                    turn_count=turn_count,
-                    stop_reason="context_overflow",
-                    estimated_tokens=exc.token_estimate,
-                )
-                yield make_event(
-                    session,
-                    "completed",
-                    elapsed_ms=int((time.perf_counter() - started_at) * 1000),
-                    subtype="error_context_overflow",
-                    stop_reason="context_overflow",
-                )
+                for event in self._blocked_context_events(session, exc, turn_count, started_at):
+                    yield event
                 return
 
             for context_event in prepared.events:
                 yield self._emit_context_event(session, context_event.type, context_event.payload)
             messages = prepared.messages
-            # 正常状态隐藏 context_compact schema；警戒区动态暴露，节省常规请求预算。
-            tools = tools_for_estimation if prepared.ephemeral_warning or llm_runtime.api_format != "openai-compatible" else tools
+            tools = selected_tools
 
             assistant_content = ""
             assistant_reasoning = None
@@ -787,7 +844,6 @@ class AgentEngine:
             had_reasoning_output = False
             last_usage_payload: dict[str, int] | None = None
             from app.services.context.history_store import history_store
-            prepared_payload = llm_client._payload(llm_runtime, messages, tools, stream=True, reasoning_effort=reasoning_effort)
             if active:
                 active.context_system_messages = copy.deepcopy(system_messages)
                 active.context_tools = copy.deepcopy(tools) if prepared_payload.get("tools") else []
@@ -986,28 +1042,17 @@ class AgentEngine:
                     session.provider_binding = binding(llm_runtime)
                     await session_service.persist_async(session)
                     continue
-                if self._is_context_overflow_error(error_message):
+                if (exc.response.status_code in {400, 413, 422} and self._is_context_overflow_error(error_message)
+                        and not (assistant_content or assistant_reasoning or tool_calls or provider_payload)):
+                    overflow = ContextOverflowError("模型服务拒绝了当前上下文", state=prepared.state,
+                        token_estimate=prepared.state.last_known_token_estimate, reason="provider_overflow")
                     try:
-                        recovered = await self._await_operation(session, run_id, context_pipeline.compact_session_async(
-                            session=session,
-                            llm_runtime=llm_runtime,
-                            messages=raw_messages,
-                            turn_index=request_turn_index,
-                            cause="provider_overflow",
-                            tools=tools_for_estimation,
-                            max_output_tokens=llm_client.output_limit(llm_runtime),
-                        ))
+                        recovered = await self._await_operation(session, run_id, context_pipeline.recover_request_budget(
+                            overflow, **{**context_request, "tools": tools}))
                     except ContextOverflowError as recovery_exc:
-                        yield self._emit_context_event(
-                            session,
-                            ContextEventType.Blocked,
-                            {
-                                "message": str(recovery_exc),
-                                "estimated_tokens": recovery_exc.token_estimate,
-                                "blocking_limit": recovery_exc.state.blocking_limit,
-                            },
-                        )
-                        raise
+                        for event in self._blocked_context_events(session, recovery_exc, turn_count, started_at):
+                            yield event
+                        return
                     for context_event in recovered.events:
                         yield self._emit_context_event(session, context_event.type, context_event.payload)
                     continue

@@ -85,6 +85,7 @@ class AgentSession:
     frozen_tools_hash: str = ""
     frozen_history_prefix_hash: str = ""
     ledger_revision: int = 0
+    checkpoint_generation: int = field(default=0, init=False, repr=False)
     message_schema_version: int = CONTEXT_MESSAGE_SCHEMA_VERSION
     allow_network: bool = True
     disabled_capability_ids: list[str] = field(default_factory=list)

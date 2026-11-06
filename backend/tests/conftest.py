@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.config import settings
 from app.services.provider import models as provider_models
 from app.services.provider.models import ModelsRegistry
 
@@ -29,6 +30,7 @@ def checkpoint_model(monkeypatch):
 def _offline_models_registry(monkeysession):
     """session 级禁用 models.dev 网络获取,预初始化全局 registry(走 builtin fallback)。"""
     monkeysession.setenv("AETHERCORE_DISABLE_MODELS_FETCH", "true")
+    monkeysession.setattr(settings, "llm_model_discovery_enabled", False)
     registry = ModelsRegistry(
         cache_path=None,
         enable_background_refresh=False,

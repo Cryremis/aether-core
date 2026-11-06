@@ -5,12 +5,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import copy
+from datetime import datetime, timezone
+
+import httpx
 from typing import Any
 
 from app.services.context.contracts import SessionPersister
-from app.services.context.context_budget import ContextBudget, ContextBudgetConfig
+from app.services.context.context_budget import ContextBudget, ContextBudgetConfig, calibrated_tokens, input_budget
 from app.services.context.context_state_store import ContextStateStore, context_state_store
 from app.services.context.integrity import context_integrity_validator
+from app.services.context.message_groups import api_groups, latest_user_message
 from app.services.context.message_adapter import context_message_adapter
 from app.services.context.runtime_types import (
     CompactionPlan,
@@ -30,7 +34,7 @@ from app.services.session_types import AgentSession
 
 @dataclass
 class ContextPipelineConfig:
-    target_input_ratio: float = 0.65
+    compaction_cooldown_seconds: int = 60
     keep_recent_turns: int = 4
     keep_recent_turns_reactive: int = 2
     tool_result_token_threshold: int = 2_500
@@ -73,6 +77,7 @@ class ContextPipeline:
         tools: list[dict[str, Any]] | None = None,
         max_output_tokens: int | None = None,
         allow_compaction: bool = True,
+        allow_soft_compaction: bool = True,
     ) -> PreparedContext:
         changed = context_message_adapter.normalize_session(session)
         if changed:
@@ -90,18 +95,23 @@ class ContextPipeline:
             session, runtime_messages, state, llm_runtime, tools)
         token_estimate = state.last_known_token_estimate
 
-        if token_estimate >= state.blocking_limit:
+        hard = token_estimate > state.blocking_limit or not state.blocking_limit
+        last_compaction = max(filter(None, (state.last_compaction_at, state.last_compaction_attempt_at)), default=None)
+        cooling_down = False
+        if last_compaction:
+            try:
+                previous = datetime.fromisoformat(last_compaction)
+                cooling_down = (datetime.now(timezone.utc) - previous).total_seconds() < self.config.compaction_cooldown_seconds
+            except (ValueError, TypeError):
+                pass
+        soft = allow_soft_compaction and self.budget.config.auto_compact_enabled and token_estimate >= state.warning_threshold and not cooling_down
+        if hard or soft:
+            cause = "hard_limit" if hard else "soft_limit"
             if not allow_compaction:
-                raise ContextOverflowError("context requires compaction", state=state, token_estimate=token_estimate)
+                raise ContextOverflowError("上下文需要压缩", state=state, token_estimate=token_estimate, reason=cause)
             return self.compact_session(
-                session=session,
-                llm_runtime=llm_runtime,
-                messages=messages,
-                turn_index=turn_index,
-                tools=tools,
-                max_output_tokens=max_output_tokens,
-                cause="hard_limit",
-                aggressive=True,
+                session=session, llm_runtime=llm_runtime, messages=messages, turn_index=turn_index,
+                tools=tools, max_output_tokens=max_output_tokens, cause=cause, aggressive=hard,
             )
 
         api_messages = context_message_adapter.to_api_messages(runtime_messages)
@@ -119,8 +129,26 @@ class ContextPipeline:
     async def prepare_for_llm_async(self, **kwargs) -> PreparedContext:
         try:
             return self.prepare_for_llm(**kwargs, allow_compaction=False)
-        except ContextOverflowError:
-            return await self.compact_session_async(**kwargs, cause="hard_limit", aggressive=True)
+        except ContextOverflowError as exc:
+            return await self.recover_request_budget(exc, **kwargs)
+
+    async def recover_request_budget(self, overflow: ContextOverflowError, **kwargs) -> PreparedContext:
+        cause = overflow.reason if overflow.reason in {"soft_limit", "provider_overflow"} else "hard_limit"
+        try:
+            return await self.compact_session_async(**kwargs, cause=cause, aggressive=cause != "soft_limit")
+        except (ContextOverflowError, httpx.HTTPError, RuntimeError) as exc:
+            if isinstance(exc, ContextIntegrityError) or (isinstance(exc, ContextOverflowError) and exc.reason in {"pinned_over_budget", "retry_limit"}):
+                raise
+            try:
+                return self._compact_to_fit(**kwargs, cause=cause, state=exc.state if isinstance(exc, ContextOverflowError) else None)
+            except ContextOverflowError:
+                if cause != "soft_limit":
+                    raise
+                session = kwargs["session"]
+                state = self.state_store.get(session)
+                state.last_compaction_attempt_at = utc_now_iso()
+                self.state_store.save(session, state)
+                return self.prepare_for_llm(**kwargs, allow_compaction=False, allow_soft_compaction=False)
 
     async def compact_session_async(self, *, session, llm_runtime, messages, turn_index,
                                     tools=None, max_output_tokens=None, cause="agent", aggressive=False) -> PreparedContext:
@@ -140,8 +168,9 @@ class ContextPipeline:
         self._validate_or_raise(context_message_adapter.to_api_messages(prefix + working), state, before)
         if cause == "provider_overflow":
             if state.reactive_retry_count >= self.config.reactive_max_retries:
-                raise ContextOverflowError("上下文溢出恢复次数已达上限", state=state, token_estimate=before)
+                raise ContextOverflowError("上下文溢出恢复次数已达上限", state=state, token_estimate=before, reason="retry_limit")
             state.reactive_retry_count += 1
+            self.state_store.save(session, state)
         used_native = bool((getattr(llm_runtime, "sampling", None) or {}).get("native_compaction"))
         # 客户端检查点不把旧预算快照当作任务事实；原生 compact 的完整窗口交给服务处理。
         source_window = working if used_native else [m for m in working if m.get("kind") != "context_budget"]
@@ -150,11 +179,22 @@ class ContextPipeline:
         affected += len(working) - len(source_window)
         used_summary = False
         audit_summary = None
+        latest = latest_user_message(working)
+        pinned = self._pinned_messages(working)
+        pinned_estimate = self._estimate_request(prefix + pinned, tools, state, runtime=llm_runtime)
+        if pinned_estimate > state.effective_window or not state.effective_window:
+            raise self._pinned_overflow(state, pinned_estimate)
         if used_native:
             from app.services.llm_client import llm_client
             traced_runtime = replace(llm_runtime, trace_context={"session_id": session.session_id, "purpose": "native_compaction", "context_epoch": session.context_epoch})
             try:
-                payload = await llm_client.compact_native(traced_runtime, context_message_adapter.to_api_messages(prefix + working))
+                groups = api_groups(working)
+                cut = next((i for i, group in enumerate(groups) if any(item is latest for item in group)), len(groups))
+                recent = [item for group in groups[cut:] for item in group]
+                native_source = [item for group in groups[:cut] for item in group if item not in pinned]
+                if not native_source:
+                    raise ContextOverflowError("当前任务没有可供原生压缩的历史", state=state, token_estimate=before)
+                payload = await llm_client.compact_native(traced_runtime, context_message_adapter.to_api_messages(prefix + native_source))
             except Exception as exc:
                 import httpx
                 from app.core.model_errors import retryable_model_error
@@ -168,11 +208,11 @@ class ContextPipeline:
                     messages=messages, turn_index=turn_index, tools=tools, max_output_tokens=max_output_tokens,
                     cause="native_compaction_fallback", aggressive=True)
             from app.services.context.provider_adapters import history_system_rules
-            payload["system_rules"] = history_system_rules(working)
+            payload["system_rules"] = history_system_rules(native_source)
             checkpoint = context_message_adapter.make_assistant_message(content="原生上下文检查点", provider_payload=payload, turn_index=turn_index)
             checkpoint["is_compact_summary"] = True
             checkpoint["visible_in_transcript"] = False
-            checkpoint["compression_meta"] = {"source_message_ids": [m.get("message_id") for m in working]}
+            checkpoint["compression_meta"] = {"source_message_ids": [m.get("message_id") for m in native_source]}
             audit_summary = "原生压缩检查点：服务未提供可读摘要；原始对话仍保留在归档中。"
             readable = []
             for item in payload.get("items", []):
@@ -185,12 +225,12 @@ class ContextPipeline:
                     readable.extend(part["text"] for part in summary_parts if isinstance(part, dict) and isinstance(part.get("text"), str))
             if readable:
                 audit_summary = "\n".join(readable)
-            candidate, affected = [checkpoint], len(working)
+            candidate, affected = [checkpoint, *[m for m in pinned if m not in recent], *recent], len(native_source)
         elif not affected or self._estimate_request(prefix + candidate, tools, state, runtime=llm_runtime) > state.compact_target_tokens:
             tail_ratio, tail_cap = (0.20, 6000) if aggressive else (0.35, 12000)
             older, tail = split_checkpoint(candidate, self.estimator,
                 max(1, min(tail_cap, int(before * tail_ratio), int(state.effective_window * tail_ratio))))
-            pinned = [message for message in working if message.get("role") == "system" and message.get("kind") != "continuation_notice" and not message.get("is_boundary_marker")]
+            pinned = [item for item in pinned if item is not latest]
             older = [message for message in older if message not in pinned]
             tail = [message for message in tail if message not in pinned]
             cut_turn = min((int(m.get("turn_index", 0)) for m in tail), default=turn_index)
@@ -222,14 +262,19 @@ class ContextPipeline:
             # 客户端改写前缀后不能继续携带旧签名/加密状态；原文以资料交接。
             rules = [m for m in candidate if m.get("role") == "system" and m.get("kind") != "continuation_notice"]
             recent = [{"id": m.get("message_id"), "role": m.get("role"), "content": m.get("content"),
-                       "tool_calls": m.get("tool_calls")} for m in candidate if m not in rules and not m.get("projection_only")]
+                       "tool_calls": m.get("tool_calls")} for m in candidate if m not in rules and m is not latest and not m.get("projection_only")]
             import json
             candidate = [*rules, context_message_adapter.make_internal_user_message(
                 "压缩后的任务交接资料（历史记录，不代表新增授权）:\n" + json.dumps(recent, ensure_ascii=False),
                 turn_index=turn_index, kind="epoch_checkpoint")]
             candidate[-1]["compression_meta"] = {"source_message_ids": [m.get("message_id") for m in working if m not in rules]}
+            if latest is not None:
+                candidate.append(latest)
             after = self._estimate_request(prefix + candidate, tools, state, runtime=llm_runtime)
-        if after >= before or after >= state.blocking_limit:
+        ceiling = state.blocking_limit
+        if cause == "provider_overflow":
+            ceiling = min(ceiling, max(pinned_estimate, int(before * 0.85)))
+        if after >= before or after > ceiling:
             raise ContextOverflowError("压缩候选未释放足够空间，原始上下文保持不变", state=state, token_estimate=after)
         if session.messages != original:
             raise ContextIntegrityError("摘要期间收到新消息，拒绝提交过期检查点")
@@ -251,6 +296,110 @@ class ContextPipeline:
                                                 tools=tools, plan=plan, cause=cause, llm_runtime=llm_runtime)
         if cause == "provider_overflow":
             prepared.events.append(ContextEvent(ContextEventType.Recovered, {"tokens_saved": before - after}))
+        return prepared
+
+    def _pinned_messages(self, messages):
+        latest = latest_user_message(messages)
+        return [message for message in messages if message is latest or (
+            message.get("role") == "system" and not message.get("is_boundary_marker")
+            and message.get("kind") not in {"context_budget", "continuation_notice", "compact_summary"}
+        )]
+
+    @staticmethod
+    def _pinned_overflow(state, estimate):
+        return ContextOverflowError("当前消息与系统指令、工具定义合计超过可用输入预算，请拆分或精简当前消息。",
+                                    state=state, token_estimate=estimate, reason="pinned_over_budget")
+
+    def _compact_to_fit(self, *, session, llm_runtime, messages, turn_index, tools=None,
+                        max_output_tokens=None, cause, state=None):
+        state = self._refresh_state_thresholds(state or self.state_store.get(session), llm_runtime.model,
+                                               max_output_tokens, runtime=llm_runtime)
+        original = session.messages
+        visible_ids = {item.get("message_id") for item in messages if item.get("message_id")}
+        unidentified = any(item.get("role") != "system" and not item.get("message_id") for item in messages)
+        working = [item for item in original if item.get("message_id") in visible_ids] if visible_ids and not unidentified else original
+        prefix = self._system_prefix(messages)
+        pinned = self._pinned_messages(working)
+        from app.services.context.provider_adapters import history_system_rules
+
+        inherited_rules = history_system_rules([item for item in working if (item.get("provider_payload") or {}).get("complete_window")])
+        inherited_rules = [context_message_adapter.ensure_runtime_metadata(rule) for rule in inherited_rules
+                           if not any(item.get("role") == "system" and item.get("content") == rule["content"] for item in pinned)]
+
+        def estimate(items):
+            return self._estimate_request(prefix + items, tools, state, runtime=llm_runtime)
+
+        before, minimum = estimate(working), estimate(inherited_rules + pinned)
+        if not state.effective_window or minimum > state.effective_window:
+            raise self._pinned_overflow(state, minimum)
+
+        ceiling = state.effective_window
+        if cause == "provider_overflow":
+            ceiling = min(ceiling, max(minimum, int(before * 0.85)))
+        target = min(ceiling, state.compact_target_tokens)
+        groups = api_groups(working)
+        recent_turns = sorted({int(item.get("turn_index", 0)) for item in working if not item.get("is_boundary_marker")})
+        pinned_ids = {id(item) for item in pinned}
+        best = None
+        native = getattr(llm_runtime, "api_format", "openai-compatible") != "openai-compatible"
+        shortened, _ = self._truncate_tool_results(working, keep_recent_turns=0, aggressive=True) if not native else (working, 0)
+        replacements = {id(item): updated for item, updated in zip(working, shortened)}
+        for keep in ((0,) if native else (self.config.keep_recent_turns, 1, 0)):
+            threshold = recent_turns[-min(keep, len(recent_turns))] if keep and recent_turns else float("inf")
+            retained = pinned_ids | {
+                id(item) for group in groups
+                if any(int(item.get("turn_index", 0)) >= threshold for item in group)
+                for item in group
+            }
+            # 原生签名依赖旧前缀。归档回退保留原文用户输入和系统规则，历史仍可查询。
+            candidate = inherited_rules + [replacements[id(item)] for item in working if id(item) in retained]
+            after = estimate(candidate)
+            if after < before and after <= ceiling and context_integrity_validator.validate(
+                context_message_adapter.to_api_messages(prefix + candidate)
+            ).ok:
+                if best is None or after <= target:
+                    best = (retained, after)
+                if after <= target:
+                    break
+        if best is None:
+            raise ContextOverflowError("没有可进一步缩减的历史，请拆分当前输入或调整模型限额。",
+                                       state=state, token_estimate=before, reason="no_progress")
+        retained, after = best
+        # 每段被移出的历史单独保留原位置，审计回放顺序与压缩前一致。
+        candidate, projected, archived = list(inherited_rules), list(inherited_rules), []
+        working_ids = {id(item) for item in working}
+        for item in [*original, None]:
+            if item is not None and id(item) in working_ids and id(item) not in retained:
+                archived.append(item["message_id"])
+                continue
+            if archived:
+                candidate.append(context_message_adapter.make_boundary_message(
+                    turn_index=turn_index, compression_meta={"source_message_ids": archived}))
+                archived = []
+            if item is not None:
+                kept = replacements.get(id(item), item)
+                candidate.append(kept)
+                if id(item) in retained:
+                    projected.append(kept)
+        self._persist_session(session)
+        session.messages = candidate
+        if getattr(llm_runtime, "api_format", "openai-compatible") != "openai-compatible":
+            session.context_epoch += 1
+        state.compaction_count += 1
+        state.last_compaction_at = utc_now_iso()
+        state.last_compaction_strategy = "archive_checkpoint"
+        state.consecutive_compaction_failures = 0
+        self._record_compaction(session, original, before=before, after=after, cause=cause,
+            strategy="archive_checkpoint", summary="为适应输入预算收缩了近期窗口，移出的原文仍保留在会话归档。")
+        self._persist_session(session)
+        affected = sum(id(item) not in retained or replacements[id(item)] is not item for item in working)
+        plan = CompactionPlan(CompactionStrategyName.TranscriptSummary, before, after, before - after,
+                              affected, cause, reversible=True)
+        prepared = self._build_prepared_context(session=session, state=state, system_prefix=prefix,
+            tools=tools, plan=plan, cause=cause, llm_runtime=llm_runtime,
+            working_messages=projected)
+        if cause == "provider_overflow":
+            prepared.events.append(ContextEvent(ContextEventType.Recovered, {"tokens_saved": plan.estimated_tokens_saved}))
         return prepared
 
     def compact_session(
@@ -501,11 +650,12 @@ class ContextPipeline:
 
         max_turn = max(int(message.get("turn_index", 0)) for message in messages)
         protected_turn = max(1, max_turn - keep_recent_turns + 1)
+        latest = latest_user_message(messages)
 
         def critical(message: dict[str, Any]) -> bool:
             # 系统规则、既有压缩边界和摘要是后续执行的安全基线，任何时候都不能被摘要掉。
             return (
-                message.get("role") == "system"
+                message is latest or message.get("role") == "system"
                 or bool(message.get("is_boundary_marker"))
             )
 
@@ -568,26 +718,16 @@ class ContextPipeline:
     ) -> ContextSessionState:
         state.model_id = model
         from app.services.llm_client import llm_client
-        declared_window = llm_client.context_window(runtime) if runtime is not None and hasattr(runtime, "api_format") else None
-        # 有明确部署声明时不查公网目录，也不先以较小目录窗口否决合法部署。
-        state.context_window = int(declared_window or self.budget.get_context_window_for_model(model))
-        state.budget_source = "deployment" if declared_window else "catalog_or_fallback"
-        if not declared_window and runtime is not None and hasattr(runtime, "api_format"):
-            registry = self.budget._get_registry()
-            lookup = getattr(registry, "get_model", None)
-            if callable(lookup):
-                if lookup(model) is not None:
-                    state.budget_source = "catalog_unverified"
-                else:
-                    # 未知内网别名不能继承目录的 200K 默认事实；仅采用明确标注的保守上限。
-                    state.context_window = min(state.context_window, 65_536)
-                    state.budget_source = "unverified_fallback"
-        output = max_output_tokens or (llm_client.output_limit(runtime) if runtime is not None and hasattr(runtime, "api_format") else self.budget.config.max_output_tokens_for_summary)
-        state.effective_window = state.context_window - output - self.budget.config.provider_safety_tokens
-        if state.effective_window <= 0:
-            raise ValueError("部署上下文窗口不足以容纳输出预留与安全余量")
+        if runtime is not None and hasattr(runtime, "api_format"):
+            state.context_window, state.budget_source = llm_client.context_limits(runtime, self.budget.models_registry)
+            output = max_output_tokens or llm_client.output_limit(runtime)
+        else:
+            state.context_window = self.budget.get_context_window_for_model(model)
+            state.budget_source = "catalog_or_fallback"
+            output = max_output_tokens or self.budget.config.max_output_tokens_for_summary
+        state.effective_window = input_budget(state.context_window, output, self.budget.config.provider_safety_tokens)
         state.warning_threshold = int(state.effective_window * self.budget.config.warning_ratio)
-        state.blocking_limit = int(state.effective_window * self.budget.config.hard_limit_ratio)
+        state.blocking_limit = state.effective_window
         state.error_threshold = state.blocking_limit
         state.compact_target_tokens = int(state.effective_window * self.budget.config.compact_target_ratio)
         state.target_input_tokens = state.compact_target_tokens
@@ -645,9 +785,9 @@ class ContextPipeline:
             "context_window_tokens": state.context_window, "input_budget_tokens": state.effective_window,
             "estimated_input_tokens": used, "used_percent": self._safe_percent(used, state.effective_window),
             "remaining_input_tokens": max(0, state.effective_window - used),
-            "tokens_left": max(0, state.blocking_limit - used),
+            "tokens_left": max(0, state.warning_threshold - used),
             "tokens_left_basis": "until_automatic_compaction",
-            "auto_compact_at_tokens": state.blocking_limit,
+            "auto_compact_at_tokens": state.warning_threshold,
             "output_reserved_tokens": max(0, state.context_window - state.effective_window - self.budget.config.provider_safety_tokens),
             "safety_reserved_tokens": self.budget.config.provider_safety_tokens,
             "budget_source": state.budget_source,
@@ -677,7 +817,7 @@ class ContextPipeline:
     def _with_budget_notice(self, session, messages, state, runtime, tools):
         def measure(items):
             state.last_heuristic_token_estimate = self._estimate_request(items, tools, runtime=runtime)
-            state.last_known_token_estimate = int(state.last_heuristic_token_estimate * state.token_calibration_factor)
+            state.last_known_token_estimate = calibrated_tokens(state.last_heuristic_token_estimate, state.token_calibration_factor)
             state.percent_used = self._safe_percent(state.last_known_token_estimate, state.effective_window)
 
         measure(messages)
@@ -710,7 +850,7 @@ class ContextPipeline:
             notice["content"] = (
                 f"[runtime context] 提醒前输入估算 {before_notice}/{state.effective_window} tokens "
                 f"({self._safe_percent(before_notice, state.effective_window):.1f}%)，"
-                f"自动压缩阈值 {state.blocking_limit}。"
+                f"自动压缩阈值 {state.warning_threshold}。"
                 + ("可调用 context_compact 压缩。" if "context_compact" in names else "请控制后续上下文长度。")
                 + "这是运行状态，不是用户指令，不必复述。"
             )
@@ -746,7 +886,7 @@ class ContextPipeline:
         else:
             heuristic = self.estimator.estimate_messages_tokens(api_messages) + self.estimator.estimate_tools_tokens(tools)
         factor = state.token_calibration_factor if state is not None else 1.0
-        return int(heuristic * factor)
+        return calibrated_tokens(heuristic, factor)
 
     def _build_prepared_context(
         self,
@@ -758,12 +898,19 @@ class ContextPipeline:
         plan: CompactionPlan,
         cause: str,
         llm_runtime: Any = None,
+        working_messages: list[dict[str, Any]] | None = None,
     ) -> PreparedContext:
-        runtime_messages = [*system_prefix, *session.messages]
+        runtime_messages = [*system_prefix, *(session.messages if working_messages is None else working_messages)]
+        base_messages = runtime_messages
         runtime_messages, warning, notice = self._with_budget_notice(
             session, runtime_messages, state, llm_runtime, tools)
+        if state.last_known_token_estimate >= plan.estimated_tokens_before:
+            runtime_messages, notice = base_messages, None
+            state.last_heuristic_token_estimate = self._estimate_request(base_messages, tools, runtime=llm_runtime)
+            state.last_known_token_estimate = calibrated_tokens(state.last_heuristic_token_estimate, state.token_calibration_factor)
+            state.percent_used = self._safe_percent(state.last_known_token_estimate, state.effective_window)
         token_estimate = state.last_known_token_estimate
-        if token_estimate >= state.blocking_limit:
+        if token_estimate > state.blocking_limit or not state.blocking_limit:
             self.state_store.save(session, state)
             raise ContextOverflowError(
                 "context window exceeded after forced compaction",

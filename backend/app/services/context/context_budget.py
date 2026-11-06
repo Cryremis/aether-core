@@ -17,6 +17,19 @@ from app.services.provider.models import (
     ModelsRegistry,
 )
 
+SAFETY_TOKENS = 4_000
+SOFT_RATIO = 0.85
+TARGET_RATIO = 0.80
+
+
+def input_budget(window: int, output: int, safety: int = SAFETY_TOKENS) -> int:
+    return max(0, window - output - safety)
+
+
+def calibrated_tokens(tokens: int, factor: float) -> int:
+    import math
+    return math.ceil(tokens * factor)
+
 
 class WarningLevel(Enum):
     Normal = "normal"
@@ -30,13 +43,12 @@ class ContextBudgetConfig:
     """上下文窗口预算管理配置。
 
     输入预算先扣除真实输出预留和服务商安全余量，再按比例划分：
-    75% 进入 Agent 可见的警戒区，95% 触发平台强制压缩，65% 是压缩目标。
+    85% 触发压缩，80% 是压缩目标，完整可用输入预算是硬上限。
     """
     max_output_tokens_for_summary: int = 32_000  # 兼容旧配置；实际调用会传入真实值
-    provider_safety_tokens: int = 4_000
-    warning_ratio: float = 0.75
-    hard_limit_ratio: float = 0.95
-    compact_target_ratio: float = 0.65
+    provider_safety_tokens: int = SAFETY_TOKENS
+    warning_ratio: float = SOFT_RATIO
+    compact_target_ratio: float = TARGET_RATIO
     # 兼容旧配置构造参数；新阈值计算不再使用这些缓冲值。
     auto_compact_buffer_tokens: int = 13_000
     warning_threshold_buffer_tokens: int = 20_000
@@ -90,7 +102,7 @@ class ContextBudget:
         """返回模型可安全使用的输入预算。"""
         full_window = self.get_context_window_for_model(model, betas)
         reserved_output = max(1, max_output_tokens or self.config.max_output_tokens_for_summary)
-        budget = full_window - reserved_output - self.config.provider_safety_tokens
+        budget = input_budget(full_window, reserved_output, self.config.provider_safety_tokens)
         if budget <= 0:
             raise ValueError("模型窗口不能容纳输出预留与安全余量，请调整部署限额或输出预算")
         return budget
@@ -102,8 +114,7 @@ class ContextBudget:
         betas: list[str] | None = None,
     ) -> int:
         """计算自动压缩触发阈值（硬上限）。"""
-        effective_window = self.get_effective_context_window(model, max_output_tokens, betas)
-        return self.get_hard_limit(model, max_output_tokens, betas)
+        return self.get_warning_threshold(model, max_output_tokens, betas)
     
     def get_warning_threshold(
         self,
@@ -111,7 +122,7 @@ class ContextBudget:
         max_output_tokens: int | None = None,
         betas: list[str] | None = None,
     ) -> int:
-        """计算警戒阈值；到达后仅提示 Agent，不自动压缩。"""
+        """返回警戒及自动压缩的唯一软阈值。"""
         usable_input = self.get_effective_context_window(model, max_output_tokens, betas)
         return int(usable_input * self.config.warning_ratio)
     
@@ -132,7 +143,7 @@ class ContextBudget:
     ) -> int:
         """计算阻断限制；达到后必须先强制压缩。"""
         usable_input = self.get_effective_context_window(model, max_output_tokens, betas)
-        return int(usable_input * self.config.hard_limit_ratio)
+        return usable_input
 
     def get_compact_target(
         self,
@@ -177,12 +188,12 @@ class ContextBudget:
         blocking_limit = self.get_blocking_limit(model, max_output_tokens, betas)
         
         is_above_warning = token_usage >= warning_threshold
-        is_above_error = token_usage >= error_threshold
+        is_above_error = token_usage > error_threshold
         is_above_auto_compact = (
             self.config.auto_compact_enabled
             and token_usage >= self.get_auto_compact_threshold(model, max_output_tokens, betas)
         )
-        is_at_blocking = token_usage >= blocking_limit
+        is_at_blocking = token_usage > blocking_limit
         
         if is_at_blocking:
             level = WarningLevel.Blocking

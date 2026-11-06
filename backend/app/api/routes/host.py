@@ -13,6 +13,7 @@ from app.host.registry import host_registry
 from app.schemas.common import ApiResponse
 from app.schemas.host import (
     HostBindRequest,
+    HostCompactRequest,
     HostConversationCreateRequest,
     HostConversationPatchRequest,
     HostMessageRequest,
@@ -306,6 +307,19 @@ async def send_host_message(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@router.post("/conversations/{conversation_id}/compact")
+async def compact_host_conversation(
+    conversation_id: str,
+    request: HostCompactRequest,
+    platform: dict = Depends(require_platform_secret),
+) -> ApiResponse:
+    return await send_host_message(
+        conversation_id,
+        HostMessageRequest(message="/compact", **request.model_dump()),
+        platform,
     )
 
 

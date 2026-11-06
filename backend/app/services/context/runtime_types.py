@@ -59,6 +59,7 @@ class ContextSessionState:
     compaction_count: int = 0
     consecutive_compaction_failures: int = 0
     last_compaction_at: str | None = None
+    last_compaction_attempt_at: str | None = None
     last_compaction_strategy: str | None = None
     last_boundary_message_id: str | None = None
     reactive_retry_count: int = 0
@@ -94,6 +95,7 @@ class ContextSessionState:
             "compaction_count": self.compaction_count,
             "consecutive_compaction_failures": self.consecutive_compaction_failures,
             "last_compaction_at": self.last_compaction_at,
+            "last_compaction_attempt_at": self.last_compaction_attempt_at,
             "last_compaction_strategy": self.last_compaction_strategy,
             "last_boundary_message_id": self.last_boundary_message_id,
             "reactive_retry_count": self.reactive_retry_count,
@@ -137,7 +139,20 @@ class ContextIntegrityError(RuntimeError):
 
 
 class ContextOverflowError(RuntimeError):
-    def __init__(self, message: str, *, state: ContextSessionState, token_estimate: int):
+    def __init__(self, message: str, *, state: ContextSessionState, token_estimate: int,
+                 reason: str = "over_budget"):
         super().__init__(message)
         self.state = state
         self.token_estimate = token_estimate
+        self.reason = reason
+
+    def public_payload(self) -> dict[str, Any]:
+        return {
+            "message": str(self),
+            "reason": self.reason,
+            "estimated_tokens": self.token_estimate,
+            "context_window": self.state.context_window,
+            "effective_window": self.state.effective_window,
+            "blocking_limit": self.state.blocking_limit,
+            "suggestion": "请拆分长消息或附件，或检查部署窗口与输出额度。",
+        }

@@ -132,6 +132,11 @@ class HostMessageRequest(BaseModel):
     response_mode: Literal["stream", "poll"] = "poll"
 
 
+class HostCompactRequest(BaseModel):
+    client_message_id: str | None = Field(default=None, max_length=128)
+    idempotency_key: str | None = Field(default=None, max_length=256)
+
+
 class HostAssistantMessage(BaseModel):
     """带运行状态的 AI 回复投影。"""
 

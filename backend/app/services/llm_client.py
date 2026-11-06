@@ -141,11 +141,17 @@ class LlmClient:
             for key in requested.difference(supported):
                 payload.pop(key, None)  # 可选能力缺失时采用服务默认，不能变成 Agent 的故障。
         request = native_request(config, messages, self._strip_tool_fields_when_disabled(payload))
-        window = self.context_window(config)
-        if window and check_budget:
-            input_tokens = self.estimate_payload_tokens(config, request)
-            if input_tokens + self.output_limit(config) + 4000 > window:
-                raise ValueError("最终模型请求超过部署上下文预算；请先压缩或调整输出预留")
+        if check_budget:
+            from app.services.context.context_budget import calibrated_tokens, input_budget
+            from app.services.context.runtime_types import ContextOverflowError, ContextSessionState
+
+            window, source = self.context_limits(config)
+            budget = input_budget(window, self.output_limit(config))
+            tokens = calibrated_tokens(self.estimate_payload_tokens(config, request), config.token_calibration_factor)
+            if not budget or tokens > budget:
+                state = ContextSessionState(session_id="", model_id=config.model, context_window=window,
+                    budget_source=source, effective_window=budget, blocking_limit=budget)
+                raise ContextOverflowError("最终模型请求超过可用输入预算", state=state, token_estimate=tokens)
         return request
 
     def estimate_payload_tokens(self, config, request: dict[str, Any]) -> int:
@@ -174,20 +180,49 @@ class LlmClient:
             raise ValueError("输出预算不能同时设置多个协议字段")
         if values and config.sampling.get("max_output_tokens") is not None and values[0] != config.sampling["max_output_tokens"]:
             raise ValueError("额外请求体与标准输出预算冲突")
-        value = values[0] if values else (config.sampling.get("max_output_tokens") or maximum or settings.llm_max_tokens)
+        value = values[0] if values else (config.sampling.get("max_output_tokens") or maximum)
+        if value is None:
+            from app.services.context.context_budget import SAFETY_TOKENS
+
+            catalog = self._catalog_model(config)
+            window = self.context_window(config)
+            value = min(settings.llm_max_tokens, config.discovered_output_limit or
+                        (catalog.limit.output if catalog else 8_192), max(1, (window - SAFETY_TOKENS) // 4))
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError("输出 token 上限必须为正整数")
         if maximum and value > maximum:
             raise ValueError("输出预算超过部署声明的硬上限")
         return value
 
-    def context_window(self, config) -> int | None:
+    def _catalog_model(self, config, registry=None):
+        from app.services.provider.models import get_models_registry
+
+        lookup = getattr(registry or get_models_registry(), "get_model", None)
+        model = lookup(config.model) if lookup else None
+        return model if model and model.id.casefold() == config.model.casefold() else None
+
+    def context_limits(self, config, registry=None) -> tuple[int, str]:
         from app.services.context.model_profile import deployment_profile
         maximum = deployment_profile(config).get("context_window")
         value = (config.sampling or {}).get("context_window") or maximum
         if maximum and value > maximum:
             raise ValueError("上下文预算超过部署声明的硬上限")
-        return value
+        if value:
+            return value, "deployment"
+        if config.discovered_context_window:
+            return config.discovered_context_window, "endpoint_metadata"
+        catalog = self._catalog_model(config, registry)
+        if catalog and catalog.limit.context:
+            return catalog.limit.context, "catalog_unverified"
+        return 65_536, "unverified_fallback"
+
+    def context_window(self, config) -> int:
+        return self.context_limits(config)[0]
+
+    async def discover_limits(self, config: RuntimeLlmConfig) -> RuntimeLlmConfig:
+        from app.services.provider.limit_discovery import model_limit_discovery
+
+        return await model_limit_discovery.resolve(config, self._headers(config))
 
     def validate_config_contract(self, config) -> dict[str, Any]:
         """离线检查真实编译器和原生回放，不调用模型或执行工具。"""

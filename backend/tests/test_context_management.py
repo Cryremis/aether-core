@@ -209,7 +209,7 @@ class TestContextBudget:
         budget = ContextBudget()
         threshold = budget.get_auto_compact_threshold("test-model-200k")
         effective = budget.get_effective_context_window("test-model-200k")
-        assert threshold == int(effective * budget.config.hard_limit_ratio)
+        assert threshold == int(effective * budget.config.warning_ratio)
 
     def test_get_warning_threshold(self):
         budget = ContextBudget()
@@ -221,7 +221,7 @@ class TestContextBudget:
         budget = ContextBudget()
         blocking = budget.get_blocking_limit("test-model-200k")
         effective = budget.get_effective_context_window("test-model-200k")
-        assert blocking == int(effective * budget.config.hard_limit_ratio)
+        assert blocking == effective
 
     def test_calculate_token_warning_state_normal(self):
         budget = ContextBudget()
@@ -241,7 +241,7 @@ class TestContextBudget:
 
     def test_calculate_token_warning_state_error(self):
         budget = ContextBudget()
-        threshold = budget.get_auto_compact_threshold("test-model-200k")
+        threshold = budget.get_blocking_limit("test-model-200k")
         state = budget.calculate_token_warning_state(threshold + 1, "test-model-200k")
         assert state.is_above_auto_compact_threshold
         assert state.warning_level in (WarningLevel.Error, WarningLevel.Blocking)

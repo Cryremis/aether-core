@@ -743,6 +743,32 @@ def test_agent_engine_emits_tool_progress_for_long_running_tools(monkeypatch, tm
 
 
 @pytest.mark.usefixtures("checkpoint_model")
+@pytest.mark.parametrize("history_turns", [1, 10])
+def test_user_compact_preserves_current_message_without_starting_a_chat(monkeypatch, tmp_path, history_turns):
+    initialize_store(tmp_path)
+    monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
+
+    async def reject_normal_chat(*args, **kwargs):
+        pytest.fail("/compact must not start a normal model response")
+
+    monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", reject_normal_chat)
+    session = build_session(f"sess_user_compact_{history_turns}")
+    seed_verbose_history(session, turns=history_turns)
+    latest_user = f"user turn {history_turns}"
+
+    events = asyncio.run(collect_stream(session, " /CoMpAcT "))
+
+    assert events[-1]["type"] == "completed"
+    assert events[-1]["payload"]["subtype"] == "success"
+    assert any(message.get("content") == latest_user for message in session.messages)
+    assert all("/compact" not in str(message.get("content")).lower() for message in session.messages)
+    assert session.active_run is None
+    assert any(item["type"] == "context_compacted" for item in events) == (history_turns == 10)
+    reply = next(item["payload"]["delta"] for item in events if item["type"] == "content_delta")
+    assert ("上下文已压缩" if history_turns == 10 else "没有可进一步安全压缩") in reply
+
+
+@pytest.mark.usefixtures("checkpoint_model")
 def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     initialize_store(tmp_path)
     # 用例缩小窗口时也固定输出预留，避免继承本机 32K 配置而依赖测试执行顺序。
@@ -765,12 +791,7 @@ def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
     monkeypatch.setattr("app.runtime.engine.llm_client.stream_chat_completion", fake_stream_chat_completion)
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
-    monkeypatch.setattr(context_pipeline.budget, "get_context_window_for_model", lambda model, betas=None: 12000)
-    monkeypatch.setattr(context_pipeline.budget, "get_effective_context_window", lambda model, max_output_tokens=None, betas=None: 10000)
-    monkeypatch.setattr(context_pipeline.budget, "get_warning_threshold", lambda model, max_output_tokens=None, betas=None: 6000)
-    monkeypatch.setattr(context_pipeline.budget, "get_error_threshold", lambda model, max_output_tokens=None, betas=None: 8000)
-    monkeypatch.setattr(context_pipeline.budget, "get_blocking_limit", lambda model, max_output_tokens=None, betas=None: 8000)
-    monkeypatch.setattr(context_pipeline.budget, "get_auto_compact_threshold", lambda model, max_output_tokens=None, betas=None: 7000)
+    monkeypatch.setattr("app.runtime.engine.llm_client.context_limits", lambda runtime, registry=None: (12_000, "deployment"))
 
     events = asyncio.run(collect_stream(session, "new task"))
 

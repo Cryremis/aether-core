@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import threading
 from pathlib import Path
@@ -86,3 +87,35 @@ def test_metadata_write_cleans_temporary_file_on_persistent_error(monkeypatch, t
         service._write_metadata(session)  # noqa: SLF001
 
     assert not list(tmp_path.glob("session.json.*.tmp"))
+
+
+def test_sync_host_checkpoint_supersedes_older_async_checkpoint(monkeypatch, tmp_path):
+    from app.services.context.history_store import history_store
+
+    service = make_service(tmp_path / "session.json")
+    session = AgentSession(session_id="sess_bind_race", workspace_id="ws_bind_race")
+    service.persist(session)
+
+    async def exercise():
+        queued, release = asyncio.Event(), asyncio.Event()
+
+        async def pause(function, *args):
+            queued.set()
+            await release.wait()
+            return function(*args)
+
+        monkeypatch.setattr(session_service_module, "durable_io", pause)
+        session.messages = [{"message_id": "a", "role": "user", "content": "已保存消息"}]
+        older = asyncio.create_task(service.persist_async(session))
+        await asyncio.wait_for(queued.wait(), 3)
+        session.host_context = {"revision": 2}
+        service.persist(session)
+        revision = session.ledger_revision
+        release.set()
+        await older
+        payload = history_store.snapshot(session.session_id)
+        assert payload["ledger_revision"] == revision
+        assert payload["host_context"] == {"revision": 2}
+        assert payload["messages"][0]["content"] == "已保存消息"
+
+    asyncio.run(exercise())

@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     # models.dev 模型能力目录拉取（内网无法访问外网时置 false，走本地缓存/内置配置）
     models_fetch_enabled: bool = True
+    llm_model_discovery_enabled: bool = True
 
     http_client_ssl_verify: bool = True
 

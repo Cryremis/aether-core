@@ -91,22 +91,22 @@ def seed_history(session: AgentSession, turns: int = 8, *, old_tool_chars: int =
         )
 
 
-def test_context_budget_uses_three_stage_ratios_and_real_output_reservation():
+def test_context_budget_uses_one_soft_threshold_and_real_output_reservation():
     budget = ContextBudget(
         config=ContextBudgetConfig(provider_safety_tokens=4_000),
         models_registry=FakeModelsRegistry(),
     )
 
     assert budget.get_effective_context_window("test-model", max_output_tokens=1_000) == 5_000
-    assert budget.get_warning_threshold("test-model", max_output_tokens=1_000) == 3_750
-    assert budget.get_hard_limit("test-model", max_output_tokens=1_000) == 4_750
-    assert budget.get_compact_target("test-model", max_output_tokens=1_000) == 3_250
+    assert budget.get_warning_threshold("test-model", max_output_tokens=1_000) == 4_250
+    assert budget.get_hard_limit("test-model", max_output_tokens=1_000) == 5_000
+    assert budget.get_compact_target("test-model", max_output_tokens=1_000) == 4_000
 
 
-def test_warning_is_agent_only_and_does_not_force_compaction():
+def test_warning_stays_agent_only_when_soft_compaction_is_disabled():
     pipeline = make_pipeline()
     session = AgentSession("sess_context_warning")
-    session.messages = [{"role": "user", "content": "a" * 12_000, "turn_index": 1}]
+    session.messages = [{"role": "user", "content": "a" * 13_000, "turn_index": 1}]
     raw_messages = [{"role": "system", "content": "security rules"}, *session.messages]
     original_count = len(session.messages)
 
@@ -116,6 +116,7 @@ def test_warning_is_agent_only_and_does_not_force_compaction():
         messages=raw_messages,
         turn_index=2,
         max_output_tokens=1_000,
+        allow_soft_compaction=False,
     )
 
     assert prepared.ephemeral_warning is True
@@ -168,7 +169,7 @@ def test_hard_limit_forces_progressive_compaction_and_preserves_critical_context
 def test_api_usage_calibrates_local_token_estimate():
     pipeline = make_pipeline()
     session = AgentSession("sess_context_calibration")
-    session.messages = [{"role": "user", "content": "a" * 12_000, "turn_index": 1}]
+    session.messages = [{"role": "user", "content": "a" * 13_000, "turn_index": 1}]
     raw_messages = [{"role": "system", "content": "security rules"}, *session.messages]
     prepared = pipeline.prepare_for_llm(
         session=session,
@@ -176,6 +177,7 @@ def test_api_usage_calibrates_local_token_estimate():
         messages=raw_messages,
         turn_index=2,
         max_output_tokens=1_000,
+        allow_soft_compaction=False,
     )
     local_estimate = prepared.state.last_known_token_estimate
 
@@ -247,6 +249,7 @@ async def collect_stream(session: AgentSession, message: str) -> list[dict[str, 
 
 def test_engine_exposes_context_tool_only_in_warning_and_hides_warning_from_user(monkeypatch, tmp_path):
     initialize_store(tmp_path)
+    monkeypatch.setattr("app.runtime.engine.context_pipeline.budget.config.auto_compact_enabled", False)
     # 固定请求级输出预算，避免依赖本地模型配置和 schema 大小触发阻断区。
     monkeypatch.setattr("app.runtime.engine.llm_client.output_limit", lambda config: 1_000)
     monkeypatch.setattr(settings, "llm_max_tokens", 1_000)
@@ -254,8 +257,8 @@ def test_engine_exposes_context_tool_only_in_warning_and_hides_warning_from_user
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1_800)
     monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
     monkeypatch.setattr(
-        "app.runtime.engine.context_pipeline.budget.get_context_window_for_model",
-        lambda model, betas=None: 10_000,
+        "app.runtime.engine.llm_client.context_limits",
+        lambda runtime, registry=None: (10_000, "deployment"),
     )
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
     monkeypatch.setattr(
@@ -286,13 +289,15 @@ def test_engine_exposes_context_tool_only_in_warning_and_hides_warning_from_user
 @pytest.mark.usefixtures("checkpoint_model")
 def test_agent_can_call_context_compact_and_run_continues(monkeypatch, tmp_path):
     initialize_store(tmp_path)
+    monkeypatch.setattr("app.runtime.engine.context_pipeline.budget.config.auto_compact_enabled", False)
+    monkeypatch.setattr("app.runtime.engine.context_pipeline.budget.config.warning_ratio", 0.75)
     monkeypatch.setattr(settings, "llm_max_tokens", 1_000)
     monkeypatch.setattr(settings, "agent_max_turns", 0)
     monkeypatch.setattr(settings, "agent_max_runtime_seconds", 1_800)
     monkeypatch.setattr(settings, "agent_max_stall_rounds", 0)
     monkeypatch.setattr(
-        "app.runtime.engine.context_pipeline.budget.get_context_window_for_model",
-        lambda model, betas=None: 10_000,
+        "app.runtime.engine.llm_client.context_limits",
+        lambda runtime, registry=None: (10_000, "deployment"),
     )
     monkeypatch.setattr("app.runtime.engine.tool_service.list_tool_schemas", lambda session: [])
     monkeypatch.setattr(

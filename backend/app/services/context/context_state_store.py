@@ -21,7 +21,7 @@ class ContextStateStore:
         return ContextSessionState.from_dict(session.session_id, session.context_state)
 
     def save(self, session: AgentSession, state: ContextSessionState) -> None:
-        session.context_state = state.to_dict()
+        session.context_state.update(state.to_dict())
         self._persist(session)
 
     def reset(self, session: AgentSession) -> ContextSessionState:
