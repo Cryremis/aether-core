@@ -984,6 +984,15 @@ def test_host_tool_catalog_api_supports_atomic_source_updates_and_rebind(tmp_pat
         "endpoint": "/api/tools/current-page",
         "input_schema": {"type": "object", "properties": {}},
     }
+    wait_tool = {
+        **page_tool,
+        "name": "inference_wait_task_stage",
+        "endpoint": "/api/tools/wait-task-stage",
+    }
+    new_wait_tool = {
+        **wait_tool,
+        "input_schema": {"type": "object", "properties": {"wait_seconds": {"type": "integer"}}},
+    }
     bind_payload = {
         "platform_key": platform["platform_key"],
         "host_name": "POC",
@@ -992,7 +1001,7 @@ def test_host_tool_catalog_api_supports_atomic_source_updates_and_rebind(tmp_pat
             "user": {"id": "user-1", "name": "User 1"},
             "extras": {"host_callback_base_url": "http://localhost:8000"},
         },
-        "tools": [page_tool],
+        "tools": [page_tool, wait_tool],
         "tool_source_id": "host:page",
         "tool_update_mode": "replace_source",
         "tool_refresh_policy": "round_boundary",
@@ -1016,7 +1025,7 @@ def test_host_tool_catalog_api_supports_atomic_source_updates_and_rebind(tmp_pat
                     "endpoint": "/api/tools/on-demand",
                     "input_schema": {"type": "object", "properties": {}},
                 },
-            }],
+            }, {"op": "upsert", "tool": wait_tool}],
         },
     )
     assert added.status_code == 200
@@ -1040,14 +1049,17 @@ def test_host_tool_catalog_api_supports_atomic_source_updates_and_rebind(tmp_pat
         headers=headers,
         json={
             **bind_payload,
-            "tools": [{**page_tool, "name": "next_page_tool"}],
+            "tools": [{**page_tool, "name": "next_page_tool"}, new_wait_tool],
             "conversation_id": bound.json()["data"]["conversation_id"],
         },
     )
-    assert rebound.status_code == 200
+    assert rebound.status_code == 200, rebound.text
+    assert rebound.json()["data"]["session_id"] == session_id
+    session_service._sessions.clear()
     catalog = client.get(
         f"/api/v1/host/sessions/{session_id}/tools",
         headers=headers,
+        params={"include_descriptors": True},
     )
     assert catalog.status_code == 200
     catalog_data = catalog.json()["data"]
@@ -1056,12 +1068,18 @@ def test_host_tool_catalog_api_supports_atomic_source_updates_and_rebind(tmp_pat
     assert {item["name"] for item in catalog_data["tools"]} == {
         "next_page_tool",
         "on_demand_tool",
+        "inference_wait_task_stage",
     }
     sources_by_name = {item["name"]: item["source_ids"] for item in catalog_data["tools"]}
     assert sources_by_name == {
         "next_page_tool": ["host:page"],
         "on_demand_tool": ["host:on-demand"],
+        "inference_wait_task_stage": ["host:page"],
     }
+    wait_entry = next(item for item in catalog_data["tools"] if item["name"] == wait_tool["name"])
+    assert wait_entry["descriptor"]["input_schema"] == new_wait_tool["input_schema"]
+    cache = session_service.get_or_create(session_id).host_tool_collections["host:on-demand"]
+    assert [item["name"] for item in cache] == ["on_demand_tool"]
 
 
 def test_host_bind_materializes_platform_baseline_skills_for_new_and_existing_sessions(tmp_path):

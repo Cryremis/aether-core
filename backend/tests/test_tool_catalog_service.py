@@ -93,3 +93,81 @@ def test_explicit_execution_defaults_match_omitted_defaults():
         "second": [descriptor(method="post", auth_inject=True, requires_auth=True)],
     })
     assert len(result) == 1
+
+
+@pytest.mark.parametrize("cache_source", ["aurora:on-demand", "aurora:on-demand:batch-1"])
+def test_page_schema_discards_only_conflicting_entries_from_its_cache(cache_source, caplog):
+    service = ToolCatalogService()
+    session = AgentSession("page_schema_upgrade")
+    old = descriptor(name="inference_wait_task_stage")
+    new = descriptor(
+        name=old["name"],
+        input_schema={"type": "object", "properties": {"wait_seconds": {"type": "integer"}}},
+    )
+    other = descriptor(name="on_demand_only")
+    page_source = "aurora:page"
+    service.replace(session, [old], source_id=page_source, replace_all=False)
+    service.replace(session, [old, other], source_id=cache_source, replace_all=False)
+    with caplog.at_level(logging.WARNING):
+        upgraded = service.replace(session, [new], source_id=page_source, replace_all=False)
+        snapshot = service.snapshot(session)
+        assert len(caplog.records) == 1
+        replay = service.apply_operations(
+            session, source_id=cache_source, upserts=[old], removals=[],
+            expected_revision=upgraded.revision,
+        )
+    assert upgraded.updated == (old["name"],)
+    assert upgraded.added == upgraded.removed == ()
+    assert snapshot.descriptors_by_name[old["name"]]["input_schema"] == new["input_schema"]
+    assert snapshot.sources_by_name[old["name"]] == (page_source,)
+    assert snapshot.sources_by_name[other["name"]] == (cache_source,)
+    assert [item["name"] for item in session.host_tool_collections[cache_source]] == [other["name"]]
+    assert replay.changed is False
+    assert replay.revision == upgraded.revision
+    assert replay.fingerprint == upgraded.fingerprint
+    assert len(caplog.records) == 2
+    assert "input_schema" in caplog.text
+    assert cache_source in caplog.text
+
+    service.replace(session, [], source_id=page_source, replace_all=False)
+    assert set(service.snapshot(session).descriptors_by_name) == {other["name"]}
+
+
+@pytest.mark.parametrize("cache_source,extra", [
+    ("another:on-demand", {}),
+    ("aurora:on-demand", {"endpoint": "https://other.example/execute"}),
+    ("aurora:on-demand", {"requires_auth": False}),
+])
+def test_schema_precedence_does_not_hide_unrelated_or_execution_conflicts(cache_source, extra):
+    service = ToolCatalogService()
+    session = AgentSession("strict_conflicts")
+    service.replace(session, [descriptor()], source_id="aurora:page", replace_all=False)
+    before = service.snapshot(session)
+    with pytest.raises(ToolCatalogValidationError, match="input_schema"):
+        service.replace(
+            session, [descriptor(input_schema={"type": "object"}, **extra)],
+            source_id=cache_source, replace_all=False,
+        )
+    assert service.snapshot(session) == before
+
+
+def test_snapshot_reads_historical_page_and_stale_cache_without_mutating_revision():
+    service = ToolCatalogService()
+    session = AgentSession("historical_catalog")
+    session.host_tool_collections = {
+        "host:on-demand": [descriptor(input_schema={"type": "object"})],
+        "host:page": [descriptor()],
+    }
+    session.host_tools_revision = 8
+    session.host_tools_fingerprint = service._fingerprint(session.host_tool_collections)
+
+    snapshot = service.snapshot(session)
+    assert snapshot.revision == 8
+    assert snapshot.sources_by_name["remote_exec"] == ("host:page",)
+    assert "command" in snapshot.descriptors_by_name["remote_exec"]["input_schema"]["properties"]
+    assert "host:on-demand" in session.host_tool_collections
+
+    repaired = service.replace(session, [descriptor()], source_id="host:page", replace_all=False)
+    assert repaired.revision == 9
+    assert repaired.added == repaired.updated == repaired.removed == ()
+    assert "host:on-demand" not in session.host_tool_collections

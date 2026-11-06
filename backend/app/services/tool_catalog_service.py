@@ -148,14 +148,23 @@ class ToolCatalogService:
 
     @staticmethod
     def _source_priority(source_id: str) -> tuple[int, str]:
-        # A live page describes the current host version. Legacy snapshots are
-        # retained only when no current source supplies the same execution contract.
+        # 页面优先提供当前宿主的工具描述。跨来源执行合同仍需校验。
         rank = 0 if source_id.endswith(":page") else 2 if source_id == "host:legacy" else 1
         return rank, source_id
 
     @staticmethod
+    def _page_source_for_cache(source_id: str, owners: list[str]) -> str | None:
+        for owner in owners:
+            if owner.endswith(":page"):
+                cache_source = owner.removesuffix(":page") + ":on-demand"
+                if source_id == cache_source or source_id.startswith(cache_source + ":"):
+                    return owner
+        return None
+
+    @staticmethod
     def _compose(
         collections: dict[str, list[dict[str, Any]]], *, log_metadata_changes: bool = False,
+        stale_cache_entries: dict[str, dict[str, str]] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, tuple[str, ...]]]:
         by_name: dict[str, dict[str, Any]] = {}
         sources: dict[str, list[str]] = {}
@@ -169,6 +178,13 @@ class ToolCatalogService:
                     after = ToolCatalogService._execution_contract(canonical)
                     changed = sorted(key for key in before.keys() | after.keys() if key not in before or key not in after or before[key] != after[key])
                     if changed:
+                        # 同一宿主的页面定义替代过期的按需 schema。路由和鉴权冲突仍须拒绝。
+                        if changed == ["input_schema"]:
+                            page_source = ToolCatalogService._page_source_for_cache(source_id, sources[name])
+                            if page_source is not None:
+                                if stale_cache_entries is not None:
+                                    stale_cache_entries.setdefault(source_id, {})[name] = page_source
+                                continue
                         owners = "、".join(sources[name])
                         raise ToolCatalogValidationError(
                             f"工具 {name} 在来源 {owners} 与 {source_id} 中定义不一致；执行字段：{', '.join(changed)}"
@@ -263,9 +279,23 @@ class ToolCatalogService:
         collections: dict[str, list[dict[str, Any]]],
     ) -> ToolCatalogMutationResult:
         next_fingerprint = self._fingerprint(collections)
+        stale_cache_entries: dict[str, dict[str, str]] = {}
         descriptors, sources = self._compose(
             collections, log_metadata_changes=next_fingerprint != session.host_tools_fingerprint,
+            stale_cache_entries=stale_cache_entries,
         )
+        if stale_cache_entries:
+            # 持久化时清掉冲突条目，防止页面移除工具后又回退到旧 schema。
+            for source_id, entries in stale_cache_entries.items():
+                remaining = [
+                    item for item in collections[source_id]
+                    if str(item.get("name") or "").strip() not in entries
+                ]
+                if remaining:
+                    collections[source_id] = remaining
+                else:
+                    del collections[source_id]
+            next_fingerprint = self._fingerprint(collections)
         next_by_name = {str(item["name"]): item for item in descriptors}
         self._validate_size(descriptors)
         added = tuple(sorted(set(next_by_name) - set(current)))
@@ -274,6 +304,12 @@ class ToolCatalogService:
             sorted(name for name in set(current) & set(next_by_name) if current[name] != next_by_name[name])
         )
         changed = next_fingerprint != session.host_tools_fingerprint
+        for source_id, entries in stale_cache_entries.items():
+            for name, page_source in entries.items():
+                logger.warning(
+                    "宿主工具 %s 的按需缓存 %s 与页面 %s 的 input_schema 不一致；保留页面定义并丢弃冲突条目",
+                    name, source_id, page_source,
+                )
         if changed:
             session.host_tools = descriptors
             session.host_tool_collections = copy.deepcopy(collections)
