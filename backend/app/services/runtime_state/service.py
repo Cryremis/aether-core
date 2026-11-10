@@ -395,6 +395,8 @@ class RuntimeStateService:
         session: AgentSession,
         request_id: str,
         responses: list[dict[str, Any]],
+        *,
+        persist: bool = True,
     ) -> tuple[ElicitationState, str]:
         state = self.get_elicitation(session)
         if state.pending is None or state.pending.id != request_id:
@@ -452,7 +454,8 @@ class RuntimeStateService:
         state.pending = None
         state.revision += 1
         state.updated_at = now
-        self.save_elicitation(session, state)
+        if persist:
+            self.save_elicitation(session, state)
         return state, resume_message
 
 

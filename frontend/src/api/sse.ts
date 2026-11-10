@@ -63,6 +63,12 @@ export async function consumeEventStream(body: ReadableStream<Uint8Array>, onEve
 
 class EventGap extends Error {}
 
+export class RunStreamInterruptedError extends Error {
+  constructor(public runId: string, public afterSeq: number, cause: unknown) {
+    super(cause instanceof Error ? cause.message : "运行订阅暂时中断");
+  }
+}
+
 export class RunStreamHttpError extends Error {
   constructor(public status: number) { super(`恢复运行订阅失败: ${status}`); }
   get retryable() { return this.status === 408 || this.status === 429 || this.status >= 500; }
@@ -74,15 +80,18 @@ export async function consumeResumableRun(
   resume: (runId: string, afterSeq: number, signal?: AbortSignal) => Promise<ReadableStream<Uint8Array>>,
   onEvent: (event: Record<string, unknown>) => void,
   options: { sessionId?: string; runId?: string; afterSeq?: number; signal?: AbortSignal; retryDelayMs?: number; retryWindowMs?: number;
+    allowInitialSequenceOffset?: boolean;
     onTransportStatus?: (state: "reconnecting" | "connected" | "stopped") => void } = {},
 ) {
   let body: ReadableStream<Uint8Array> | undefined = initialBody;
   let runId = options.runId;
   let cursor = options.afterSeq ?? 0;
+  let initialCursorKnown = options.afterSeq !== undefined || !!options.runId;
   let completed = false;
   let callbackFailed = false;
   let outageStartedAt: number | undefined;
   let reconnecting = false;
+  let legacyAnswerAcknowledged = false;
   const transportStatus = (state: "reconnecting" | "connected" | "stopped") => {
     try { options.onTransportStatus?.(state); }
     catch (error) { callbackFailed = true; throw error; }
@@ -109,9 +118,22 @@ export async function consumeResumableRun(
           const incoming = typeof event.run_id === "string" ? event.run_id : event.type === "run_started" && typeof payload?.run_id === "string" ? payload.run_id : undefined;
           if (incoming && runId && incoming !== runId) throw new ProtocolStreamError("运行事件标识不匹配");
           runId = incoming ?? runId;
+          if (!initialCursorKnown && initialBody === body && event.type === "session_created"
+              && typeof payload?.resume_after_seq === "number" && Number.isSafeInteger(payload.resume_after_seq)
+              && payload.resume_after_seq >= 0 && runId) {
+            cursor = payload.resume_after_seq;
+            initialCursorKnown = true;
+          }
           if (typeof event.seq === "number") {
+            if (!initialCursorKnown && initialBody === body && options.allowInitialSequenceOffset && runId) {
+              cursor = Math.max(0, event.seq - 1);
+            }
+            initialCursorKnown = true;
             if (event.seq <= cursor) return;
             if (event.seq !== cursor + 1) throw new EventGap("运行事件缺少连续片段");
+          }
+          if (options.allowInitialSequenceOffset && event.type === "ask_resolved" && payload?.resume_message === "") {
+            legacyAnswerAcknowledged = true;
           }
           try { onEvent(event); } catch (error) { callbackFailed = true; throw error; }
           if (typeof event.seq === "number") {
@@ -120,17 +142,19 @@ export async function consumeResumableRun(
             attempt = 0;
             if (reconnecting) { reconnecting = false; transportStatus("connected"); }
           }
-          if (event.type === "completed" || (event.type === "error" && event.seq == null)) completed = true;
+          if ((event.type === "completed" && !payload?.historical_pause) || event.type === "stream_end"
+              || (event.type === "ask_resolved" && payload?.no_run === true)
+              || (event.type === "error" && event.seq == null)) completed = true;
           if (completed) return false;
         });
-        if (completed) return;
+        if (completed || (!runId && legacyAnswerAcknowledged)) return;
         throw new EventGap("运行流在终态前结束");
       } catch (error) {
         if (callbackFailed || options.signal?.aborted || error instanceof SyntaxError || error instanceof ProtocolStreamError
             || (error instanceof RunStreamHttpError && !error.retryable) || !runId) throw error;
         outageStartedAt ??= Date.now();
         const remaining = (options.retryWindowMs ?? 120_000) - (Date.now() - outageStartedAt);
-        if (remaining <= 0) throw error;
+        if (remaining <= 0) throw new RunStreamInterruptedError(runId, cursor, error);
         if (!reconnecting) { reconnecting = true; transportStatus("reconnecting"); }
         const delay = Math.min(remaining, options.retryDelayMs === undefined
           ? Math.min(5000, 500 * 2 ** Math.min(attempt, 4)) * (0.8 + Math.random() * 0.4)

@@ -16,6 +16,7 @@ import {
   getDownloadUrl,
   getUserLlmConfig,
   getSessionSummary,
+  getSessionElicitation,
   inspectSession,
   listSubagents,
   listFiles,
@@ -37,6 +38,7 @@ import {
   uploadSkill,
   type TranscriptChatMessage,
 } from "../api/client";
+import { RunStreamInterruptedError } from "../api/sse";
 import { ElicitationPanel } from "../components/ElicitationPanel";
 import { WorkboardDock } from "../components/WorkboardDock";
 import { ChatTimeline } from "../components/workbench/ChatTimeline";
@@ -51,6 +53,7 @@ import { useAppPreferences } from "../i18n";
 import { formatTokenCount } from "./workbench/markdown";
 import type { CommandAvailability, WorkbenchCommand } from "./workbench/commands";
 import { requestHostToolRefresh } from "./workbench/hostToolRefresh";
+import { applyLegacyQuestion, mergeElicitationSnapshot } from "./workbench/elicitation";
 import type {
   AssistantBlock,
   ChatMessage,
@@ -69,6 +72,15 @@ import type {
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 460;
 const SIDEBAR_DEFAULT_WIDTH = 280;
+
+const MODEL_FAILURE_MESSAGES: Record<string, string> = {
+  MODEL_ACCESS_DENIED: "模型服务授权不可用，请联系管理员检查权限。已有内容已保留。",
+  MODEL_CONFIGURATION_ERROR: "模型服务拒绝了请求，请联系管理员检查模型配置。已有内容已保留。",
+  MODEL_RATE_LIMITED: "模型服务持续限流，已有内容已保留。请稍后发送新消息继续。",
+  MODEL_UNAVAILABLE: "模型服务连接未能恢复，已有内容已保留。可以发送新消息重试。",
+  MODEL_RESPONSE_INVALID: "模型响应未能完整恢复，已有内容已保留。可以发送新消息重试。",
+  RUN_INTERRUPTED_RESTART: "服务重启中断了这一轮，已有内容已保留。可以发送新消息继续。",
+};
 
 const RESULT_MESSAGES: Record<string, string> = {
   incomplete: "回复未完整生成，已保留收到的内容，可继续追问",
@@ -318,6 +330,13 @@ export function WorkbenchPage({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [connectionNotice, setConnectionNotice] = useState("");
+  const [reconnectAvailable, setReconnectAvailable] = useState(false);
+  const [sessionReload, setSessionReload] = useState(0);
+  const reloadTargetRef = useRef<string | null>(null);
+  const requestSessionReload = (target: string) => {
+    reloadTargetRef.current = target;
+    setSessionReload((value) => value + 1);
+  };
     // 支持通过 ?sidebar=schedules 深链到指定工作台侧栏，便于用户和测试直达定时任务。
     const [sidebarView, setSidebarView] = useState<SidebarView>(() => {
       const view = new URLSearchParams(window.location.search).get("sidebar");
@@ -360,6 +379,7 @@ export function WorkbenchPage({
   const [childBusy, setChildBusy] = useState(false);
   const [elicitation, setElicitation] = useState<ElicitationState | null>(null);
   const [elicitationBusy, setElicitationBusy] = useState(false);
+  const submittingElicitationRef = useRef(false);
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
@@ -837,7 +857,7 @@ window.addEventListener("resize", handleResize);
     };
     setTranscriptMessages(fromTranscriptMessages(summary.transcript ?? []));
     setPendingUserEcho(null);
-    setElicitation(summary.elicitation ?? null);
+    setElicitation((current) => summary.elicitation ? mergeElicitationSnapshot(current, summary.elicitation) : null);
   };
 
   // 任务完成系统通知: 仅在用户不在场(tab 后台或嵌入式抽屉关闭)且已授权时弹出。
@@ -1023,6 +1043,8 @@ window.addEventListener("resize", handleResize);
       setLoading(false);
       return;
     }
+    const recovering = reloadTargetRef.current === targetSessionId;
+    reloadTargetRef.current = null;
 
     if (newlyCreatedSessionRef.current === targetSessionId) {
       newlyCreatedSessionRef.current = null;
@@ -1036,6 +1058,7 @@ window.addEventListener("resize", handleResize);
     setLoading(true);
     setError("");
     setConnectionNotice("");
+    setReconnectAvailable(false);
     const isChildView = Boolean(activeSubagentSessionId);
     if (!isChildView && isStreamingRef.current && returningFromSubagentRef.current) {
       returningFromSubagentRef.current = false;
@@ -1081,7 +1104,12 @@ window.addEventListener("resize", handleResize);
         void streamRunEvents(targetSessionId, activeRun.run_id, handleEvent, reconnectAbortController.signal, activeRun.last_seq ?? 0)
           .catch((streamError) => {
             if (!(streamError instanceof Error && streamError.name === "AbortError")) {
-              setError(streamError instanceof Error ? streamError.message : "恢复运行订阅失败");
+              if (streamError instanceof RunStreamInterruptedError) {
+                setConnectionNotice("连接仍未恢复，任务进度已保留。");
+                setReconnectAvailable(true);
+              } else {
+                setError(streamError instanceof Error ? streamError.message : "恢复运行订阅失败");
+              }
             }
           })
           .finally(() => {
@@ -1102,6 +1130,11 @@ window.addEventListener("resize", handleResize);
           });
       })
       .catch((loadError) => {
+        if (recovering) {
+          setConnectionNotice("暂时无法读取最新进度，当前显示的内容已保留。");
+          setReconnectAvailable(true);
+          return;
+        }
         setError(loadError instanceof Error ? loadError.message : "初始化失败");
         setTranscriptMessages([]);
         setPendingUserEcho(null);
@@ -1112,7 +1145,39 @@ window.addEventListener("resize", handleResize);
         if (!isChildView) setSubagents([]);
       })
       .finally(() => setLoading(false));
-  }, [activeSubagentSessionId, sessionId, isNewSession, localSessionId]);
+  }, [activeSubagentSessionId, sessionId, isNewSession, localSessionId, sessionReload]);
+
+  const pendingQuestionId = pendingElicitationRequest?.id;
+  useEffect(() => {
+    if (!mainSessionId || !pendingQuestionId || displayedBusy || elicitationBusy) return;
+    const controller = new AbortController();
+    let inFlight = false;
+    const poll = async () => {
+      if (document.hidden || controller.signal.aborted || inFlight) return;
+      inFlight = true;
+      try {
+        const snapshot = await getSessionElicitation(mainSessionId, controller.signal);
+        if (controller.signal.aborted || submittingElicitationRef.current || isStreamingRef.current) return;
+        const previous = snapshot.history.find((item) => item.id === pendingQuestionId);
+        setElicitation((current) => mergeElicitationSnapshot(current, snapshot));
+        if (previous?.status === "resolved") requestSessionReload(mainSessionId);
+        if (previous?.status === "cancelled") {
+          setConnectionNotice("问题已停止或超时，可以发送新消息继续。");
+        }
+      } catch {
+        // 没有确认新状态时继续保留面板与草稿，等待下一次查询。
+      } finally {
+        inFlight = false;
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 5000);
+    window.addEventListener("focus", poll);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", poll);
+    };
+  }, [mainSessionId, pendingQuestionId, displayedBusy, elicitationBusy]);
 
   useEffect(() => {
     if (!mainSessionId || !subagents.some((item) => item.status === "running")) return;
@@ -1277,7 +1342,6 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         const key = `${effectiveSessionId}:${event.run_id}`;
         const previous = eventCursorsRef.current.get(key) ?? 0;
         if (event.seq <= previous) return;
-        if (event.seq !== previous + 1) throw new Error("运行事件序号中断，请重新载入会话以恢复完整记录");
         eventCursorsRef.current.set(key, event.seq);
       }
       const eventType = String(event.type ?? "");
@@ -1293,8 +1357,8 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         contextEpoch: typeof event.context_epoch_id === "number" ? event.context_epoch_id : undefined,
       };
 
-      if (eventType === "run_started") {
-        const runId = String(payload.run_id ?? "");
+      if (eventType === "run_started" || (eventType === "run_status_changed" && payload.reason === "elicitation_resumed")) {
+        const runId = String(event.run_id ?? payload.run_id ?? "");
         if (runId) {
           activeLiveRunRef.current = { runId, assistantId };
           lastRunIdRef.current = runId;
@@ -1371,29 +1435,23 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
 
       if (eventType === "elicitation_snapshot") {
         const snapshot = payload.snapshot as ElicitationState | undefined;
-        if (snapshot) setElicitation(snapshot);
+        if (snapshot) setElicitation((current) => mergeElicitationSnapshot(current, snapshot));
         return;
       }
 
       if (eventType === "ask_requested") {
         const snapshot = payload.snapshot as ElicitationState | undefined;
         if (snapshot) {
-          setElicitation(snapshot);
+          setElicitation((current) => mergeElicitationSnapshot(current, snapshot));
         } else if (payload.request) {
-          setElicitation((current) => ({
-            session_id: effectiveSessionId,
-            revision: (current?.revision ?? 0) + 1,
-            pending: payload.request as ElicitationRequest,
-            history: current?.history ?? [],
-            updated_at: new Date().toISOString(),
-          }));
+          setElicitation((current) => applyLegacyQuestion(current, effectiveSessionId, payload.request as ElicitationRequest));
         }
         return;
       }
 
       if (eventType === "ask_resolved" || eventType === "ask_cancelled") {
         const snapshot = payload.snapshot as ElicitationState | undefined;
-        if (snapshot) setElicitation(snapshot);
+        if (snapshot) setElicitation((current) => mergeElicitationSnapshot(current, snapshot));
         return;
       }
 
@@ -1681,7 +1739,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         refs.activeContentId.value = null;
         refs.activeReasoningId.value = null;
         const retryLabel = retryReason === "upstream_status" ? "模型服务暂时不可用" : "网络中断";
-        setError(`${retryLabel}，第 ${attempt} 次重连中（${delay}秒）…`);
+        setConnectionNotice(`${retryLabel}，第 ${attempt} 次重连中（${delay}秒）…`);
         return;
       }
 
@@ -1699,6 +1757,8 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       }
 
       if (eventType === "completed") {
+        if (payload.historical_pause) return;
+        setConnectionNotice(payload.subtype === "timeout" ? "提问等待超时，可以发送新消息继续。" : "");
         const elapsedMs = Number(payload.elapsed_ms ?? 0);
         const completionSubtype = String(payload.subtype ?? "");
         const now = new Date().toISOString();
@@ -1728,26 +1788,30 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
           status: String(payload.subtype ?? "completed"),
         });
         // 正文从流式累计 ref 同步读取(React functional updater 非同步执行,不可依赖其副作用)
-        maybeNotifyCompletion(
-          completionSubtype && completionSubtype !== "success"
-            ? (RESULT_MESSAGES[completionSubtype] ?? "任务已中断")
-            : null,
-          refs.activeContentText.value,
-        );
+        if (completionSubtype !== "awaiting_user_input") {
+          maybeNotifyCompletion(
+            completionSubtype && completionSubtype !== "success"
+              ? (RESULT_MESSAGES[completionSubtype] ?? "任务已中断") : null,
+            refs.activeContentText.value,
+          );
+        }
         return;
       }
 
       if (eventType === "error") {
+        setConnectionNotice("");
+        const message = MODEL_FAILURE_MESSAGES[String(payload.error_code ?? "")]
+          ?? "当前服务暂时无法完成请求，已保留已有进度，请稍后继续。";
         appendAssistantBlock(assistantId, {
           id: `tool-error-${Date.now()}`,
           kind: "tool",
           title: "执行错误",
           meta: "error",
           argumentsText: "",
-          outputText: "当前服务暂时无法完成请求，已保留已有进度，请稍后继续。",
+          outputText: message,
           status: "done",
         });
-        setError("当前服务暂时无法完成请求，已保留已有进度，请稍后继续。");
+        setError(message);
       }
     };
   };
@@ -1847,6 +1911,7 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
     let wasAborted = false;
     let partialContent = "";
     let streamEndedWithError = false;
+    let streamDisconnected = false;
     const eventRefs = {
       activeReasoningId: {
         get value() {
@@ -1907,6 +1972,10 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       streamEndedWithError = true;
       if (chatError instanceof Error && chatError.name === "AbortError") {
         wasAborted = true;
+      } else if (chatError instanceof RunStreamInterruptedError) {
+        streamDisconnected = true;
+        setConnectionNotice("连接仍未恢复，任务进度已保留。");
+        setReconnectAvailable(true);
       } else {
         setError(chatError instanceof Error ? chatError.message : "对话执行失败");
         if (chatError instanceof ServiceRestartingError) {
@@ -1939,13 +2008,15 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
       if (wasNewSession && effectiveSessionId) {
         onSessionCreated?.(effectiveSessionId);
       }
-      notifyHost("aethercore:run-status", {
-        session_id: effectiveSessionId,
-        run_id: lastRunIdRef.current,
-        assistant_id: assistantId,
-        active: false,
-        status: wasAborted ? "aborted" : streamEndedWithError ? "error" : "completed",
-      });
+      if (!streamDisconnected) {
+        notifyHost("aethercore:run-status", {
+          session_id: effectiveSessionId,
+          run_id: lastRunIdRef.current,
+          assistant_id: assistantId,
+          active: false,
+          status: wasAborted ? "aborted" : streamEndedWithError ? "error" : "completed",
+        });
+      }
       void onSessionRefresh?.(effectiveSessionId || undefined);
       
       const currentQueue = queuedMessagesRef.current;
@@ -2162,7 +2233,12 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
   const handleElicitationSubmit = async (responses: ElicitationResponseItem[]) => {
     const effectiveSessionId = sessionId || localSessionId;
     const pendingRequest = elicitation?.pending;
-    if (!effectiveSessionId || !pendingRequest || isStreamingRef.current) return;
+    if (!effectiveSessionId || !pendingRequest || submittingElicitationRef.current) return;
+    if (isStreamingRef.current) {
+      setConnectionNotice("当前任务还在执行，结束后即可提交已填写的答案。");
+      return;
+    }
+    submittingElicitationRef.current = true;
 
     const assistantId = `assistant-ask-${Date.now()}`;
     const roundStartTime = Date.now();
@@ -2228,8 +2304,22 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
         { clientMessageId },
       );
     } catch (err) {
-      if (!(err instanceof Error && err.name === "AbortError")) {
-        setError(err instanceof Error ? err.message : "鎻愪氦鍥炵瓟澶辫触");
+      if (err instanceof RunStreamInterruptedError) {
+        setConnectionNotice("答案已提交，连接仍未恢复。");
+        setReconnectAvailable(true);
+      } else if (!(err instanceof Error && err.name === "AbortError")) {
+        setConnectionNotice(err instanceof Error ? err.message : "暂时无法提交答案，请重试。");
+        try {
+          const snapshot = await getSessionElicitation(effectiveSessionId, abortController.signal);
+          if (activeSessionIdRef.current === effectiveSessionId) {
+            setElicitation((current) => mergeElicitationSnapshot(current, snapshot));
+            if (snapshot.history.some((item) => item.id === pendingRequest.id && item.status === "resolved")) {
+              requestSessionReload(effectiveSessionId);
+            }
+          }
+        } catch {
+          // 保留草稿，用户可以重新提交；后端按问题 ID 识别重复回答。
+        }
       }
     } finally {
       setTranscriptMessages((current) =>
@@ -2244,6 +2334,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
       pendingAssistantIdRef.current = null;
       setBusy(false);
       setElicitationBusy(false);
+      submittingElicitationRef.current = false;
       setPendingUserEcho((current) => (current?.id === clientMessageId ? null : current));
       void onSessionRefresh?.(effectiveSessionId);
     }
@@ -2584,7 +2675,10 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           </div>
         </header>
 
-        {connectionNotice ? <div className="connection-notice" role="status">{connectionNotice}</div> : null}
+        {connectionNotice ? <div className="connection-notice" role="status">
+          {connectionNotice}
+          {reconnectAvailable && <button type="button" onClick={() => requestSessionReload(activeSessionId)}>重新连接</button>}
+        </div> : null}
         {error ? <div className="error-toast anim-shake">{error}</div> : null}
 
         <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll} onWheel={handleHistoryWheel}>
@@ -2617,7 +2711,8 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           />
           <ElicitationPanel
             request={pendingElicitationRequest}
-            busy={displayedBusy || elicitationBusy}
+            busy={elicitationBusy}
+            waitingForRun={displayedBusy}
             onSubmit={(responses) => void handleElicitationSubmit(responses)}
           />
         </div>

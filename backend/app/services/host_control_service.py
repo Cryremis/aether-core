@@ -13,6 +13,7 @@ from app.schemas.host import (
 )
 from app.schemas.platform import ConversationSummary
 from app.services.agent_run_service import agent_run_service
+from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.transcript_service import transcript_service
 from app.services.store import store_service
@@ -227,7 +228,34 @@ class HostControlService:
         limit: int,
     ) -> list[dict[str, Any]]:
         run = self.get_run(platform=platform, run_id=run_id)
-        return store_service.list_agent_run_events(run_id, after_seq=after_seq, limit=limit)
+        rows = store_service.list_agent_run_events(run_id, after_seq=after_seq, limit=limit)
+        run = store_service.get_agent_run(run_id) or run
+        resolved = self.closed_question_ids(str(run["session_id"])) if any(row["type"] == "ask_requested" for row in rows) else set()
+        for row in rows:
+            row["type"], row["payload"] = self.project_replayed_interaction(
+                row["type"], row["payload"], row["seq"], run, resolved,
+            )
+        return rows
+
+    @staticmethod
+    def closed_question_ids(session_id: str) -> set[str]:
+        session = session_service.get_or_create(session_id)
+        return {item.id for item in runtime_state_service.get_elicitation(session).history
+                if item.status in {"resolved", "cancelled"}}
+
+    @staticmethod
+    def project_replayed_interaction(
+        event_type: str, payload: dict, seq: int, run: dict, closed_questions: set[str],
+    ) -> tuple[str, dict]:
+        """旧宿主把任意 completed 当作本次连接的停止信号，历史帧保留序号并转成状态通知。"""
+        if agent_run_service.is_historical_pause(event_type, payload, seq, run):
+            return "run_status_changed", {**payload, "reason": "historical_pause"}
+        if event_type == "ask_requested":
+            request = payload.get("request")
+            request_id = (request.get("id") if isinstance(request, dict) else None) or payload.get("request_id")
+            if isinstance(request_id, str) and request_id in closed_questions:
+                return "run_status_changed", {"reason": "historical_question", "request_id": request_id}
+        return event_type, payload
 
     async def cancel_run(self, *, platform: dict, run_id: str) -> dict[str, Any]:
         run = self.get_run(platform=platform, run_id=run_id)

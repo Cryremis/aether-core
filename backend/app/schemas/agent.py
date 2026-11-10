@@ -48,6 +48,7 @@ class AgentEvent(BaseModel):
         "run_started",
         "assistant_visible_started",
         "stream_retry",
+        "stream_end",
         "artifact_created",
         "files_snapshot",
         "runtime_created",

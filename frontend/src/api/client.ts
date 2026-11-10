@@ -1,4 +1,4 @@
-import { consumeResumableRun, RunStreamHttpError } from "./sse";
+import { consumeResumableRun, RunStreamHttpError, RunStreamInterruptedError } from "./sse";
 
 export class ServiceRestartingError extends Error {}
 
@@ -2012,6 +2012,12 @@ export async function streamChat(
   );
 }
 
+export async function getSessionElicitation(sessionId: string, signal?: AbortSignal): Promise<ElicitationState> {
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/elicitation`, { signal });
+  if (!response.ok) throw new Error(await readErrorMessage(response, "读取提问状态失败"));
+  return (await response.json()).data;
+}
+
 export async function streamElicitationResponse(
   sessionId: string,
   requestId: string,
@@ -2025,6 +2031,7 @@ export async function streamElicitationResponse(
     { responses, client_message_id: options?.clientMessageId ?? null },
     onEvent,
     abortSignal,
+    { sessionId, allowInitialSequenceOffset: true },
   );
 }
 
@@ -2033,6 +2040,7 @@ async function streamSse(
   payload: Record<string, unknown>,
   onEvent: (event: Record<string, unknown>) => void,
   abortSignal?: AbortSignal,
+  options?: { sessionId: string; allowInitialSequenceOffset?: boolean },
 ) {
   const headers = new Headers({ "Content-Type": "application/json" });
   const token = getAccessToken();
@@ -2055,11 +2063,12 @@ async function streamSse(
     }
 
     streamOpened = true;
-    await consumeResumableRun(response.body, (id, cursor, signal) => resumeRunBody(String(payload.session_id ?? path.split("/")[2]), id, cursor, signal), onEvent,
-      { sessionId: typeof payload.session_id === "string" ? payload.session_id : undefined, signal: abortSignal,
+    const sessionId = options?.sessionId ?? (typeof payload.session_id === "string" ? payload.session_id : undefined);
+    await consumeResumableRun(response.body, (id, cursor, signal) => resumeRunBody(sessionId!, id, cursor, signal), onEvent,
+      { sessionId, signal: abortSignal, allowInitialSequenceOffset: options?.allowInitialSequenceOffset,
         onTransportStatus: (state) => onEvent({ type: "transport_status", payload: { state } }) });
   } catch (error) {
-    if (error instanceof ServiceRestartingError) throw error;
+    if (error instanceof ServiceRestartingError || error instanceof RunStreamInterruptedError) throw error;
     if (error instanceof Error && error.name === "AbortError") {
       throw error;
     }

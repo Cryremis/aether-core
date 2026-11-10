@@ -389,7 +389,7 @@ async def stream_host_run_events(
     platform: dict = Depends(require_platform_secret),
 ):
     try:
-        host_control_service.get_run(platform=platform, run_id=run_id)
+        run = host_control_service.get_run(platform=platform, run_id=run_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="运行不存在") from exc
 
@@ -417,8 +417,16 @@ async def stream_host_run_events(
                 if seq > last_seq:
                     events_by_seq[seq] = event
 
+            current_run = store_service.get_agent_run(run_id) or run
+            closed_questions = (await durable_io(host_control_service.closed_question_ids, str(current_run["session_id"]))
+                                if any(event.type == "ask_requested" for event in events_by_seq.values()) else set())
             for seq in sorted(events_by_seq):
                 event = events_by_seq[seq]
+                event_type, payload = host_control_service.project_replayed_interaction(
+                    event.type, event.payload, seq, current_run, closed_questions,
+                )
+                if event_type != event.type:
+                    event = event.model_copy(update={"type": event_type, "payload": payload})
                 last_seq = seq
                 yield _sse(event)
                 if event.type == "completed":

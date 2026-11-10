@@ -2331,6 +2331,7 @@ class StoreService:
                 error = {
                     "message": "服务重启导致任务中断",
                     "recovered": True,
+                    "error_code": "RUN_INTERRUPTED_RESTART",
                 }
                 seq = int(row["event_cursor"]) + 1
                 update_result = conn.execute(
@@ -2421,7 +2422,7 @@ class StoreService:
             row = conn.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
 
-    def cancel_orphan_agent_run(self, run_id: str) -> dict[str, Any] | None:
+    def cancel_orphan_agent_run(self, run_id: str, *, waiting_only: bool = False) -> dict[str, Any] | None:
         """取消已无内存 worker 的 active run，并原子写入终态事件。"""
         now = utcnow_iso()
         with self._connect(independent=True) as conn:
@@ -2430,9 +2431,12 @@ class StoreService:
                 """
                 SELECT event_cursor FROM agent_runs
                 WHERE run_id = ? AND status IN ('queued', 'running', 'waiting_input')
+                  AND (? = 0 OR status = 'waiting_input')
                 """,
-                (run_id,),
+                (run_id, int(waiting_only)),
             ).fetchone()
+            if waiting_only and row is None:
+                return None
             if row is not None:
                 seq = int(row["event_cursor"]) + 1
                 conn.execute(
@@ -2500,17 +2504,20 @@ class StoreService:
     def timeout_waiting_agent_run(self, run_id: str, *, timeout_seconds: int) -> dict[str, Any] | None:
         """将超时等待用户输入的 run 原子收敛为 cancelled。"""
         now = utcnow_iso()
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(1, timeout_seconds))).isoformat()
         with self._connect(independent=True) as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
                 SELECT event_cursor FROM agent_runs
                 WHERE run_id = ? AND status = 'waiting_input'
+                  AND COALESCE((SELECT MAX(created_at) FROM run_events WHERE run_id = agent_runs.run_id),
+                               agent_runs.created_at) <= ?
                 """,
-                (run_id,),
+                (run_id, cutoff),
             ).fetchone()
             if row is None:
-                return self.get_agent_run(run_id)
+                return None
             seq = int(row["event_cursor"]) + 1
             conn.execute(
                 """
@@ -2553,19 +2560,22 @@ class StoreService:
             )
         return self.get_agent_run(run_id)
 
-    def resume_waiting_agent_run(self, run_id: str) -> dict[str, Any] | None:
+    def resume_waiting_agent_run(self, run_id: str, *, timeout_seconds: int) -> dict[str, Any] | None:
         """原子恢复等待用户输入的 run，避免与超时回收或重复应答竞争。"""
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(1, timeout_seconds))).isoformat()
         with self._connect() as conn:
             updated = conn.execute(
                 """
                 UPDATE agent_runs
                 SET status = 'running'
                 WHERE run_id = ? AND status = 'waiting_input'
+                  AND COALESCE((SELECT MAX(created_at) FROM run_events WHERE run_id = agent_runs.run_id),
+                               agent_runs.created_at) > ?
                 """,
-                (run_id,),
+                (run_id, cutoff),
             )
             if updated.rowcount == 0:
-                return self.get_agent_run(run_id)
+                return None
         return self.get_agent_run(run_id)
 
     def fail_agent_run(self, run_id: str, *, message: str, interrupt_point: str = "run_finalize_failed") -> dict[str, Any] | None:

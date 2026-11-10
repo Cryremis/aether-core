@@ -79,6 +79,8 @@ class ElicitationRequest(BaseModel):
     updated_at: str = Field(default_factory=utc_now_iso)
     resolved_at: str | None = None
     cancelled_at: str | None = None
+    resume_run_id: str | None = None
+    resume_after_seq: int | None = None
     answers: list[ElicitationAnswer] = Field(default_factory=list)
 
 

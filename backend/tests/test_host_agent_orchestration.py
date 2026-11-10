@@ -158,6 +158,45 @@ def test_host_run_event_stream_replays_after_requested_sequence(tmp_path):
     assert "stream_end" in response.text
 
 
+def test_host_replay_crosses_legacy_pause_with_contiguous_cursor(tmp_path):
+    initialize_isolated_runtime(tmp_path)
+    platform = create_platform()
+    conversation = store_service.create_conversation(
+        session_id="sess_host_historical_pause", title="Host history", host_name="Test",
+        platform_id=platform["platform_id"], external_user_id="host-history-user",
+    )
+    run_id = "run_host_historical_pause"
+    store_service.create_agent_run(
+        run_id=run_id, session_id=conversation["session_id"], conversation_id=conversation["conversation_id"],
+        status="running",
+    )
+    session = session_service.get_or_create(conversation["session_id"])
+    runtime_state_service.request_user_input(session, {
+        "id": "old-question", "title": "继续？", "questions": [{"id": "q", "header": "继续", "question": "继续？"}],
+    })
+    runtime_state_service.resolve_elicitation(session, "old-question", [])
+    for event_type, payload, status in (
+        ("ask_requested", {"request": {"id": "old-question"}}, None),
+        ("completed", {"subtype": "awaiting_user_input"}, "waiting_input"),
+        ("run_status_changed", {"reason": "elicitation_resumed"}, "running"),
+        ("content_delta", {"delta": "continued"}, None),
+        ("completed", {"subtype": "success"}, "completed"),
+    ):
+        store_service.append_agent_run_event(run_id=run_id, event_type=event_type, payload=payload, status=status)
+
+    client = TestClient(app)
+    path = f"/api/v1/host/runs/{run_id}/events"
+    headers = {"X-Aether-Platform-Secret": platform["host_secret"]}
+    page = client.get(path, headers=headers).json()["data"]["items"]
+    assert [item["seq"] for item in page] == [1, 2, 3, 4, 5]
+    assert [item["type"] for item in page] == ["run_status_changed"] * 3 + ["content_delta", "completed"]
+    stream = client.get(path + "/stream", headers=headers)
+    assert stream.status_code == 200
+    assert stream.text.count("event: completed") == 1
+    assert all(f"id: {seq}\n" in stream.text for seq in range(1, 6))
+    assert "historical_question" in stream.text and "continued" in stream.text
+
+
 def test_host_run_event_stream_pushes_live_events_and_cleans_subscription(
     tmp_path,
     monkeypatch,

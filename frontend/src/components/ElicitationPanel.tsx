@@ -12,6 +12,7 @@ type DraftAnswer = {
 type ElicitationPanelProps = {
   request: ElicitationRequest | null;
   busy: boolean;
+  waitingForRun?: boolean;
   onSubmit: (responses: ElicitationResponseItem[]) => void;
 };
 
@@ -30,7 +31,7 @@ function kindLabel(kind: ElicitationRequest["kind"]) {
   }
 }
 
-export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelProps) {
+export function ElicitationPanel({ request, busy, waitingForRun = false, onSubmit }: ElicitationPanelProps) {
   const [drafts, setDrafts] = useState<Record<string, DraftAnswer>>({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 
@@ -71,7 +72,7 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
   }
 
   function skipQuestion() {
-    if (busy) return;
+    if (busy || (isLastQuestion && waitingForRun)) return;
     const questionId = questions[questionIndex].id;
     setDrafts((current) => ({
       ...current,
@@ -88,12 +89,13 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
     <section className="elicitation-panel">
       <div className="elicitation-panel__header">
         <div>
-          <span className="elicitation-panel__eyebrow">需要你的回答</span>
+          <span className="elicitation-panel__eyebrow">{request.blocking ? "需要你的回答" : "后台提问 · AI 会继续执行"}</span>
           <h3>{request.title}</h3>
           {request.preview_text ? <p>{request.preview_text}</p> : null}
         </div>
         <span className={`elicitation-panel__kind elicitation-panel__kind--${request.kind}`}>{kindLabel(request.kind)}</span>
       </div>
+      {waitingForRun && <p className="connection-notice" role="status">可以先填写答案，当前任务结束后即可提交。</p>}
       <div className="elicitation-panel__questions">
         {request.questions.slice(questionIndex, questionIndex + 1).map((question) => {
           const draft = drafts[question.id] ?? { selected_options: [], other_text: "", notes: "" };
@@ -213,7 +215,7 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
           <button
             type="button"
             className="elicitation-panel__skip"
-            disabled={busy}
+            disabled={busy || (isLastQuestion && waitingForRun)}
             onClick={skipQuestion}
             title={isLastQuestion ? "不回答本题并提交已有回答" : "不回答本题，前往下一题"}
           >
@@ -223,14 +225,14 @@ export function ElicitationPanel({ request, busy, onSubmit }: ElicitationPanelPr
           <button
             type="button"
             className="elicitation-panel__submit"
-            disabled={busy}
+            disabled={busy || (isLastQuestion && waitingForRun)}
             onClick={() => {
               if (busy) return;
               if (!isLastQuestion) { setCurrentQuestionIndex(questionIndex + 1); return; }
               onSubmit(buildResponses());
             }}
           >
-            {busy ? "提交中…" : isLastQuestion ? "提交回答" : "下一题"}
+            {busy ? "提交中…" : isLastQuestion && waitingForRun ? "等待当前任务结束" : isLastQuestion ? "提交回答" : "下一题"}
           </button>
         </div>
       </div>

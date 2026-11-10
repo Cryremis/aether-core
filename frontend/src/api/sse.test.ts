@@ -31,6 +31,57 @@ const eventBody = (events: Record<string, unknown>[]) => new ReadableStream<Uint
 } });
 
 describe("durable run replay", () => {
+  it("starts a blocking response at the pause cursor and reconnects without stopping on a historical pause", async () => {
+    const pause = { type: "completed", run_id: "run", seq: 807, payload: { subtype: "awaiting_user_input", historical_pause: true } };
+    const resumed = { type: "run_status_changed", run_id: "run", seq: 808 };
+    const resume = vi.fn(async (_runId: string, _cursor: number) => eventBody([
+      pause, resumed, { type: "content_delta", run_id: "run", seq: 809 },
+      { type: "completed", run_id: "run", seq: 810 },
+    ]));
+    const seen: number[] = [];
+    await consumeResumableRun(eventBody([
+      { type: "session_created", run_id: "run", payload: { resume_after_seq: 806 } }, pause, resumed,
+    ]), resume, (event) => { if (typeof event.seq === "number") seen.push(event.seq); }, { retryDelayMs: 0 });
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(resume.mock.calls[0]).toEqual(["run", 808, expect.any(AbortSignal)]);
+    expect(seen).toEqual([807, 808, 809, 810]);
+  });
+
+  it("accepts the first offset only on legacy answer POSTs and recognizes an old duplicate acknowledgment", async () => {
+    const resume = vi.fn();
+    const seen: number[] = [];
+    await consumeResumableRun(eventBody([
+      { type: "run_status_changed", run_id: "run", seq: 1502 },
+      { type: "completed", run_id: "run", seq: 1503 },
+    ]), resume, (event) => seen.push(event.seq as number), { allowInitialSequenceOffset: true });
+    await consumeResumableRun(eventBody([{ type: "ask_resolved", payload: { resume_message: "" } }]),
+      resume, () => {}, { allowInitialSequenceOffset: true });
+    expect(seen).toEqual([1502, 1503]);
+    expect(resume).not.toHaveBeenCalled();
+  });
+
+  it("does not start the reconnect window while an open run is quiet for more than two minutes", async () => {
+    vi.useFakeTimers();
+    try {
+      const resume = vi.fn();
+      const events = vi.fn();
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        const encoder = new TextEncoder();
+        controller.enqueue(encoder.encode('data: {"run_id":"r","seq":1,"type":"run_started"}\n\n'));
+        setTimeout(() => controller.enqueue(encoder.encode(": heartbeat\n\n")), 60_000);
+        setTimeout(() => {
+          controller.enqueue(encoder.encode('data: {"run_id":"r","seq":2,"type":"completed"}\n\n'));
+          controller.close();
+        }, 130_000);
+      } });
+      const pending = consumeResumableRun(body, resume, events);
+      await vi.advanceTimersByTimeAsync(130_000);
+      await pending;
+      expect(events).toHaveBeenCalledTimes(2);
+      expect(resume).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("survives more than three unavailable subscriptions without duplicating events", async () => {
     let attempts = 0;
     const statuses: string[] = [];

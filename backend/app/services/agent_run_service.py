@@ -8,7 +8,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 from weakref import WeakValueDictionary
 
 from app.runtime.engine import agent_engine
@@ -45,7 +45,11 @@ class LiveRunState:
 HOST_EVENT_QUEUE_LIMIT = 4096
 
 
-class ElicitationResumeConflict(RuntimeError):
+class AgentRunBusy(RuntimeError):
+    """Another run owns this session."""
+
+
+class ElicitationResumeConflict(AgentRunBusy):
     """The elicitation cannot be resumed because another run owns the session."""
 
 
@@ -60,6 +64,7 @@ class AgentRunService:
         self._session_runs: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._publish_locks = WeakValueDictionary()
+        self._resume_admissions: dict[str, asyncio.Event] = {}
         self._view_lock = threading.Lock()
         self._waiting_input_sweeper_task: asyncio.Task[None] | None = None
 
@@ -95,19 +100,21 @@ class AgentRunService:
         for run in store_service.find_expired_waiting_agent_runs(timeout):
             run_id = str(run["run_id"])
             try:
-                updated = store_service.timeout_waiting_agent_run(run_id, timeout_seconds=timeout)
-                if updated is None or updated.get("status") != "cancelled":
-                    continue
-                session = session_service.get_or_create(str(run["session_id"]))
-                runtime_state_service.settle_timed_out_run(session)
-                session.finish_run(run_id)
-                session.active_run_view = None
-                session_service.persist(session)
-                expired += 1
-                logger.info("Expired waiting agent run %s after %s seconds", run_id, timeout)
+                expired += int(self._expire_waiting_run(run_id, str(run["session_id"]), timeout))
             except Exception:
                 logger.exception("Failed to expire waiting agent run %s", run_id)
         return expired
+
+    def _expire_waiting_run(self, run_id: str, session_id: str, timeout: int) -> bool:
+        if store_service.timeout_waiting_agent_run(run_id, timeout_seconds=timeout) is None:
+            return False
+        session = session_service.get_or_create(session_id)
+        runtime_state_service.settle_timed_out_run(session)
+        session.finish_run(run_id)
+        session.active_run_view = None
+        session_service.persist(session)
+        logger.info("Expired waiting agent run %s after %s seconds", run_id, timeout)
+        return True
 
     async def _sweep_waiting_inputs(self) -> None:
         while True:
@@ -132,14 +139,19 @@ class AgentRunService:
         idempotency_key: str | None = None,
         visible_user_message: bool = True,
         user_message_kind: str = "user",
+        emit_started: bool = False,
+        before_admission: Callable[[], None] | None = None,
+        on_admitted: Callable[[str, int], None] | None = None,
     ) -> str:
         async with self._lock:
             existing_run_id = self._session_runs.get(session.session_id)
             if existing_run_id and existing_run_id in self._runs:
-                raise RuntimeError("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
+                raise AgentRunBusy("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
             # 内存状态只覆盖当前进程；数据库状态是跨进程、跨重启的最终并发护栏。
             if store_service.get_active_agent_run_for_session(session.session_id) is not None:
-                raise RuntimeError("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
+                raise AgentRunBusy("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
+            if before_admission is not None:
+                before_admission()
 
             run_id = f"run_{uuid.uuid4().hex}"
             started_at = _utcnow_iso()
@@ -176,6 +188,8 @@ class AgentRunService:
                 },
             }
             try:
+                if on_admitted is not None:
+                    on_admitted(run_id, 0)
                 await session_service.persist_async(session)
             except (Exception, asyncio.CancelledError):
                 session.active_run_view = None
@@ -192,6 +206,7 @@ class AgentRunService:
                     reasoning_effort=reasoning_effort,
                     visible_user_message=visible_user_message,
                     user_message_kind=user_message_kind,
+                    emit_started=emit_started,
                 ),
                 label="agent_runs",
             )
@@ -209,6 +224,9 @@ class AgentRunService:
         request_id: str,
         client_message_id: str | None = None,
         reasoning_effort: str | None = None,
+        blocking: bool | None = None,
+        before_admission: Callable[[], None] | None = None,
+        on_admitted: Callable[[str, int], None] | None = None,
     ) -> tuple[str, int]:
         """恢复提问后的执行，并返回 run 与恢复事件序号。
 
@@ -216,96 +234,117 @@ class AgentRunService:
         非阻塞提问没有挂起 run，则按普通后台 run 建立新记录。
         """
         active_run = store_service.get_active_agent_run_for_session(session.session_id)
-        if active_run is not None and active_run.get("status") == "waiting_input":
+        if blocking is not False and active_run is not None and active_run.get("status") == "waiting_input":
             run_id = str(active_run["run_id"])
-            async with self._lock:
-                if self._session_runs.get(session.session_id) is not None:
-                    raise ElicitationResumeConflict("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
-                resumed_run = store_service.resume_waiting_agent_run(run_id)
-                if resumed_run is None or resumed_run.get("status") != "running":
-                    raise ElicitationResumeConflict("提问已被处理或已过期，请重新发起对话。")
+            closing = self._runs.get(run_id)
+            if closing is not None:
+                await asyncio.shield(closing.task)
+            admission = None
+            try:
+                async with self._lock:
+                    if self._session_runs.get(session.session_id) is not None:
+                        raise ElicitationResumeConflict("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
+                    if before_admission is not None:
+                        before_admission()
+                    timeout = settings.agent_waiting_input_timeout_seconds
+                    resumed_run = store_service.resume_waiting_agent_run(run_id, timeout_seconds=timeout)
+                    if resumed_run is None:
+                        self._expire_waiting_run(run_id, session.session_id, timeout)
+                        raise ElicitationResumeConflict("该问题已处理、停止或超时。可刷新会话查看状态，或发送新消息继续。")
 
-                started_at = _utcnow_iso()
-                session.active_run_view = {
-                    "run_id": run_id,
-                    "session_id": session.session_id,
-                    "status": "running",
-                    "started_at": started_at,
-                    "updated_at": started_at,
-                    "assistant": {
-                        "id": f"live-{run_id}",
-                        "role": "assistant",
-                        "blocks": [],
-                        "elapsedMs": None,
-                        "streaming": True,
-                        "response_started_at": None,
-                    },
-                }
+                    admission = asyncio.Event()
+                    self._resume_admissions[run_id] = admission
+                    started_at = _utcnow_iso()
+                    session.active_run_view = {
+                        "run_id": run_id,
+                        "session_id": session.session_id,
+                        "status": "running",
+                        "started_at": started_at,
+                        "updated_at": started_at,
+                        "assistant": {
+                            "id": f"live-{run_id}",
+                            "role": "assistant",
+                            "blocks": [],
+                            "elapsedMs": None,
+                            "streaming": True,
+                            "response_started_at": None,
+                        },
+                    }
+                    try:
+                        if on_admitted is not None:
+                            on_admitted(run_id, int(resumed_run["event_cursor"]))
+                        await session_service.persist_async(session)
+                    except (Exception, asyncio.CancelledError):
+                        logger.exception("Failed to persist session before resuming agent run %s", run_id)
+                        session.active_run_view = None
+                        store_service.fail_agent_run(
+                            run_id,
+                            message="恢复提问前会话持久化失败",
+                            interrupt_point="resume_persist_failed",
+                        )
+                        raise
+
                 try:
-                    await session_service.persist_async(session)
-                except (Exception, asyncio.CancelledError):
-                    logger.exception("Failed to persist session before resuming agent run %s", run_id)
-                    session.active_run_view = None
-                    store_service.fail_agent_run(
-                        run_id,
-                        message="恢复提问前会话持久化失败",
-                        interrupt_point="resume_persist_failed",
+                    resume_event = AgentEvent(
+                        type="run_status_changed",
+                        session_id=session.session_id,
+                        payload={
+                            "status": "running",
+                            "reason": "elicitation_resumed",
+                            "request_id": request_id,
+                            "client_message_id": client_message_id,
+                        },
                     )
+                    resume_seq = await self._publish(run_id, resume_event)
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Failed to publish resume event for agent run %s", run_id)
+                    session.active_run_view = None
+                    try:
+                        await session_service.persist_async(session)
+                    except Exception:
+                        logger.exception("Failed to persist session before failing agent run %s", run_id)
+                    finally:
+                        store_service.fail_agent_run(
+                            run_id,
+                            message="恢复提问后运行失败",
+                            interrupt_point="resume_event_publish_failed",
+                        )
                     raise
 
-            try:
-                resume_event = AgentEvent(
-                    type="run_status_changed",
-                    session_id=session.session_id,
-                    payload={
-                        "status": "running",
-                        "reason": "elicitation_resumed",
-                        "request_id": request_id,
-                        "client_message_id": client_message_id,
-                    },
-                )
-                resume_seq = await self._publish(run_id, resume_event)
-            except (Exception, asyncio.CancelledError):
-                logger.exception("Failed to publish resume event for agent run %s", run_id)
-                session.active_run_view = None
-                try:
-                    await session_service.persist_async(session)
-                except Exception:
-                    logger.exception("Failed to persist session before failing agent run %s", run_id)
-                finally:
-                    store_service.fail_agent_run(
-                        run_id,
-                        message="恢复提问后运行失败",
-                        interrupt_point="resume_event_publish_failed",
+                async with self._lock:
+                    if self._session_runs.get(session.session_id) is not None:
+                        store_service.fail_agent_run(
+                            run_id,
+                            message="恢复提问时发生会话运行冲突",
+                            interrupt_point="resume_session_conflict",
+                        )
+                        raise ElicitationResumeConflict("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
+                    task = lifecycle_service.create_task(
+                        self._drive_run(
+                            run_id,
+                            session,
+                            resume_message,
+                            client_message_id=client_message_id,
+                            reasoning_effort=reasoning_effort,
+                            visible_user_message=False,
+                            user_message_kind="elicitation_resume",
+                        ),
+                        label="agent_runs",
                     )
-                raise
+                    state = LiveRunState(run_id=run_id, session_id=session.session_id, task=task)
+                    state.history.append(resume_event)
+                    self._runs[run_id] = state
+                    self._session_runs[session.session_id] = run_id
+                return run_id, resume_seq
+            finally:
+                if admission is not None:
+                    self._resume_admissions.pop(run_id, None)
+                    admission.set()
 
-            async with self._lock:
-                if self._session_runs.get(session.session_id) is not None:
-                    store_service.fail_agent_run(
-                        run_id,
-                        message="恢复提问时发生会话运行冲突",
-                        interrupt_point="resume_session_conflict",
-                    )
-                    raise ElicitationResumeConflict("当前会话已有执行中的任务，请等待当前任务结束后再继续。")
-                task = lifecycle_service.create_task(
-                    self._drive_run(
-                        run_id,
-                        session,
-                        resume_message,
-                        client_message_id=client_message_id,
-                        reasoning_effort=reasoning_effort,
-                        visible_user_message=False,
-                        user_message_kind="elicitation_resume",
-                    ),
-                    label="agent_runs",
-                )
-                state = LiveRunState(run_id=run_id, session_id=session.session_id, task=task)
-                state.history.append(resume_event)
-                self._runs[run_id] = state
-                self._session_runs[session.session_id] = run_id
-            return run_id, resume_seq
-
+        if blocking:
+            if active_run is not None:
+                raise ElicitationResumeConflict("当前任务正在切换状态，请等待会话进入提问后重试。")
+            raise ElicitationResumeConflict("该问题已停止或超时。可发送新消息继续。")
         run_id = await self.start_chat_run(
             session,
             resume_message,
@@ -313,6 +352,9 @@ class AgentRunService:
             reasoning_effort=reasoning_effort,
             visible_user_message=False,
             user_message_kind="elicitation_resume",
+            emit_started=True,
+            before_admission=before_admission,
+            on_admitted=on_admitted,
         )
         return run_id, 0
 
@@ -350,11 +392,17 @@ class AgentRunService:
         不会填满有界队列，也避免在锁内等待消费者导致死锁。
         """
         queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue(maxsize=HOST_EVENT_QUEUE_LIMIT)
-        async with self._lock:
-            state = self._runs.get(run_id)
-            if state is not None:
-                state.subscribers.add(queue)
-                return queue, True
+        while True:
+            async with self._lock:
+                state = self._runs.get(run_id)
+                if state is not None:
+                    state.subscribers.add(queue)
+                    return queue, True
+                admission = self._resume_admissions.get(run_id)
+            if admission is None:
+                break
+            # 重复提交可能在持久化应答之后、worker 注册之前收到同一个 run ID。
+            await admission.wait()
 
         run = store_service.get_agent_run(run_id)
         if run is None:
@@ -379,8 +427,32 @@ class AgentRunService:
             await state.task
         return self.get_run_view(run_id) or {}
 
+    @staticmethod
+    def is_historical_pause(event_type: str, payload: dict, seq: int, run: dict) -> bool:
+        if event_type != "completed":
+            return False
+        subtype = payload.get("subtype")
+        status = run.get("status")
+        if subtype == "awaiting_user_input":
+            return seq < int(run.get("event_cursor") or 0) or status == "running"
+        # 超时现在原子关闭 run；只兼容仍标记为 active 的历史记录。
+        return subtype == "timeout" and status in store_service.ACTIVE_AGENT_RUN_STATUSES
+
     async def abort_session(self, session: AgentSession) -> dict[str, Any]:
         """复用上游取消流程，在确认收尾后返回清单和提问状态。"""
+        active = store_service.get_active_agent_run_for_session(session.session_id)
+        if active is not None and active["status"] == "waiting_input":
+            waiting_run_id = str(active["run_id"])
+            cancelled = store_service.cancel_orphan_agent_run(waiting_run_id, waiting_only=True)
+            if cancelled is not None:
+                board, elicitation = runtime_state_service.settle_stopped_run(session)
+                await session_service.persist_async(session)
+                return {"success": True, "run_id": waiting_run_id, "status": "stopped", "partial_content": "",
+                        "workboard": board.model_dump(mode="json"), "elicitation": elicitation.model_dump(mode="json")}
+        if active is not None:
+            admission = self._resume_admissions.get(str(active["run_id"]))
+            if admission is not None:
+                await admission.wait()
         run_id = self._session_runs.get(session.session_id)
         state = self._runs.get(run_id) if run_id else None
         if state is not None:
@@ -481,6 +553,13 @@ class AgentRunService:
         with self._view_lock:
             return copy.deepcopy(session.active_run_view)
 
+    def get_answerable_elicitation(self, session: AgentSession):
+        state = runtime_state_service.get_elicitation(session)
+        if state.pending and state.pending.blocking and store_service.get_active_agent_run_for_session(session.session_id) is None:
+            # 强制退出可能发生在问题落盘之后、waiting_input 边界提交之前。
+            return runtime_state_service.cancel_pending_elicitation(session, state.pending.id)
+        return state
+
     def get_session_run_id(self, session_id: str) -> str | None:
         return self._session_runs.get(session_id)
 
@@ -495,9 +574,12 @@ class AgentRunService:
         reasoning_effort: str | None = None,
         visible_user_message: bool = True,
         user_message_kind: str = "user",
+        emit_started: bool = False,
     ) -> None:
         terminal_event = None
         try:
+            if emit_started:
+                await self._publish(run_id, make_event(session, "run_started", run_id=run_id))
             async for event in agent_engine.stream_chat(
                 session,
                 message,
