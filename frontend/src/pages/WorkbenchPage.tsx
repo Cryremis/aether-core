@@ -17,6 +17,7 @@ import {
   getUserLlmConfig,
   getSessionSummary,
   getSessionElicitation,
+  getCrossChatInbox,
   inspectSession,
   listSubagents,
   listFiles,
@@ -27,6 +28,7 @@ import {
   streamChat,
   streamRunEvents,
   ServiceRestartingError,
+  SessionRunConflictError,
   type ActiveRunSummary,
   type CommittedChatMessage,
   type SubagentRunSummary,
@@ -47,6 +49,7 @@ import { ContextStatusPill } from "../components/workbench/ContextStatusPill";
 import { LlmConfigDialog } from "../components/workbench/LlmConfigDialog";
 import { PersonalSettingsDialog } from "../components/workbench/PersonalSettingsDialog";
 import { SessionInspectionDialog } from "../components/workbench/SessionInspectionDialog";
+import { CrossChatDeliveriesDialog } from "../components/workbench/CrossChatDeliveriesDialog";
 import { WorkbenchIcons as Icons } from "../components/workbench/WorkbenchIcons";
 import { WorkbenchSidebar } from "../components/workbench/WorkbenchSidebar";
 import { useAppPreferences } from "../i18n";
@@ -333,6 +336,7 @@ export function WorkbenchPage({
   const [reconnectAvailable, setReconnectAvailable] = useState(false);
   const [sessionReload, setSessionReload] = useState(0);
   const reloadTargetRef = useRef<string | null>(null);
+  const crossChatInboxRef = useRef<{ sessionId: string; cursor: string | null } | null>(null);
   const requestSessionReload = (target: string) => {
     reloadTargetRef.current = target;
     setSessionReload((value) => value + 1);
@@ -384,6 +388,7 @@ export function WorkbenchPage({
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
   const [inspection, setInspection] = useState<{ sessionId: string; resource: "context/status" | "tools" } | null>(null);
+  const [deliverySessionId, setDeliverySessionId] = useState<string | null>(null);
   const [refreshNotice, setRefreshNotice] = useState<{ sessionId: string; text: string } | null>(null);
   const [refreshingTools, setRefreshingTools] = useState<string | null>(null);
   const toolRefreshRef = useRef<string | null>(null);
@@ -913,8 +918,12 @@ window.addEventListener("resize", handleResize);
         last_api_usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       };
       active_run?: ActiveRunSummary | null;
+      cross_chat_inbox_cursor?: string | null;
       subagents?: SubagentRunSummary[];
     };
+    if (activeSessionIdRef.current === nextSessionId) {
+      crossChatInboxRef.current = { sessionId: nextSessionId, cursor: summary.cross_chat_inbox_cursor ?? null };
+    }
     const transcriptMessages = fromTranscriptMessages(summary.transcript ?? []);
     setTranscriptMessages(transcriptMessages);
     setPendingUserEcho(null);
@@ -1180,6 +1189,33 @@ window.addEventListener("resize", handleResize);
   }, [mainSessionId, pendingQuestionId, displayedBusy, elicitationBusy]);
 
   useEffect(() => {
+    if (!mainSessionId || isSubagentView || displayedBusy || loading) return;
+    const controller = new AbortController();
+    let checking = false;
+    const checkInbox = async () => {
+      const current = crossChatInboxRef.current;
+      if (document.hidden || checking || isStreamingRef.current || current?.sessionId !== mainSessionId) return;
+      checking = true;
+      try {
+        const cursor = await getCrossChatInbox(mainSessionId, controller.signal);
+        if (!controller.signal.aborted && !isStreamingRef.current && crossChatInboxRef.current === current
+            && cursor && cursor !== current.cursor) requestSessionReload(mainSessionId);
+      } catch {
+        // 轻量收件轮询失败时保留当前展示，下一次检查继续。
+      } finally {
+        checking = false;
+      }
+    };
+    const timer = window.setInterval(() => void checkInbox(), 7000);
+    window.addEventListener("focus", checkInbox);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", checkInbox);
+    };
+  }, [mainSessionId, isSubagentView, displayedBusy, loading]);
+
+  useEffect(() => {
     if (!mainSessionId || !subagents.some((item) => item.status === "running")) return;
     const timer = window.setInterval(() => {
       void refreshSubagents(mainSessionId).catch(() => undefined);
@@ -1187,7 +1223,7 @@ window.addEventListener("resize", handleResize);
     return () => window.clearInterval(timer);
   }, [mainSessionId, subagents]);
 
-const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boolean(pendingElicitationRequest?.blocking);
+const composerDisabled = loading || !(sessionId || localSessionId || isNewSession) || Boolean(pendingElicitationRequest?.blocking);
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
     setTranscriptMessages((current) =>
@@ -1978,8 +2014,9 @@ const composerDisabled = !(sessionId || localSessionId || isNewSession) || Boole
         setReconnectAvailable(true);
       } else {
         setError(chatError instanceof Error ? chatError.message : "对话执行失败");
-        if (chatError instanceof ServiceRestartingError) {
+        if (chatError instanceof ServiceRestartingError || chatError instanceof SessionRunConflictError) {
           setTranscriptMessages((current) => current.filter((item) => item.id !== assistantId));
+          if (chatError instanceof SessionRunConflictError && effectiveSessionId) requestSessionReload(effectiveSessionId);
           if (skipAddUserBubble) {
             const unsent = { id: pendingUserBubble?.id ?? primaryClientMessageId, content: userText, queuedAt: Date.now() };
             queuedMessagesRef.current = [unsent, ...queuedMessagesRef.current];
@@ -2423,6 +2460,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     stop: !displayedBusy && !pendingElicitationRequest?.blocking ? "当前没有运行中的任务" : undefined,
     context: missingSessionReason,
     tools: missingSessionReason,
+    deliveries: missingSessionReason,
     compact: missingSessionReason ?? busyCommandReason ?? (currentToolRefresh ? "正在刷新工具目录" : undefined),
     refresh: !isEmbedMode || !embedHostOrigin || !embedSupportsToolRefresh
       ? "当前宿主未接入工具刷新"
@@ -2467,12 +2505,24 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
       case "compact": if (!isStreamingRef.current) void handleSend("/compact"); break;
       case "context": setInspection({ sessionId: mainSessionId, resource: "context/status" }); break;
       case "tools": setInspection({ sessionId: mainSessionId, resource: "tools" }); break;
+      case "deliveries": setDeliverySessionId(mainSessionId); break;
       case "refresh": void refreshHostTools(); break;
     }
   };
 
   return (
     <main className="app-layout">
+      {deliverySessionId && deliverySessionId === mainSessionId && (
+        <CrossChatDeliveriesDialog
+          key={deliverySessionId}
+          sessionId={deliverySessionId}
+          onClose={() => setDeliverySessionId(null)}
+          onOpenSession={!displayedBusy && !queuedMessages.length && onSessionSelect ? (id) => {
+            setDeliverySessionId(null);
+            onSessionSelect(id);
+          } : undefined}
+        />
+      )}
       {inspection?.sessionId === mainSessionId && (
         <SessionInspectionDialog
           key={`${inspection.sessionId}:${inspection.resource}`}

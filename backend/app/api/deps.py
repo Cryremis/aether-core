@@ -25,6 +25,22 @@ class AuthContext:
     external_org_id: str | None = None
 
 
+def embedded_organization(auth: AuthContext) -> str | None:
+    org = auth.external_org_id
+    if org is None and auth.conversation_id:
+        # 兼容未声明组织的旧 token，从它签发时绑定的会话恢复组织，不能用请求目标替代。
+        anchor = store_service.get_conversation(auth.conversation_id)
+        if anchor and anchor.get("platform_id") == auth.platform_id and anchor.get("external_user_id") == auth.external_user_id:
+            org = anchor.get("external_org_id")
+    return org
+
+
+def can_access_embedded_conversation(auth: AuthContext, conversation: dict) -> bool:
+    return (conversation.get("platform_id") == auth.platform_id
+            and conversation.get("external_user_id") == auth.external_user_id
+            and conversation.get("external_org_id") == embedded_organization(auth))
+
+
 def get_auth_context(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme_optional),
     access_token: str | None = Query(default=None),

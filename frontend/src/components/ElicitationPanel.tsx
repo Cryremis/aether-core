@@ -56,6 +56,7 @@ export function ElicitationPanel({ request, busy, waitingForRun = false, onSubmi
   if (!request || request.questions.length === 0) return null;
 
   const questions = request.questions;
+  const crossChatApproval = request.id.startsWith("xchat_");
   const questionIndex = Math.min(currentQuestionIndex, questions.length - 1);
   const isLastQuestion = questionIndex === request.questions.length - 1;
 
@@ -104,7 +105,9 @@ export function ElicitationPanel({ request, busy, waitingForRun = false, onSubmi
               <header className="elicitation-question-card__header">
                 <div className="elicitation-question-card__header-left">
                   <span>{question.header}</span>
-                  <strong>{question.question}</strong>
+                  <strong style={crossChatApproval ? { whiteSpace: "pre-wrap", overflowWrap: "anywhere" } : undefined}>
+                    {question.question}
+                  </strong>
                 </div>
                 <span className="elicitation-question-card__counter" aria-label={`进度 ${questionIndex + 1}/${request.questions.length}`}>
                   <span>{questionIndex + 1}</span><span aria-hidden="true">/</span><span>{request.questions.length}</span>

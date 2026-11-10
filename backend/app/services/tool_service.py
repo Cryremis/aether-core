@@ -20,6 +20,7 @@ import httpx
 from app.core.config import settings
 from app.sandbox.runner import sandbox_runner
 from app.services.artifact_service import artifact_service
+from app.services.cross_chat_tools import DEFINITIONS as CROSS_CHAT_TOOLS, available as cross_chat_available, register_cross_chat_tools
 from app.services.durable_io import durable_io
 from app.services.file_service import file_service
 from app.services.llm_config_service import RuntimeLlmConfig, llm_config_service
@@ -123,6 +124,7 @@ class ToolService:
     def __init__(self) -> None:
         self._registry = ToolRegistry()
         self._register_builtin_tools()
+        register_cross_chat_tools(self._registry)
         from app.services.skill_tools import register_skill_tools
         register_skill_tools(self._registry)
 
@@ -1150,6 +1152,8 @@ class ToolService:
             name = str(schema.get("function", {}).get("name") or "")
             if not session.subagent_tools_enabled and name in SUBAGENT_TOOL_NAMES:
                 return False
+            if name in CROSS_CHAT_TOOLS and not cross_chat_available(session):
+                return False
             return allowed_tools is None or name in allowed_tools
 
         host_timeouts = {descriptor["name"] for descriptor in host_descriptors
@@ -1355,6 +1359,8 @@ class ToolService:
                       output_event_callback=None, catalog_snapshot=None) -> ToolExecutionResult:
         from app.services.context.history_store import history_store
         from app.services.tool_result_service import ToolExecutionError
+        if tool_name in CROSS_CHAT_TOOLS and not cross_chat_available(session):
+            return ToolExecutionResult.failure("tool.forbidden", "工具不在当前授权范围", code="TOOL_NOT_ALLOWED", message=tool_name)
         if session.allowed_tools is not None and tool_name not in session.allowed_tools:
             return ToolExecutionResult.failure("tool.forbidden", "工具不在当前授权范围", code="TOOL_NOT_ALLOWED", message=tool_name)
         schema = None

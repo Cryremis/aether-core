@@ -29,6 +29,7 @@ class SessionSummary(BaseModel):
     workboard: WorkboardState = Field(default_factory=lambda: WorkboardState(session_id=""))
     elicitation: ElicitationState = Field(default_factory=lambda: ElicitationState(session_id=""))
     active_run: dict[str, Any] | None = None
+    cross_chat_inbox_cursor: str | None = None
     visibility: str = "normal"
     archived_at: datetime | None = None
     pinned_at: datetime | None = None

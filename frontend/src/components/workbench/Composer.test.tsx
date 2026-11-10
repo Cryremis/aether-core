@@ -72,7 +72,7 @@ it("opens the menu, handles read-only commands while busy, and keeps paths as te
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await change("/");
-    expect(host.querySelectorAll(".composer-command-menu button")).toHaveLength(7);
+    expect(host.querySelectorAll(".composer-command-menu button")).toHaveLength(8);
     await enter();
     expect(onSend).not.toHaveBeenCalled();
     await change("/con");

@@ -446,6 +446,34 @@ class StoreService:
                     FOREIGN KEY (run_id) REFERENCES agent_runs(run_id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS cross_chat_deliveries (
+                    delivery_id TEXT PRIMARY KEY,
+                    dispatch_key TEXT NOT NULL,
+                    source_conversation_id TEXT NOT NULL,
+                    source_run_id TEXT NOT NULL,
+                    target_conversation_id TEXT NOT NULL,
+                    expected_run_id TEXT,
+                    target_run_id TEXT,
+                    mode TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    detail TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    next_attempt_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_cross_chat_pending
+                ON cross_chat_deliveries(next_attempt_at, created_at, delivery_id)
+                WHERE status IN ('awaiting_approval', 'queued', 'dispatching');
+                CREATE INDEX IF NOT EXISTS idx_cross_chat_target
+                ON cross_chat_deliveries(target_conversation_id, mode, created_at, delivery_id);
+                CREATE INDEX IF NOT EXISTS idx_cross_chat_source
+                ON cross_chat_deliveries(source_conversation_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_cross_chat_inbox
+                ON cross_chat_deliveries(target_conversation_id, updated_at DESC, delivery_id DESC)
+                WHERE status='delivered';
+
                 CREATE TABLE IF NOT EXISTS subagents (
                     subagent_id TEXT PRIMARY KEY,
                     workspace_id TEXT,
@@ -525,6 +553,11 @@ class StoreService:
             self._ensure_column(conn, "conversations", "revision", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "conversations", "last_run_id", "TEXT")
             self._ensure_column(conn, "agent_runs", "idempotency_key", "TEXT")
+            self._ensure_column(conn, "cross_chat_deliveries", "dispatch_key", "TEXT")
+            conn.execute("""
+                UPDATE cross_chat_deliveries SET dispatch_key = 'cross-chat:' || delivery_id
+                WHERE dispatch_key IS NULL
+                """)
             self._ensure_column(conn, "scheduled_tasks", "approved_at", "TEXT")
             conn.execute(
                 """
@@ -2036,6 +2069,8 @@ class StoreService:
         *,
         platform_id: int,
         external_user_id: str,
+        external_org_id: str | None = None,
+        match_organization: bool = False,
         include_hidden: bool = False,
         include_archived: bool = False,
         include_deleted: bool = False,
@@ -2045,6 +2080,9 @@ class StoreService:
         with self._connect() as conn:
             clauses = ["platform_id = ?", "external_user_id = ?"]
             parameters: list[Any] = [platform_id, external_user_id]
+            if match_organization:
+                clauses.append("external_org_id IS ?")
+                parameters.append(external_org_id)
             self._apply_conversation_visibility_filters(
                 clauses,
                 parameters,
@@ -2145,6 +2183,11 @@ class StoreService:
 
     def delete_conversation(self, session_id: str) -> bool:
         with self._connect() as conn:
+            conn.execute("""
+                DELETE FROM cross_chat_deliveries
+                WHERE source_conversation_id = (SELECT conversation_id FROM conversations WHERE session_id = ?)
+                   OR target_conversation_id = (SELECT conversation_id FROM conversations WHERE session_id = ?)
+                """, (session_id, session_id))
             result = conn.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
             return result.rowcount > 0
 

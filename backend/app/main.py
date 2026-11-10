@@ -33,6 +33,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.workspace_runtime_service import workspace_runtime_service
 from app.services.agent_run_service import agent_run_service
+from app.services.cross_chat_service import cross_chat_service
 from app.services.skill_service import skill_service
 from app.services.scheduling.scheduler import schedule_scheduler
 from app.services.store import store_service
@@ -50,9 +51,11 @@ async def lifespan(_app: FastAPI):
     if settings.scheduler_enabled:
         await schedule_scheduler.start()
     lifecycle_service.start()
+    await cross_chat_service.start()
     try:
         yield
     finally:
+        await cross_chat_service.stop()
         lifecycle_service.stop()
         if settings.scheduler_enabled:
             await schedule_scheduler.stop()

@@ -504,6 +504,7 @@ class AgentEngine:
         run_id = run_id or f"run_{uuid.uuid4().hex}"
         session.begin_run(run_id)
         from app.services.context.history_store import history_store
+        from app.services.cross_chat_service import cross_chat_service
         self._recover_interrupted_tool_calls(session)
         request_turn_index = self._next_turn_index(session)
         session.get_run(run_id).turn_index = request_turn_index
@@ -756,6 +757,11 @@ class AgentEngine:
                     stop_reason=last_stop_reason,
                 )
                 return
+
+            for steering in await cross_chat_service.apply_steering(session, run_id, request_turn_index):
+                yield make_event(session, "message_committed", message={
+                    "id": steering["message_id"], "role": "user", "content": steering["content"],
+                })
 
             destroyed_subagent_ids = store_service.list_destroyed_subagent_ids_for_session(
                 session.session_id
@@ -1655,6 +1661,9 @@ class AgentEngine:
                     session.session_id,
                     message_count=len(session.messages),
                 )
+                if last_stop_reason == "stop" and cross_chat_service.has_steering(session, run_id):
+                    # 保留已完成的输出。用户的追加输入在下一轮模型请求前按顺序落盘。
+                    continue
                 yield make_event(
                     session,
                     "result",

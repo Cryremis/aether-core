@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import AuthContext, get_auth_context
+from app.api.deps import AuthContext, can_access_embedded_conversation, get_auth_context
 from app.core.model_errors import public_run_error
 from app.schemas.common import ApiResponse
 from app.schemas.agent import AgentChatRequest, AgentElicitationResponseRequest, AgentEvent
@@ -16,6 +16,7 @@ from app.services.runtime_state import runtime_state_service
 from app.services.session_service import session_service
 from app.services.session_inspection import inspect_context, inspect_tools
 from app.services.durable_io import durable_io, finish_on_cancel
+from app.services.cross_chat_service import CrossChatDenied, cross_chat_service
 from app.services.store import store_service
 from app.services.timeline_service import timeline_service
 from app.services.transcript_service import transcript_service
@@ -108,7 +109,7 @@ class AbortResponse:
     partial_content: str | None
 
 
-def _ensure_session_access(session_id: str, auth: AuthContext):
+def _authorized_conversation(session_id: str, auth: AuthContext) -> dict:
     conversation = store_service.get_conversation_by_session(session_id)
     if conversation is None or conversation.get("deleted_at") is not None:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -116,13 +117,15 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
         if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
             raise HTTPException(status_code=403, detail="无权访问该会话")
     elif auth.kind == "embed":
-        if (
-            conversation.get("platform_id") != auth.platform_id
-            or conversation.get("external_user_id") != auth.external_user_id
-        ):
+        if not can_access_embedded_conversation(auth, conversation):
             raise HTTPException(status_code=403, detail="无权访问该会话")
     else:
         raise HTTPException(status_code=401, detail="未授权")
+    return conversation
+
+
+def _ensure_session_access(session_id: str, auth: AuthContext):
+    _authorized_conversation(session_id, auth)
     return session_service.get_or_create(session_id)
 
 
@@ -161,17 +164,19 @@ async def chat(request: AgentChatRequest, auth: AuthContext = Depends(get_auth_c
         existing_run = store_service.get_agent_run(request.run_id)
         if existing_run is None or str(existing_run["session_id"]) != session.session_id:
             raise HTTPException(status_code=404, detail="运行不存在于当前会话")
-    session.disabled_capability_ids = list(dict.fromkeys(request.disabled_capability_ids))[:512]
-    if request.allow_network is not None:
-        session_service.set_allow_network(session, request.allow_network)
-
     if request.run_id:
         return _run_stream(session, request.run_id, 0)
+
+    def apply_capabilities():
+        session.disabled_capability_ids = list(dict.fromkeys(request.disabled_capability_ids))[:512]
+        if request.allow_network is not None:
+            session_service.set_allow_network(session, request.allow_network)
+
     try:
         run_id = await agent_run_service.start_chat_run(
             session, request.message, replace_last_user_message=request.replace_last_user_message,
             client_message_id=request.client_message_id, reasoning_effort=request.reasoning_effort,
-            emit_started=True,
+            emit_started=True, before_admission=apply_capabilities,
         )
     except AgentRunBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -270,8 +275,13 @@ async def respond_to_elicitation(
                 parts.append(f"说明：{answer.notes}")
             answers.append({"id": question.id, "header": question.header, "value": "、".join(parts) or "未填写"})
         turn_index = max((int(message.get("turn_index", 0)) for message in session.messages), default=0)
+        summary = "已提交给 AI，接下来会按你的回答继续执行"
+        if request_id.startswith("xchat_"):
+            receipt = cross_chat_service.record_authenticated_answer(session, resolved)
+            if receipt:
+                summary = "已确认，等待投递" if receipt == "queued" else "未授权发送"
         committed_message = context_message_adapter.make_elicitation_response_message(
-            request_id=request_id, title=resolved.title, summary="已提交给 AI，接下来会按你的回答继续执行",
+            request_id=request_id, title=resolved.title, summary=summary,
             answers=answers, turn_index=turn_index + 1,
         )
         session.messages.append(committed_message)
@@ -301,6 +311,37 @@ async def respond_to_elicitation(
 def get_elicitation(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
     session = _ensure_session_access(session_id, auth)
     return ApiResponse(data=agent_run_service.get_answerable_elicitation(session).model_dump(mode="json"))
+
+
+@router.get("/{session_id}/cross-chat/inbox")
+def get_cross_chat_inbox(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    return ApiResponse(data={"cursor": cross_chat_service.inbox_cursor(_authorized_conversation(session_id, auth))})
+
+
+@router.get("/{session_id}/cross-chat/deliveries")
+def list_cross_chat_deliveries(
+    session_id: str, before: str | None = Query(None, max_length=180), limit: int = Query(20, ge=1, le=30),
+    auth: AuthContext = Depends(get_auth_context),
+) -> ApiResponse:
+    session = _ensure_session_access(session_id, auth)
+    try:
+        return ApiResponse(data=cross_chat_service.receipts(session, before, limit))
+    except CrossChatDenied as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/{session_id}/cross-chat/deliveries/{delivery_id}/cancel")
+def cancel_cross_chat_delivery(session_id: str, delivery_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+    session = _ensure_session_access(session_id, auth)
+    try:
+        cancelled = cross_chat_service.cancel_queued(session, delivery_id)
+    except CrossChatDenied as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not cancelled:
+        raise HTTPException(status_code=409, detail="投递状态已变化，只能撤销尚在排队的消息。")
+    return ApiResponse(message="已撤销投递")
 
 
 @router.post("/{session_id}/timeline/fork")

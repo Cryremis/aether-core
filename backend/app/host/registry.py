@@ -135,7 +135,7 @@ class HostRegistry:
             platform_id=int(platform["platform_id"]),
             conversation_id=conversation["conversation_id"],
             external_user_id=str(external_user_id),
-            external_org_id=conversation.get("external_org_id") or request.external_org_id,
+            external_org_id=conversation.get("external_org_id"),
         )
 
         return {

@@ -1,6 +1,7 @@
 import { consumeResumableRun, RunStreamHttpError, RunStreamInterruptedError } from "./sse";
 
 export class ServiceRestartingError extends Error {}
+export class SessionRunConflictError extends Error {}
 
 async function checkServiceAvailability(response: Response) {
   if (response.status !== 503) return;
@@ -2018,6 +2019,40 @@ export async function getSessionElicitation(sessionId: string, signal?: AbortSig
   return (await response.json()).data;
 }
 
+export async function getCrossChatInbox(sessionId: string, signal: AbortSignal): Promise<string | null> {
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/cross-chat/inbox`, { signal, cache: "no-store" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, "读取跨会话收件状态失败"));
+  return (await response.json()).data.cursor;
+}
+
+export type CrossChatReceipt = {
+  delivery_id: string;
+  status: string;
+  mode: "queue" | "start" | "steer";
+  direction: "sent" | "received";
+  peer_title: string | null;
+  peer_session_id: string | null;
+  run_status: string | null;
+  detail: string | null;
+  message: string;
+  created_at: string;
+  expires_at: string;
+};
+
+export async function listCrossChatDeliveries(sessionId: string, before: string | null, signal: AbortSignal) {
+  const query = before ? `?before=${encodeURIComponent(before)}` : "";
+  const response = await apiFetch(`/agent/${encodeURIComponent(sessionId)}/cross-chat/deliveries${query}`, { signal, cache: "no-store" });
+  if (!response.ok) throw new Error(await readErrorMessage(response, "读取跨会话投递失败"));
+  return (await response.json()).data as { items: CrossChatReceipt[]; next_cursor: string | null };
+}
+
+export async function cancelCrossChatDelivery(sessionId: string, deliveryId: string) {
+  const response = await apiFetch(
+    `/agent/${encodeURIComponent(sessionId)}/cross-chat/deliveries/${encodeURIComponent(deliveryId)}/cancel`, { method: "POST" },
+  );
+  if (!response.ok) throw new Error(await readErrorMessage(response, "撤销投递失败"));
+}
+
 export async function streamElicitationResponse(
   sessionId: string,
   requestId: string,
@@ -2059,7 +2094,9 @@ async function streamSse(
 
     await checkServiceAvailability(response);
     if (!response.ok || !response.body) {
-      throw new Error(await readErrorMessage(response, `对话请求失败: ${response.status}`));
+      const detail = await readErrorMessage(response, `对话请求失败: ${response.status}`);
+      if (path === "/agent/chat" && response.status === 409) throw new SessionRunConflictError(detail);
+      throw new Error(detail);
     }
 
     streamOpened = true;
@@ -2068,7 +2105,7 @@ async function streamSse(
       { sessionId, signal: abortSignal, allowInitialSequenceOffset: options?.allowInitialSequenceOffset,
         onTransportStatus: (state) => onEvent({ type: "transport_status", payload: { state } }) });
   } catch (error) {
-    if (error instanceof ServiceRestartingError || error instanceof RunStreamInterruptedError) throw error;
+    if (error instanceof ServiceRestartingError || error instanceof SessionRunConflictError || error instanceof RunStreamInterruptedError) throw error;
     if (error instanceof Error && error.name === "AbortError") {
       throw error;
     }

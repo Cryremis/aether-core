@@ -3,11 +3,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import AuthContext, get_auth_context
+from app.api.deps import AuthContext, can_access_embedded_conversation, embedded_organization, get_auth_context
 from app.schemas.common import ApiResponse
 from app.schemas.session import SessionSummary, WorkboardUpdateRequest
 from app.services.runtime_state import runtime_state_service
 from app.services.agent_run_service import agent_run_service
+from app.services.cross_chat_service import cross_chat_service
 from app.services.conversation_service import conversation_service
 from app.services.file_service import file_service
 from app.services.platform_baseline_service import platform_baseline_service
@@ -42,10 +43,7 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
         if auth.user is None or conversation.get("owner_user_id") != auth.user.user_id:
             raise HTTPException(status_code=403, detail="无权访问该会话")
     elif auth.kind == "embed":
-        if (
-            conversation.get("platform_id") != auth.platform_id
-            or conversation.get("external_user_id") != auth.external_user_id
-        ):
+        if not can_access_embedded_conversation(auth, conversation):
             raise HTTPException(status_code=403, detail="无权访问该会话")
     else:
         raise HTTPException(status_code=401, detail="未授权")
@@ -76,10 +74,7 @@ def bootstrap_session(
         )
         if source_conversation is None:
             raise HTTPException(status_code=404, detail="来源会话不存在")
-        if (
-            source_conversation.get("platform_id") != auth.platform_id
-            or source_conversation.get("external_user_id") != auth.external_user_id
-        ):
+        if not can_access_embedded_conversation(auth, source_conversation):
             raise HTTPException(status_code=403, detail="无权基于该会话创建新会话")
         source_session = session_service.get_or_create(source_conversation["session_id"])
         session = session_service.get_or_create()
@@ -125,6 +120,8 @@ def list_sessions(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
             for item in conversation_service.list_for_host_user(
                 platform_id=auth.platform_id,
                 external_user_id=auth.external_user_id,
+                external_org_id=embedded_organization(auth),
+                match_organization=True,
             )
         ]
         return ApiResponse(message="历史会话", data=items)
@@ -134,6 +131,7 @@ def list_sessions(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
 @router.get("/{session_id}")
 def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
     conversation, session = _ensure_session_access(session_id, auth)
+    cross_chat_inbox_cursor = cross_chat_service.inbox_cursor(conversation)
     session.transcript = transcript_service.build_session_transcript(session)
     summary = SessionSummary(
         session_id=session.session_id,
@@ -153,6 +151,7 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         workboard=runtime_state_service.get_workboard(session),
         elicitation=agent_run_service.get_answerable_elicitation(session),
         active_run=agent_run_service.get_active_run_view(session),
+        cross_chat_inbox_cursor=cross_chat_inbox_cursor,
         visibility=str(conversation.get("visibility") or "normal"),
         archived_at=conversation.get("archived_at"),
         pinned_at=conversation.get("pinned_at"),

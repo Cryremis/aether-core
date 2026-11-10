@@ -791,6 +791,11 @@
 .session-inspection__body ul { padding: 0; max-height: 50vh; overflow: auto; list-style: none; }
 .session-inspection__body li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; }
 .session-inspection__body li code { overflow-wrap: anywhere; }
+.cross-chat-receipts { display: grid; gap: 12px; }
+.cross-chat-receipts article { border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; }
+.cross-chat-receipts article p { margin: 6px 0; color: var(--text-secondary); }
+.cross-chat-receipts pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cross-chat-receipts__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 
 .composer-area {
   background: transparent !important;

@@ -238,6 +238,14 @@ class ToolResultRenderer:
                 ]
             case "elicitation.requested":
                 return self._render_optional_value("request_id", result.data.get("request_id"))
+            case "cross_chat.chat_read":
+                # 分页正文保持换行，游标始终对应已交付的原文区间。
+                metadata = {key: value for key, value in result.data.items() if key != "items"}
+                lines = [json.dumps(metadata, ensure_ascii=False)]
+                for item in result.data["items"]:
+                    lines.append(json.dumps({key: value for key, value in item.items() if key != "text"}, ensure_ascii=False))
+                    lines.append(item["text"])
+                return lines
             case _:
                 return self._render_payload(result.data)
 

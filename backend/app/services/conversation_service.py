@@ -99,7 +99,7 @@ class ConversationService:
             platform_id=platform["platform_id"],
             conversation_id=conversation["conversation_id"],
             external_user_id=external_user_id,
-            external_org_id=external_org_id,
+            external_org_id=conversation.get("external_org_id"),
         )
         return session, token
 
@@ -109,12 +109,15 @@ class ConversationService:
     def list_for_admin(self, user: StoreUser) -> list[ConversationSummary]:
         return self.list_for_user(user)
 
-    def list_for_host_user(self, *, platform_id: int, external_user_id: str) -> list[ConversationSummary]:
+    def list_for_host_user(self, *, platform_id: int, external_user_id: str,
+                           external_org_id: str | None = None, match_organization: bool = False) -> list[ConversationSummary]:
         return [
             self._to_summary(item)
             for item in store_service.list_conversations_for_host_user(
                 platform_id=platform_id,
                 external_user_id=external_user_id,
+                external_org_id=external_org_id,
+                match_organization=match_organization,
             )
         ]
 
