@@ -102,7 +102,7 @@ export type ContextStatus = {
   warningThreshold: number;
   blockingLimit: number;
   percentUsed: number;
-  state: "idle" | "warning" | "compacted" | "recovered" | "blocked";
+  state: "idle" | "warning" | "compacting" | "compacted" | "recovered" | "blocked";
   detail: string;
 };
 

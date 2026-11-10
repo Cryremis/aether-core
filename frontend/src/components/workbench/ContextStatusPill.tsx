@@ -17,7 +17,8 @@ export function ContextStatusPill({ contextStatus, onOpenLlmConfig }: ContextSta
       <div className="context-pill__compact" onClick={onOpenLlmConfig}>
         <span className="context-pill__model" title={contextStatus.model || "等待首次对话"}>{contextStatus.model || "Model"}</span>
         <span className="context-pill__usage">
-          {formatTokenCount(contextStatus.estimatedTokens)} / {formatTokenCount(contextStatus.effectiveWindow || contextStatus.contextWindow)}
+          {contextStateTone === "compacting" ? contextStatus.detail
+            : `${formatTokenCount(contextStatus.estimatedTokens)} / ${formatTokenCount(contextStatus.effectiveWindow || contextStatus.contextWindow)}`}
         </span>
       </div>
       <div className="context-pill__popup">

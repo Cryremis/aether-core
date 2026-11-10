@@ -1492,6 +1492,8 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
       }
 
       if (eventType === "aborted") {
+        setContextStatus((current) => current?.state === "compacting"
+          ? { ...current, state: "idle", detail: "上下文压缩已取消" } : current);
         const partial = String(payload.partial_content ?? "");
         refs.wasAborted && (refs.wasAborted.value = true);
         refs.partialContent && (refs.partialContent.value = partial);
@@ -1517,6 +1519,18 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
           state: "idle",
           detail: payload.budget_source === "unverified_fallback" ? "窗口为未验证的保守估算，请设置实际部署上限" : payload.budget_source === "catalog_unverified" ? "窗口来自模型目录，请核对实际部署上限" : "上下文稳定",
         });
+        return;
+      }
+
+      if (eventType === "context_compaction_progress") {
+        const stage = String(payload.stage);
+        setContextStatus((current) => current && ({
+          ...current,
+          state: stage === "finished" ? (current.state === "compacting" ? "idle" : current.state) : "compacting",
+          detail: stage === "pruning" ? "正在裁剪历史上下文"
+            : stage === "summarizing" ? "正在生成任务摘要"
+              : current.state === "compacted" ? current.detail : "本次压缩结束",
+        }));
         return;
       }
 

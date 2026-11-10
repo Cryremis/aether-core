@@ -17,6 +17,7 @@ from app.services.context.message_adapter import context_message_adapter
 from app.services.context.summarizer import compaction_summarizer
 from app.services.llm_client import LlmClient
 from app.services.session_types import AgentSession
+from app.services.tool_service import tool_service
 from app.services.transcript_service import transcript_service
 from test_agent_engine import build_session, collect_stream, initialize_store
 from test_context_compaction import make_pipeline
@@ -197,6 +198,93 @@ def test_missing_native_compact_endpoint_falls_back_to_client_checkpoint(monkeyp
     assert prepared.state.last_known_token_estimate < prepared.plan.estimated_tokens_before
     assert len(FakeAsyncClient.post_payloads) == 1
     assert session.context_epoch == 1
+
+
+def test_manual_compact_large_session_without_model_and_can_continue(monkeypatch, tmp_path):
+    initialize_store(tmp_path)
+    config = replace(make_runtime_config(), model="deepseek-v4.1-flash",
+                     sampling={"context_window": 409600, "max_output_tokens": 32000})
+    setup_client(monkeypatch, config)
+    monkeypatch.setattr(settings, "context_compaction_model_enabled", False)
+    session = build_session("large_compaction")
+    for index in range(386):
+        item = (context_message_adapter.make_user_message("旧任务 " + "数据" * 296, turn_index=index + 1)
+                if index % 2 == 0 else
+                context_message_adapter.make_assistant_message(content="旧答复 " + "证据" * 296, turn_index=index + 1))
+        session.messages.append(item)
+    oldest = session.messages[0]["message_id"]
+    latest = session.messages[-2]["content"]
+    FakeAsyncClient.stream_responses = [wire(chat_frame("压缩后继续"))]
+
+    async def run():
+        compacted = await collect_stream(session, "/compact")
+        repeated = await collect_stream(session, "/compact")
+        continued = await collect_stream(session, "继续任务")
+        return compacted, repeated, continued
+
+    compacted, repeated, continued = asyncio.run(run())
+    event = next(event["payload"] for event in compacted if event["type"] == "context_compacted")
+    assert event["tokens_before"] > 300_000
+    assert event["tokens_after"] < 30_000
+    assert not any(event["type"] == "context_compacted" for event in repeated)
+    assert not FakeAsyncClient.post_payloads
+    assert continued[-1]["payload"]["subtype"] == "success"
+    assert latest in [item["content"] for item in FakeAsyncClient.stream_payloads[0]["messages"]]
+    assert history_store.read(session.session_id, message_id=oldest)["items"]
+
+
+@pytest.mark.parametrize("abort", [False, True])
+def test_manual_compact_recovers_reasoning_only_length_or_aborts(monkeypatch, tmp_path, abort):
+    from app.runtime.engine import context_pipeline
+    from app.services.context.message_groups import split_checkpoint
+    from app.services.llm_client import llm_client
+
+    initialize_store(tmp_path)
+    config = replace(make_runtime_config(), model="deepseek-v4.1-flash", sampling={
+        "context_window": 409600, "max_output_tokens": 32000,
+        "compaction_max_output_tokens": 8192,
+        "deployment_profile": {"max_output_tokens": 32000},
+    })
+    setup_client(monkeypatch, config)
+    session = build_session("compact_abort" if abort else "compact_truncated")
+    for turn in range(1, 50):
+        session.messages.extend([
+            context_message_adapter.make_user_message("核查" * 270, turn_index=turn),
+            context_message_adapter.make_assistant_message(content="完成" * 280, turn_index=turn),
+        ])
+    _, tail = split_checkpoint(session.messages, context_pipeline.estimator, 12000)
+    tools = agent_engine._tools_for_context_budget(session, tool_service.list_tool_schemas(session))
+    tail_tokens = context_pipeline._estimate_request([{"role": "system", "content": "root"}, *tail], tools, runtime=config)
+    monkeypatch.setattr(context_pipeline.budget.config, "compact_target_ratio", (tail_tokens + 450) / 373600)
+    original = copy.deepcopy(session.messages)
+    output_limits = []
+    original_post = llm_client._post_json
+
+    async def post(runtime, payload, **kwargs):
+        output_limits.append(payload["max_tokens"])
+        if abort:
+            session.request_abort()
+            await asyncio.Future()
+        return await original_post(runtime, payload, **kwargs)
+
+    monkeypatch.setattr(llm_client, "_post_json", post)
+    FakeAsyncClient.post_responses = [FakeResponse(json_data={"choices": [{"message": {"reasoning_content": "thinking"},
+        "finish_reason": "length"}], "usage": {"prompt_tokens": 13476, "completion_tokens": limit,
+        "completion_tokens_details": {"reasoning_tokens": limit}}}) for limit in (8192, 16384, 16384)]
+    events = asyncio.run(collect_stream(session, "/compact"))
+    assert any(event["type"] == "context_compaction_progress" and event["payload"]["stage"] == "summarizing" for event in events)
+    if abort:
+        assert any(event["type"] == "aborted" for event in events)
+        assert not session.compaction_audit
+        assert session.messages == original
+        assert output_limits == [8192]
+    else:
+        assert output_limits == [8192, 16384, 16384]
+        assert all(payload["thinking"] == {"type": "disabled"} for payload in FakeAsyncClient.post_payloads)
+        payload = next(event["payload"] for event in events if event["type"] == "context_compacted")
+        assert payload["error_code"] == "COMPACTION_OUTPUT_TRUNCATED"
+        assert payload["tokens_after"] <= tail_tokens + 450
+        assert events[-1]["payload"]["subtype"] == "success"
 
 
 @pytest.mark.usefixtures("fast_recovery")

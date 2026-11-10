@@ -48,16 +48,8 @@ def headers():
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_multiple_compactions_keep_full_user_history_and_audit_summaries_after_reload(tmp_path, monkeypatch):
+def test_multiple_compactions_keep_full_user_history_and_audit_summaries_after_reload(tmp_path):
     session, _, pipeline = setup_session(tmp_path)
-    summaries = []
-
-    async def summarize(messages, runtime):
-        text = f"【目标】真实压缩摘要{len(summaries) + 1}\n【待办】继续任务"
-        summaries.append(text)
-        return text
-
-    monkeypatch.setattr(compaction_summarizer, "summarize", summarize)
     original_users = [m["content"] for m in session.messages if m["role"] == "user"]
     for turn in (9, 10):
         asyncio.run(pipeline.compact_session_async(session=session, llm_runtime=FakeLlmRuntime(),
@@ -77,7 +69,7 @@ def test_multiple_compactions_keep_full_user_history_and_audit_summaries_after_r
     displayed = [m["content"] for m in public_data["transcript"] if m["role"] == "user"]
     assert displayed[:8] == original_users
     assert len(displayed) == 10
-    assert "真实压缩摘要" not in json.dumps(public_data, ensure_ascii=False)
+    assert "历史任务交接" not in json.dumps(public_data, ensure_ascii=False)
     audit = client.get(f"/api/v1/admin/conversations/{session_id}", headers=auth)
     assert audit.status_code == 200
     transcript = audit.json()["data"]["transcript"]
@@ -86,14 +78,14 @@ def test_multiple_compactions_keep_full_user_history_and_audit_summaries_after_r
     assert paged_audit.json()["data"]["transcript"] == transcript
     checkpoints = [m for m in transcript if m["role"] == "system_event"]
     assert len(checkpoints) == 2
-    assert all(summary in checkpoint["summary"] for summary, checkpoint in zip(summaries, checkpoints))
+    assert all("历史任务交接" in checkpoint["summary"] for checkpoint in checkpoints)
     first = transcript.index(checkpoints[0])
     assert transcript[first - 1]["role"] == "assistant"
     assert transcript[first + 1]["content"] == "第9轮新任务"
     restored = session_service.get_or_create(session_id)
     assert len(restored.compaction_audit) == 2
     assert len(restored.messages) < len(history_store.expand_history(session_id, restored.messages))
-    assert all("真实压缩摘要" not in str(m) for m in adapter.to_api_messages(restored.messages)
+    assert all("历史任务交接" not in str(m) for m in adapter.to_api_messages(restored.messages)
                if m.get("role") == "system")
 
 
@@ -137,14 +129,11 @@ def test_native_opaque_checkpoint_is_audited_without_exposing_protocol_blob(tmp_
     assert len([m for m in audit if m["role"] == "user"]) == 8
 
 
-def test_failed_compaction_does_not_create_success_audit_event(tmp_path, monkeypatch):
+def test_no_progress_does_not_create_success_audit_event(tmp_path):
+    from app.services.context.runtime_types import ContextOverflowError
     session, _, pipeline = setup_session(tmp_path)
-
-    async def fail(messages, runtime):
-        raise RuntimeError("摘要服务不可用")
-
-    monkeypatch.setattr(compaction_summarizer, "summarize", fail)
-    with pytest.raises(RuntimeError):
+    session.messages = [adapter.make_user_message("hello", turn_index=1)]
+    with pytest.raises(ContextOverflowError, match="没有可进一步缩减"):
         asyncio.run(pipeline.compact_session_async(session=session, llm_runtime=FakeLlmRuntime(),
             messages=session.messages, turn_index=9, max_output_tokens=1000))
     assert session.compaction_audit == []

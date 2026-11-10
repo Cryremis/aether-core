@@ -761,7 +761,7 @@ def test_user_compact_preserves_current_message_without_starting_a_chat(monkeypa
     assert events[-1]["type"] == "completed"
     assert events[-1]["payload"]["subtype"] == "success"
     assert any(message.get("content") == latest_user for message in session.messages)
-    assert all("/compact" not in str(message.get("content")).lower() for message in session.messages)
+    assert all(str(message.get("content")).strip().lower() != "/compact" for message in session.messages)
     assert session.active_run is None
     assert any(item["type"] == "context_compacted" for item in events) == (history_turns == 10)
     reply = next(item["payload"]["delta"] for item in events if item["type"] == "content_delta")
@@ -795,12 +795,9 @@ def test_agent_engine_proactively_compacts_large_history(monkeypatch, tmp_path):
 
     events = asyncio.run(collect_stream(session, "new task"))
 
-    assert any(item["type"] == "context_compacted" for item in events)
-    assert any(message.get("is_compact_summary") for message in session.messages) or any(
-        item.get("compression_meta", {}).get("strategy") == "tool_result_truncate"
-        for item in session.messages
-        if item.get("role") == "tool"
-    )
+    compaction = next(item["payload"] for item in events if item["type"] == "context_compacted")
+    assert compaction["tokens_after"] < compaction["tokens_before"]
+    assert compaction["tokens_after"] <= 4800
     assert session.context_state["compaction_count"] >= 1
 
 
@@ -841,7 +838,8 @@ def test_agent_engine_recovers_from_prompt_too_long(monkeypatch, tmp_path):
     assert call_count["value"] == 2
     assert any(item["type"] == "context_recovered" for item in events)
     assert any(item["type"] == "result" and item["payload"]["subtype"] == "success" for item in events)
-    assert any(message.get("is_compact_summary") for message in session.messages)
+    compaction = next(item["payload"] for item in events if item["type"] == "context_compacted")
+    assert compaction["tokens_after"] <= int(compaction["tokens_before"] * 0.85)
 
 
 def test_agent_engine_aborts_running_tool_and_allows_next_message(monkeypatch, tmp_path):

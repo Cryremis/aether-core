@@ -19,6 +19,7 @@ docs/
 !/docs/context_management_mechanism.md
 !/docs/context-runtime-operations.md
 !/docs/context-runtime-audit.md
+!/docs/context-compaction.md
 .DS_Store
 Thumbs.db
 storage/sessions/

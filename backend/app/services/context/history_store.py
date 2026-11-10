@@ -247,7 +247,7 @@ class HistoryStore:
 
     def diagnostics(self, session_id: str, *, limit: int = 50, before: int | None = None) -> dict[str, Any]:
         """只公开运行元数据；绝不把原文、思考、原生签名或凭据混入诊断接口。"""
-        fields = ("purpose", "model", "api_format", "run_id", "turn_index", "message_id", "step_id",
+        fields = ("purpose", "model", "api_format", "run_id", "turn_index", "message_id", "step_id", "summary_attempt",
                   "continuation_of", "request_hash", "message_count", "output_limit", "context_epoch",
                   "deployment_binding", "sampling_sources", "model_profile", "reasoning_effort_source",
                   "estimated_input_tokens", "tool_catalog_revision", "reasoning_replay_messages", "replay_projection",
@@ -276,7 +276,7 @@ class HistoryStore:
                     "content_chars": len(response.get("content") or ""),
                     "reasoning_chars": len(response.get("reasoning_content") or ""),
                     "has_native_state": bool(response.get("provider_payload"))})
-                for key in ("error_type", "http_status"):
+                for key in ("error_type", "http_status", "elapsed_ms"):
                     if key in response:
                         items[-1][key] = response[key]
         return {"items": items, "next_before": items[-1]["cursor"] if items else None,
@@ -336,7 +336,9 @@ class HistoryStore:
         changed = False
         with store_service._connect() as conn:
             for message in session.messages:
-                if message.get("role") != "assistant" or message.get("projection_only") or isinstance(message.get("reasoning_content"), str) or not message.get("attempt_id"):
+                if (message.get("role") != "assistant" or message.get("projection_only")
+                        or (message.get("compression_meta") or {}).get("strategy") == "history_prune"
+                        or isinstance(message.get("reasoning_content"), str) or not message.get("attempt_id")):
                     continue
                 row = conn.execute("SELECT manifest,response,status FROM context_attempts WHERE session_id=? AND attempt_id=?",
                     (session.session_id, message["attempt_id"])).fetchone()

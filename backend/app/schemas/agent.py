@@ -63,6 +63,7 @@ class AgentEvent(BaseModel):
         "context_status",
         "context_warning",
         "context_compacted",
+        "context_compaction_progress",
         "context_recovered",
         "context_blocked",
         "result",

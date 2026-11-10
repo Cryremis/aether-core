@@ -255,7 +255,7 @@ def test_responses_accepts_final_only_items_and_detects_changed_text():
         stream.decode({"type": "response.completed", "response": {"output": [item]}})
 
 
-def test_async_summary_failure_preserves_original_and_rules(monkeypatch):
+def test_async_compaction_works_without_summary_and_preserves_rules(monkeypatch):
     from test_context_compaction import make_pipeline
     pipeline = make_pipeline()
     session = AgentSession("summary_failure")
@@ -266,13 +266,39 @@ def test_async_summary_failure_preserves_original_and_rules(monkeypatch):
     original = copy.deepcopy(session.messages)
 
     async def fail(*args):
-        raise RuntimeError("summary unavailable")
+        pytest.fail("本地检查点足够时不调用摘要")
 
     monkeypatch.setattr(compaction_summarizer, "summarize", fail)
-    with pytest.raises(RuntimeError, match="summary unavailable"):
+    prepared = asyncio.run(pipeline.compact_session_async(session=session, llm_runtime=make_runtime_config(),
+        messages=[{"role": "system", "content": "root"}, *session.messages], turn_index=13, max_output_tokens=1000))
+    assert [m["content"] for m in prepared.messages if m["role"] == "system"] == ["root", "active rule"]
+    assert prepared.plan.estimated_tokens_after < prepared.plan.estimated_tokens_before
+    assert original[-2]["content"] in [m.get("content") for m in prepared.messages if m["role"] == "user"]
+
+
+def test_checkpoint_commit_conflict_rolls_back_active_messages_and_audit():
+    from test_context_compaction import make_pipeline
+
+    class ConflictingPersister:
+        calls = 0
+
+        def persist(self, session):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("会话账本版本冲突")
+
+    pipeline = make_pipeline()
+    pipeline.bind_persister(ConflictingPersister())
+    session = AgentSession("compact_conflict")
+    session.messages = [context_message_adapter.make_user_message("历史" * 400, turn_index=i) for i in range(10)]
+    original = copy.deepcopy(session.messages)
+    with pytest.raises(RuntimeError, match="会话账本提交失败"):
         asyncio.run(pipeline.compact_session_async(session=session, llm_runtime=make_runtime_config(),
-            messages=[{"role": "system", "content": "root"}, *session.messages], turn_index=13, max_output_tokens=1000))
+            messages=session.messages, turn_index=10))
     assert session.messages == original
+    assert session.context_state == {}
+    assert session.context_epoch == 0
+    assert not session.compaction_audit
 
 
 def test_subagent_notice_waits_for_tool_dependency_to_close():
@@ -301,16 +327,18 @@ def test_native_checkpoint_keeps_system_rule_once_and_rejects_concurrent_change(
     prepared = asyncio.run(pipeline.compact_session_async(session=session, llm_runtime=config,
         messages=[{"role": "system", "content": "root"}, *session.messages], turn_index=13, max_output_tokens=1000))
     assert [m["content"] for m in prepared.messages if m["role"] == "system"] == ["root", "active rule"]
-    assert prepared.plan.requires_llm_summary
+    assert not prepared.plan.requires_llm_summary
     assert session.context_epoch == 1
 
     session.messages.extend([{"role": "user", "content": "y" * 2000, "turn_index": i} for i in range(14, 24)])
 
     async def changed(*args):
         session.messages.append({"role": "user", "content": "new inbox", "turn_index": 24})
-        return await summarize()
+        return {"items": []}
 
-    monkeypatch.setattr(compaction_summarizer, "summarize", changed)
+    from app.services.llm_client import llm_client
+    monkeypatch.setattr(llm_client, "compact_native", changed)
+    config = replace(config, sampling={"native_compaction": True})
     with pytest.raises(ContextIntegrityError, match="新消息"):
         asyncio.run(pipeline.compact_session_async(session=session, llm_runtime=config,
             messages=[{"role": "system", "content": "root"}, *session.messages], turn_index=24, max_output_tokens=1000))

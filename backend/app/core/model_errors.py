@@ -8,6 +8,14 @@ class ModelStreamError(RuntimeError):
     """模型流不完整或存在协议差异，可归档片段后重新生成。"""
 
 
+class ModelOutputLimitError(ModelStreamError):
+    """输出额度耗尽，收到的内容不能作为完整结果。"""
+
+    def __init__(self, message: str, *, usage: dict | None = None):
+        super().__init__(message)
+        self.usage = usage if isinstance(usage, dict) else {}
+
+
 def public_run_error() -> str:
     return "当前服务暂时无法完成请求，已保留已有进度，请稍后继续。"
 

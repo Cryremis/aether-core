@@ -225,7 +225,7 @@ def test_epoch_from_opaque_checkpoint_recovers_original_task_and_ui_sources(tmp_
     assert history_store.expand_history("opaque", session.messages)[0]["message_id"] == original["message_id"]
 
 
-def test_summary_is_independent_of_output_schema_and_reduces_multiple_chunks(monkeypatch):
+def test_summary_uses_single_bounded_request_independent_of_output_schema(monkeypatch):
     from app.services.context.summarizer import compaction_summarizer
     from app.services.llm_client import llm_client
     labels = "【目标】task【约束与事实】fact【已完成与证据】done【待办与疑问】todo"
@@ -237,16 +237,15 @@ def test_summary_is_independent_of_output_schema_and_reduces_multiple_chunks(mon
         assert config.extra_body["max_completion_tokens"] == config.sampling["max_output_tokens"]
         assert not tools
         assert config.sampling.get("stop") is None
-        if messages[1]["content"].startswith("合并"):
-            return {"content": labels}
-        return {"content": labels + "x" * 5000}
+        assert len(messages[1]["content"]) < 1000
+        return {"content": labels}
 
     monkeypatch.setattr(llm_client, "create_chat_completion", summarize)
     config = replace(make_runtime_config(extra_body={"response_format": {"type": "json_object"}, "max_completion_tokens": 4000}), sampling={"context_window": 20000, "stop": ["【约束与事实】"]})
     result = asyncio.run(compaction_summarizer.summarize([{"role": "user", "content": "中" * 20000}], config))
     assert all(label in result for label in ("【目标】", "【待办与疑问】"))
     assert len(result) < 300
-    assert len(seen) >= 4
+    assert len(seen) == 1
 
 
 def test_compaction_does_not_reintroduce_filtered_subagent_data(monkeypatch, checkpoint_model):
@@ -265,9 +264,21 @@ def test_compaction_does_not_reintroduce_filtered_subagent_data(monkeypatch, che
     monkeypatch.setattr("app.services.context.summarizer.compaction_summarizer.summarize", summarize)
     asyncio.run(pipeline.compact_session_async(session=session, llm_runtime=make_runtime_config(),
         messages=[{"role": "system", "content": "root"}, *visible], turn_index=14, max_output_tokens=1000))
-    assert seen
+    assert not seen
     assert "DESTROYED_SUBAGENT_SECRET" not in json.dumps(seen)
     assert "DESTROYED_SUBAGENT_SECRET" not in json.dumps(session.messages)
+
+
+def test_compaction_respects_an_empty_visible_history():
+    from app.services.context.runtime_types import ContextOverflowError
+
+    pipeline = make_pipeline()
+    session = AgentSession("fully_filtered_compaction")
+    session.messages = [context_message_adapter.make_user_message("hidden" * 1000, turn_index=i) for i in range(8)]
+    with pytest.raises(ContextOverflowError, match="没有可进一步缩减"):
+        asyncio.run(pipeline.compact_session_async(session=session, llm_runtime=make_runtime_config(),
+            messages=[{"role": "system", "content": "root"}], turn_index=8))
+    assert not session.compaction_audit
 
 
 def test_profile_summary_and_deployment_revision_are_effective():
@@ -408,8 +419,14 @@ def test_summary_requests_are_traced_but_never_recovered_as_conversation(monkeyp
     setup_client(monkeypatch, make_runtime_config())
     labels = "【目标】task【约束与事实】fact【已完成与证据】done【待办与疑问】todo"
     FakeAsyncClient.post_responses = [FakeResponse(json_data={"choices": [{"message": {"content": labels}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 50}})]
-    config = replace(make_runtime_config(), trace_context={"session_id": "summary_trace", "purpose": "compaction"})
+    config = replace(make_runtime_config(extra_body={"thinking": {"type": "enabled"}}), model="deepseek-v4.1-flash",
+                     sampling={"context_window": 409600, "reasoning_effort": "high",
+                               "deployment_profile": {"max_output_tokens": 32000}},
+                     trace_context={"session_id": "summary_trace", "purpose": "compaction"})
     assert asyncio.run(compaction_summarizer.summarize([{"role": "user", "content": "task"}], config)) == labels
+    assert FakeAsyncClient.post_payloads[0]["max_tokens"] == 32000
+    assert FakeAsyncClient.post_payloads[0]["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in FakeAsyncClient.post_payloads[0]
     with store_service._connect() as conn:
         row = conn.execute("SELECT manifest,response FROM context_attempts WHERE session_id='summary_trace'").fetchone()
         assert json.loads(row["manifest"])["purpose"] == "compaction"

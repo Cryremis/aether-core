@@ -344,5 +344,7 @@ def test_agent_can_call_context_compact_and_run_continues(monkeypatch, tmp_path)
     assert "context_compact" in observed_tool_names[0]
     assert "context_compact" not in observed_tool_names[-1]
     assert any(event["type"] == "context_compacted" for event in events)
-    assert any(message.get("is_compact_summary") for message in session.messages)
+    compacted = next(event["payload"] for event in events if event["type"] == "context_compacted")
+    assert compacted["compaction_strategy"] == "tool_result_truncate"
+    assert compacted["tokens_after"] < compacted["tokens_before"]
     assert any(event["type"] == "result" and event["payload"]["subtype"] == "success" for event in events)

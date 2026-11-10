@@ -4,13 +4,14 @@ from __future__ import annotations
 import json
 import hashlib
 import uuid
+from time import perf_counter
 from typing import Any, AsyncGenerator
 
 import httpx
 
 from app.core.config import settings
 from app.core.llm_protocol import RUNTIME_CONTROL_FIELDS
-from app.core.model_errors import ModelStreamError
+from app.core.model_errors import ModelOutputLimitError, ModelStreamError
 from app.services.llm_config_service import RuntimeLlmConfig
 from app.services.context.provider_adapters import NativeStream, native_message, native_request
 
@@ -367,6 +368,7 @@ class LlmClient:
             ) from exc
 
     async def _post_json(self, config: RuntimeLlmConfig, payload: dict[str, Any], *, endpoint: str | None = None) -> dict[str, Any]:
+        started = perf_counter()
         trace = config.trace_context
         attempt_id = f"attempt_{uuid.uuid4().hex}" if trace.get("session_id") else None
         if attempt_id:
@@ -386,14 +388,19 @@ class LlmClient:
                 if not isinstance(data, dict):
                     raise ModelStreamError("模型响应必须是 JSON 对象")
             if attempt_id:
+                choices = data.get("choices")
+                first_choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
                 history_store.save_attempt(trace["session_id"], attempt_id,
                     {"usage": data.get("usage") or {}, "api_status": data.get("status"),
-                     "finish_reason": (data.get("choices") or [{}])[0].get("finish_reason") or data.get("stop_reason"),
+                     "finish_reason": first_choice.get("finish_reason") or data.get("stop_reason"),
+                     "elapsed_ms": round((perf_counter() - started) * 1000),
                      "response_hash": hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}, "received")
             return data
         except BaseException as exc:
             if attempt_id:
-                history_store.save_attempt(trace["session_id"], attempt_id, {"error_type": type(exc).__name__}, "failed")
+                history_store.save_attempt(trace["session_id"], attempt_id, {
+                    "error_type": type(exc).__name__, "elapsed_ms": round((perf_counter() - started) * 1000),
+                }, "failed")
             raise
 
     async def compact_native(self, config: RuntimeLlmConfig, messages: list[dict[str, Any]]) -> dict[str, Any]:
@@ -481,16 +488,22 @@ class LlmClient:
         data = await self._post_json(config, payload)
 
         if config.api_format != "openai-compatible":
-            if data.get("status") in {"failed", "incomplete"} or data.get("stop_reason") == "max_tokens":
+            details = data.get("incomplete_details")
+            if data.get("stop_reason") == "max_tokens" or (isinstance(details, dict) and details.get("reason") == "max_output_tokens"):
+                raise ModelOutputLimitError("模型生成达到输出上限", usage=data.get("usage"))
+            if data.get("status") in {"failed", "incomplete"}:
                 raise ModelStreamError("模型生成未完整结束")
             return native_message(config, data)
         choices = data.get("choices") or []
-        if not choices:
+        if not isinstance(choices, list) or not choices or any(not isinstance(choice, dict) for choice in choices):
             raise ModelStreamError("LLM 未返回有效结果。")
         choices = [next((choice for choice in choices if choice.get("index", 0) == 0), choices[0])]
         if choices[0].get("finish_reason") == "length":
-            raise ModelStreamError("模型生成达到输出上限，不能将部分内容当作完整结果")
-        return choices[0].get("message") or {}
+            raise ModelOutputLimitError("模型生成达到输出上限，不能将部分内容当作完整结果", usage=data.get("usage"))
+        message = choices[0].get("message") or {}
+        if not isinstance(message, dict):
+            raise ModelStreamError("LLM 返回的消息格式不正确。")
+        return message
 
     async def stream_chat_completion(
         self,

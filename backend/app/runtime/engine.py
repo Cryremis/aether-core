@@ -22,7 +22,7 @@ from app.runtime.event_protocol import make_event
 from app.services.context.context_pipeline import context_pipeline
 from app.services.context.message_adapter import context_message_adapter
 from app.services.context.model_profile import model_text, recover_optional_parameter, resolve_model_profile
-from app.services.context.runtime_types import ContextEventType, ContextOverflowError
+from app.services.context.runtime_types import ContextEventType, ContextIntegrityError, ContextOverflowError
 from app.services.durable_io import durable_io
 from app.services.file_service import file_service
 from app.services.llm_client import llm_client
@@ -458,28 +458,51 @@ class AgentEngine:
         ]
         run.turn_index = max((int(item.get("turn_index", 0)) for item in history), default=0)
         tools = tool_display_service.annotate_schemas(visible_schemas(session, tool_service.list_tool_schemas(session)))
+        error_code = None
+        yield make_event(session, "context_compaction_progress", stage="pruning")
+        progress = asyncio.Queue()
+        operation = asyncio.create_task(self._await_operation(
+            session, run_id, context_pipeline.compact_session_async(
+                session=session, llm_runtime=config, messages=[*system, *history], turn_index=run.turn_index,
+                tools=self._tools_for_context_budget(session, tools), cause="user_command",
+                progress=progress.put_nowait,
+            ),
+        ))
+        next_stage = asyncio.create_task(progress.get())
         try:
-            prepared = await self._await_operation(
-                session, run_id, context_pipeline.compact_session_async(
-                    session=session, llm_runtime=config, messages=[*system, *history], turn_index=run.turn_index,
-                    tools=self._tools_for_context_budget(session, tools), cause="user_command",
-                ),
-            )
+            while not operation.done():
+                done, _ = await asyncio.wait({operation, next_stage}, return_when=asyncio.FIRST_COMPLETED)
+                if next_stage in done:
+                    yield make_event(session, "context_compaction_progress", stage=next_stage.result())
+                    next_stage = asyncio.create_task(progress.get())
+            prepared = operation.result()
         except ContextOverflowError as exc:
-            if exc.reason == "pinned_over_budget" or exc.token_estimate > exc.state.effective_window:
-                for event in self._blocked_context_events(session, exc, 0, started):
-                    yield event
-                session.finish_run(run_id)
-                return
-            reply = "当前会话没有可进一步安全压缩的历史。"
+            if exc.reason == "pinned_over_budget":
+                error_code, reply = "COMPACTION_PINNED_OVER_BUDGET", str(exc)
+            elif exc.reason.startswith("COMPACTION_"):
+                error_code, reply = exc.reason, "本次摘要未完成，原上下文未改动，可重试。"
+            else:
+                error_code, reply = "COMPACTION_NO_PROGRESS", "当前会话没有可进一步安全压缩的历史，原上下文未改动。"
+        except ContextIntegrityError:
+            error_code = "COMPACTION_CONTEXT_CHANGED"
+            reply = "本次压缩未提交。请重试，原上下文仍保留。"
         else:
             for event in prepared.events:
                 yield self._emit_context_event(session, event.type, event.payload)
             plan = prepared.plan
-            reply = f"上下文已压缩，估算输入从 {plan.estimated_tokens_before:,} 降到 {plan.estimated_tokens_after:,} tokens。"
+            detail = prepared.events[0].payload
+            reply = (f"上下文已压缩，估算输入从 {plan.estimated_tokens_before:,} 降到 {plan.estimated_tokens_after:,} tokens，"
+                     f"处理了 {plan.messages_affected} 条历史记录。")
+            if detail.get("degraded"):
+                reply += "模型摘要未完成，已用本地压缩保留任务交接和原文归档。"
+                error_code = detail.get("error_code")
+        finally:
+            await self._cancel_wait_tasks(operation, next_stage)
+        yield make_event(session, "context_compaction_progress", stage="finished", error_code=error_code)
         yield make_event(session, "content_delta", delta=reply)
         yield make_event(session, "content_completed")
-        yield make_event(session, "result", subtype="success", is_error=False, result=reply)
+        yield make_event(session, "result", subtype="success", is_error=False, result=reply,
+                         **({"compaction_error_code": error_code} if error_code else {}))
         yield make_event(session, "completed", subtype="success", elapsed_ms=int((time.perf_counter() - started) * 1000))
         session.finish_run(run_id)
 
@@ -1494,14 +1517,15 @@ class AgentEngine:
                             "files_snapshot",
                             items=[item.model_dump(mode="json") for item in file_service.list_sidebar_files(session)],
                         )
-                    session.messages.append(
-                        context_message_adapter.make_tool_message(
-                            tool_call_id=tool_call["id"],
-                            content=tool_result_text,
-                            tool_name=tool_name,
-                            turn_index=request_turn_index,
-                        )
+                    tool_message = context_message_adapter.make_tool_message(
+                        tool_call_id=tool_call["id"],
+                        content=tool_result_text,
+                        tool_name=tool_name,
+                        turn_index=request_turn_index,
                     )
+                    tool_message["tool_status"] = result.status
+                    tool_message["tool_elapsed_ms"] = int((time.perf_counter() - tool_started_at) * 1000)
+                    session.messages.append(tool_message)
                     await session_service.persist_async(session)
                     injected_messages = result.injected_messages
                     if injected_messages:

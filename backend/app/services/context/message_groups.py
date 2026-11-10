@@ -35,7 +35,8 @@ def latest_user_message(messages: list[dict]) -> dict | None:
 
 
 def split_checkpoint(messages: list[dict], estimator, token_budget: int) -> tuple[list[dict], list[dict]]:
-    groups = api_groups([m for m in messages if not m.get("is_boundary_marker")])
+    # 旧边界虽然不进模型请求，仍需留在尾部或成为新检查点的归档来源。
+    groups = api_groups(messages)
     kept = 0
     tokens = 0
     for group in reversed(groups):
