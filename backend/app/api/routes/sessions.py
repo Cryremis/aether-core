@@ -1,7 +1,8 @@
 # backend/app/api/routes/sessions.py
 from datetime import datetime, timezone
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import AuthContext, can_access_embedded_conversation, embedded_organization, get_auth_context
 from app.schemas.common import ApiResponse
@@ -35,7 +36,7 @@ def _ensure_embed_baseline(auth: AuthContext, conversation: dict, session) -> No
         platform_baseline_service.materialize_to_session(platform["platform_key"], session)
 
 
-def _ensure_session_access(session_id: str, auth: AuthContext):
+def _authorized_conversation(session_id: str, auth: AuthContext):
     conversation = store_service.get_conversation_by_session(session_id)
     if conversation is None or conversation.get("deleted_at") is not None:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -47,6 +48,11 @@ def _ensure_session_access(session_id: str, auth: AuthContext):
             raise HTTPException(status_code=403, detail="无权访问该会话")
     else:
         raise HTTPException(status_code=401, detail="未授权")
+    return conversation
+
+
+def _ensure_session_access(session_id: str, auth: AuthContext):
+    conversation = _authorized_conversation(session_id, auth)
     session = session_service.get_or_create(session_id)
     session.conversation_id = conversation.get("conversation_id")
     _ensure_embed_baseline(auth, conversation, session)
@@ -129,28 +135,33 @@ def list_sessions(auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
 
 
 @router.get("/{session_id}")
-def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_context)) -> ApiResponse:
+def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_context),
+                        transcript_limit: Annotated[int | None, Query(ge=1, le=100)] = None) -> ApiResponse:
     conversation, session = _ensure_session_access(session_id, auth)
     cross_chat_inbox_cursor = cross_chat_service.inbox_cursor(conversation)
-    session.transcript = transcript_service.build_session_transcript(session)
+    # 先取事件游标，再读历史。两次读之间落盘的事件可以重放，消息 ID 去重。
+    active_run = agent_run_service.get_active_run_view(session)
+    # 兼容旧客户端，工作台明确选择有界的展示投影。
+    page = transcript_service.workbench_page(session, limit=transcript_limit) if transcript_limit else None
+    transcript = page["transcript"] if page is not None else transcript_service.build_session_transcript(session)
     summary = SessionSummary(
         session_id=session.session_id,
         workspace_id=session.workspace_id,
         conversation_id=session.conversation_id,
         title=conversation.get("title") or "新对话",
         host_name=session.host_name,
-        message_count=len(session.transcript),
+        message_count=page["transcript_page"]["total"] if page is not None else len(transcript),
         allow_network=session.allow_network,
         created_at=datetime.fromisoformat(conversation["created_at"]) if conversation.get("created_at") else datetime.now(timezone.utc),
         skills=skill_service.list_for_session(session),
         files=file_service.list_sidebar_files(session),
-        messages=transcript_service.visible_session_messages(session),
-        transcript=session.transcript,
+        messages=[] if page is not None else transcript_service.visible_session_messages(session),
+        transcript=transcript,
         context_state=session.context_state,
         runtime=store_service.get_workspace_runtime(session.workspace_id) if session.workspace_id else None,
         workboard=runtime_state_service.get_workboard(session),
         elicitation=agent_run_service.get_answerable_elicitation(session),
-        active_run=agent_run_service.get_active_run_view(session),
+        active_run=active_run,
         cross_chat_inbox_cursor=cross_chat_inbox_cursor,
         visibility=str(conversation.get("visibility") or "normal"),
         archived_at=conversation.get("archived_at"),
@@ -158,7 +169,38 @@ def get_session_summary(session_id: str, auth: AuthContext = Depends(get_auth_co
         revision=int(conversation.get("revision") or 0),
         subagents=subagent_service.list_subagents(session),
     )
-    return ApiResponse(message="会话摘要", data=summary.model_dump(mode="json"))
+    data = summary.model_dump(mode="json")
+    if page is not None:
+        data.pop("messages")
+        data["transcript_page"] = page["transcript_page"]
+    return ApiResponse(message="会话摘要", data=data)
+
+
+@router.get("/{session_id}/transcript")
+def get_session_transcript(session_id: str, auth: AuthContext = Depends(get_auth_context),
+                           before: str | None = Query(None, max_length=384),
+                           limit: int = Query(40, ge=1, le=100)) -> ApiResponse:
+    _authorized_conversation(session_id, auth)
+    session = session_service.get_or_create(session_id)
+    try:
+        page = transcript_service.workbench_page(session, limit=limit, before=before)
+    except LookupError as exc:
+        raise HTTPException(status_code=409, detail="聊天历史已变化，请重新加载会话") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="历史游标无效") from exc
+    return ApiResponse(message="聊天历史", data=page)
+
+
+@router.get("/{session_id}/transcript/{message_id}/tools/{block_id}")
+def get_transcript_tool_detail(session_id: str, message_id: str, block_id: str,
+                               auth: AuthContext = Depends(get_auth_context),
+                               offset: int = Query(0, ge=0)) -> ApiResponse:
+    _authorized_conversation(session_id, auth)
+    session = session_service.get_or_create(session_id)
+    detail = transcript_service.workbench_tool_detail(session, message_id, block_id, offset)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="工具输出不存在")
+    return ApiResponse(message="工具输出", data=detail)
 
 
 @router.get("/{session_id}/subagents")

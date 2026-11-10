@@ -557,6 +557,9 @@ class ContextPipeline:
                 working_messages=working_messages, ceiling=ceiling, persist_state=False)
             self._record_compaction(session, original, before=plan.estimated_tokens_before,
                 after=plan.estimated_tokens_after, cause=plan.reason, strategy=strategy, summary=summary)
+            record = session.compaction_audit[-1]
+            prepared.events[0].payload["compaction_id"] = record["id"]
+            prepared.events[0].payload["timestamp"] = record["timestamp"]
             self.state_store.save(session, state)
         except Exception as exc:
             if prepared is None or session.ledger_revision == revision:

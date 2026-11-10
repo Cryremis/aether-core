@@ -64,7 +64,7 @@ describe("audit conversation timestamps", () => {
     );
     expect(html).toContain("查看压缩摘要");
     expect(html).toContain("<details");
-    expect(html).toContain("保留事实 192.0.2.10");
+    expect(html).not.toContain("保留事实 192.0.2.10");
   });
 
   it("maps transcript timestamps to chat messages", () => {

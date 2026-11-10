@@ -443,7 +443,7 @@ export type TranscriptAssistantBlock =
   | { id: string; kind: "content"; content: string; status: "streaming" | "done" | "aborted" }
   | { id: string; kind: "runtime_notice"; eventType: "runtime_recreated"; title: string; detail?: string }
   | { id: string; kind: "elapsed"; elapsed_ms: number }
-  | { id: string; kind: "tool"; toolName?: string; title: string; meta: string; argumentsText: string; outputText: string; liveOutputText?: string; status: "running" | "done" | "aborted" };
+  | { id: string; kind: "tool"; toolName?: string; title: string; meta: string; argumentsText: string; outputText: string; liveOutputText?: string; detailAvailable?: boolean; status: "running" | "done" | "aborted" };
 
 export type TranscriptChatMessage =
   | {
@@ -471,6 +471,7 @@ export type TranscriptChatMessage =
       blocks: TranscriptAssistantBlock[];
       elapsedMs: number | null;
       streaming: boolean;
+      runId?: string;
       responseStartedAt?: string | null;
       timestamp?: string | null;
     };
@@ -498,6 +499,7 @@ export type ActiveRunSummary = {
   status: "running" | "completed";
   started_at: string;
   updated_at: string;
+  compaction_stage?: "pruning" | "summarizing" | "finished";
   assistant: {
     id: string;
     role: "assistant";
@@ -1370,12 +1372,33 @@ export async function listConversations() {
   return response.json();
 }
 
-export async function getSessionSummary(sessionId: string) {
-  const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}`);
+export type WorkbenchTranscriptPage = {
+  transcript: TranscriptChatMessage[];
+  transcript_page: { total: number; start: number; end: number; next_cursor: string | null; revision: number };
+};
+
+export async function getSessionSummary(sessionId: string, signal?: AbortSignal) {
+  const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}?transcript_limit=40`, { signal });
   if (!response.ok) {
     throw new Error(`获取会话摘要失败: ${response.status}`);
   }
   return response.json();
+}
+
+export async function getOlderTranscript(sessionId: string, before: string, signal: AbortSignal): Promise<WorkbenchTranscriptPage> {
+  const response = await apiFetch(`/agent/sessions/${encodeURIComponent(sessionId)}/transcript?before=${encodeURIComponent(before)}`, { signal });
+  if (response.status === 409) throw new TranscriptChangedError();
+  if (!response.ok) throw new Error(await readErrorMessage(response, "读取更早消息失败"));
+  return (await response.json()).data;
+}
+
+export class TranscriptChangedError extends Error {}
+
+export async function getTranscriptToolDetail(sessionId: string, messageId: string, blockId: string, offset: number, signal: AbortSignal) {
+  const path = `/agent/sessions/${encodeURIComponent(sessionId)}/transcript/${encodeURIComponent(messageId)}/tools/${encodeURIComponent(blockId)}`;
+  const response = await apiFetch(`${path}?offset=${offset}`, { signal });
+  if (!response.ok) throw new Error(await readErrorMessage(response, "读取完整工具输出失败"));
+  return (await response.json()).data as { text: string; next_offset: number | null };
 }
 
 export async function streamRunEvents(

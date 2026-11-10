@@ -1,6 +1,6 @@
 import { samplingFromForm, loadAdvancedSampling } from "../api/llmOptions";
 // frontend/src/pages/WorkbenchPage.tsx
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import {
   abortSession,
@@ -16,6 +16,9 @@ import {
   getDownloadUrl,
   getUserLlmConfig,
   getSessionSummary,
+  getOlderTranscript,
+  TranscriptChangedError,
+  type WorkbenchTranscriptPage,
   getSessionElicitation,
   getCrossChatInbox,
   inspectSession,
@@ -56,6 +59,7 @@ import { useAppPreferences } from "../i18n";
 import { formatTokenCount } from "./workbench/markdown";
 import type { CommandAvailability, WorkbenchCommand } from "./workbench/commands";
 import { requestHostToolRefresh } from "./workbench/hostToolRefresh";
+import { TranscriptStore } from "./workbench/transcriptStore";
 import { applyLegacyQuestion, mergeElicitationSnapshot } from "./workbench/elicitation";
 import type {
   AssistantBlock,
@@ -122,16 +126,18 @@ function buildSystemEventMessage(
   };
   let detail = reason ? `原因: ${reason}` : undefined;
   if (eventType === "context_compacted") {
-    const strategy = typeof payload.strategy === "string" ? payload.strategy : "context";
-    const tokensSaved = Number(payload.tokens_saved ?? 0);
-    detail = `策略: ${strategy} · 节省 ${formatTokenCount(tokensSaved)} tokens`;
+    const before = Number(payload.tokens_before ?? 0);
+    const after = Number(payload.tokens_after ?? 0);
+    detail = `输入估算 ${before.toLocaleString("en-US")} → ${after.toLocaleString("en-US")} tokens`;
   }
   return {
-    id: `system-event-${eventType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: typeof payload.compaction_id === "string" ? payload.compaction_id
+      : `system-event-${eventType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role: "system_event",
     title: titleByType[eventType],
     detail,
     eventType,
+    timestamp: typeof payload.timestamp === "string" ? payload.timestamp : undefined,
   };
 }
 
@@ -147,6 +153,7 @@ function fromTranscriptMessages(items: TranscriptChatMessage[]): TranscriptMessa
           elapsedMs: item.elapsedMs ?? null,
           streaming: false,
           responseStartedAt: item.responseStartedAt ? Date.parse(item.responseStartedAt) : undefined,
+          timestamp: item.timestamp,
         }
       : item.role === "elicitation_response"
         ? {
@@ -156,11 +163,13 @@ function fromTranscriptMessages(items: TranscriptChatMessage[]): TranscriptMessa
             title: item.title,
             summary: item.summary,
             answers: item.answers,
+            timestamp: item.timestamp,
           }
         : {
             id: item.id || `history-user-${index}`,
             role: "user",
             content: item.content,
+            timestamp: item.timestamp,
           },
   );
 }
@@ -229,7 +238,7 @@ function appendTranscriptMessage(
 
 function insertTranscriptMessageBeforeAssistant(
   current: TranscriptMessage[],
-  message: Extract<TranscriptMessage, { role: "user" | "elicitation_response" }>,
+  message: TranscriptMessage,
   assistantId: string | null,
 ): TranscriptMessage[] {
   const existingIndex = current.findIndex((item) => item.id === message.id);
@@ -288,7 +297,17 @@ export function WorkbenchPage({
   onAssistantPreview,
 }: WorkbenchPageProps) {
   const { t, theme, setTheme, themeLocked, notifyOnComplete } = useAppPreferences();
-  const [transcriptMessages, setTranscriptMessages] = useState<TranscriptMessage[]>([]);
+  const [transcriptStore] = useState(() => new TranscriptStore());
+  const transcriptMessages = useSyncExternalStore(transcriptStore.subscribe, transcriptStore.snapshot);
+  const setTranscriptMessages = transcriptStore.set;
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState("");
+  const historyPageRequest = useRef<AbortController | null>(null);
+  const olderPageRequest = useRef<AbortController | null>(null);
+  const transcriptOwnerRef = useRef("");
+  const transcriptPageRef = useRef<WorkbenchTranscriptPage["transcript_page"] | null>(null);
+  const scrollToLatestRef = useRef<(() => void) | null>(null);
   const [pendingUserEcho, setPendingUserEcho] = useState<PendingUserEcho | null>(null);
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -387,6 +406,7 @@ export function WorkbenchPage({
   const [showAdvancedLlmFields, setShowAdvancedLlmFields] = useState(false);
   const [localSessionId, setLocalSessionId] = useState<string | null>(null);
   const [contextStatus, setContextStatus] = useState<ContextStatus | null>(null);
+  const [compactionProgress, setCompactionProgress] = useState("");
   const [inspection, setInspection] = useState<{ sessionId: string; resource: "context/status" | "tools" } | null>(null);
   const [deliverySessionId, setDeliverySessionId] = useState<string | null>(null);
   const [refreshNotice, setRefreshNotice] = useState<{ sessionId: string; text: string } | null>(null);
@@ -395,7 +415,6 @@ export function WorkbenchPage({
   const mountedRef = useRef(true);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
-  const transcriptMessagesRef = useRef<TranscriptMessage[]>([]);
   const pendingUserEchoRef = useRef<PendingUserEcho | null>(null);
   const pendingAssistantIdRef = useRef<string | null>(null);
   const isStreamingRef = useRef(false);
@@ -413,20 +432,10 @@ export function WorkbenchPage({
   const childLiveRunRef = useRef<{ runId: string; assistantId: string } | null>(null);
   const lastRunIdRef = useRef("");
   const newlyCreatedSessionRef = useRef<string | null>(null);
-  const shouldStickToBottomRef = useRef(true);
-  const scrollFrameRef = useRef<number | null>(null);
-  const bottomAnchorFrameRef = useRef<number | null>(null);
-  const bottomAnchorUntilRef = useRef(0);
-  const autoScrollingRef = useRef(false);
-  const previousScrollTopRef = useRef(0);
-  const loadScrollSettleUntilRef = useRef(0);
-  const detailsToggleShouldStickRef = useRef(false);
-  const pendingSessionBottomScrollRef = useRef(false);
   const workboardOpChainRef = useRef<Promise<void>>(Promise.resolve());
   const workboardOpenCountBySessionRef = useRef<Record<string, number>>({});
 
-  const historyRef = useRef<HTMLDivElement | null>(null);
-  const historyContentRef = useRef<HTMLDivElement | null>(null);
+  const [historyElement, setHistoryElement] = useState<HTMLDivElement | null>(null);
   const mainSessionId = sessionId || localSessionId || "";
   const isSubagentView = Boolean(activeSubagentSessionId);
   const activeSessionId = activeSubagentSessionId || mainSessionId;
@@ -436,7 +445,7 @@ export function WorkbenchPage({
   const displayedWorkboard = !isSubagentView && workboard?.session_id === mainSessionId ? workboard : null;
   const pendingElicitationRequest = !isSubagentView && elicitation?.session_id === mainSessionId ? elicitation.pending : null;
   const workboardVisible = !isSubagentView && mainSessionId ? (workboardVisibilityBySession[mainSessionId] ?? false) : false;
-  const messages: ChatMessage[] = (() => {
+  const messages = useMemo<ChatMessage[]>(() => {
     if (!pendingUserEcho) return transcriptMessages;
     const anchorAssistantId = pendingAssistantIdRef.current || liveRunRef.current?.assistantId;
     if (!anchorAssistantId) return [...transcriptMessages, pendingUserEcho];
@@ -447,7 +456,7 @@ export function WorkbenchPage({
       pendingUserEcho,
       ...transcriptMessages.slice(assistantIndex),
     ];
-  })();
+  }, [pendingUserEcho, transcriptMessages]);
 
   useEffect(() => {
     activeViewSessionIdRef.current = activeSessionId;
@@ -473,10 +482,6 @@ export function WorkbenchPage({
   }, [pendingUserEcho]);
 
   useEffect(() => {
-    transcriptMessagesRef.current = transcriptMessages;
-  }, [transcriptMessages]);
-
-  useEffect(() => {
     if (!mainSessionId || isSubagentView) return;
 
     const nextOpenCount = getOpenWorkItemCount(displayedWorkboard);
@@ -496,97 +501,6 @@ export function WorkbenchPage({
       setWorkboardVisibilityBySession((current) => ({ ...current, [mainSessionId]: false }));
     }
   }, [displayedWorkboard, isSubagentView, mainSessionId]);
-
-  const isNearBottom = (node: HTMLDivElement, threshold = 80) => {
-    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
-    return distanceFromBottom <= threshold;
-  };
-
-  const updateStickToBottom = (node: HTMLDivElement) => {
-    shouldStickToBottomRef.current = isNearBottom(node);
-  };
-
-  const stopKeepBottom = () => {
-    shouldStickToBottomRef.current = false;
-    bottomAnchorUntilRef.current = 0;
-    if (bottomAnchorFrameRef.current !== null) {
-      window.cancelAnimationFrame(bottomAnchorFrameRef.current);
-      bottomAnchorFrameRef.current = null;
-    }
-  };
-
-  const scrollHistoryToBottom = (behavior: ScrollBehavior = "auto") => {
-    const node = historyRef.current;
-    if (!node) return;
-    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      autoScrollingRef.current = true;
-      node.scrollTo({ top: node.scrollHeight, behavior });
-      previousScrollTopRef.current = node.scrollTop;
-      window.setTimeout(() => {
-        autoScrollingRef.current = false;
-      }, 0);
-      scrollFrameRef.current = null;
-    });
-  };
-
-  const holdBottomAnchor = (durationMs = 320) => {
-    const node = historyRef.current;
-    if (!node) return;
-
-    bottomAnchorUntilRef.current = Math.max(bottomAnchorUntilRef.current, performance.now() + durationMs);
-    if (bottomAnchorFrameRef.current !== null) return;
-
-    const tick = () => {
-      const current = historyRef.current;
-      if (!current) {
-        bottomAnchorFrameRef.current = null;
-        return;
-      }
-
-      if (shouldStickToBottomRef.current) {
-        autoScrollingRef.current = true;
-        current.scrollTop = current.scrollHeight;
-        previousScrollTopRef.current = current.scrollTop;
-        window.setTimeout(() => {
-          autoScrollingRef.current = false;
-        }, 0);
-      }
-
-      if (performance.now() < bottomAnchorUntilRef.current && shouldStickToBottomRef.current) {
-        bottomAnchorFrameRef.current = window.requestAnimationFrame(tick);
-      } else {
-        bottomAnchorFrameRef.current = null;
-      }
-    };
-
-    bottomAnchorFrameRef.current = window.requestAnimationFrame(tick);
-  };
-
-  const keepHistoryPinnedToBottom = (durationMs = 320) => {
-    shouldStickToBottomRef.current = true;
-    scrollHistoryToBottom();
-    holdBottomAnchor(durationMs);
-  };
-
-  const handleHistoryScroll = () => {
-    const node = historyRef.current;
-    if (!node) return;
-    const currentTop = node.scrollTop;
-    const movedUp = currentTop < previousScrollTopRef.current - 2;
-    previousScrollTopRef.current = currentTop;
-    if (movedUp && !autoScrollingRef.current && !isNearBottom(node)) {
-      stopKeepBottom();
-      return;
-    }
-    updateStickToBottom(node);
-  };
-
-  const handleHistoryWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (event.deltaY < 0) {
-      stopKeepBottom();
-    }
-  };
 
   const handleSidebarResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
     if (isMobile) return;
@@ -620,89 +534,13 @@ window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [isSidebarOpen]);
 
-  useLayoutEffect(() => {
-    const node = historyRef.current;
-    if (!node) return;
-    if (pendingSessionBottomScrollRef.current && !loading) {
-      pendingSessionBottomScrollRef.current = false;
-      keepHistoryPinnedToBottom(900);
-      return;
-    }
-    if (!shouldStickToBottomRef.current) return;
-    scrollHistoryToBottom();
-  }, [messages, loading]);
-
-  useEffect(() => {
-    const contentNode = historyContentRef.current;
-    if (!contentNode || typeof ResizeObserver === "undefined") return;
-
-    const observer = new ResizeObserver(() => {
-      if (!historyRef.current) return;
-      const shouldSettle = performance.now() < loadScrollSettleUntilRef.current;
-      if (!shouldSettle && !shouldStickToBottomRef.current) return;
-      keepHistoryPinnedToBottom(240);
-    });
-
-    observer.observe(contentNode);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const node = historyRef.current;
-    if (!node) return;
-
-    const rememberBottomIntent = (event: Event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
-      const summary = target.closest("summary");
-      if (!summary || !node.contains(summary)) return;
-      const details = summary.closest("details");
-      if (!(details instanceof HTMLDetailsElement)) return;
-      if (!details.classList.contains("tool-card") && !details.classList.contains("code-block-wrapper") && !details.classList.contains("reasoning-block")) {
-        return;
-      }
-      detailsToggleShouldStickRef.current = isNearBottom(node);
-    };
-
-    const handleDetailsToggle = (event: Event) => {
-      const details = event.target;
-      if (!(details instanceof HTMLDetailsElement)) return;
-      if (!details.classList.contains("tool-card") && !details.classList.contains("code-block-wrapper") && !details.classList.contains("reasoning-block")) {
-        return;
-      }
-
-      const shouldKeepBottom = detailsToggleShouldStickRef.current || isNearBottom(node);
-      detailsToggleShouldStickRef.current = false;
-
-      details.classList.remove("is-opening", "is-closing");
-      void details.offsetHeight;
-      details.classList.add(details.open ? "is-opening" : "is-closing");
-
-      if (shouldKeepBottom) {
-        keepHistoryPinnedToBottom(320);
-      }
-
-      window.setTimeout(() => {
-        details.classList.remove("is-opening", "is-closing");
-      }, 240);
-    };
-
-    node.addEventListener("pointerdown", rememberBottomIntent, true);
-    node.addEventListener("keydown", rememberBottomIntent, true);
-    node.addEventListener("toggle", handleDetailsToggle, true);
-    return () => {
-      node.removeEventListener("pointerdown", rememberBottomIntent, true);
-      node.removeEventListener("keydown", rememberBottomIntent, true);
-      node.removeEventListener("toggle", handleDetailsToggle, true);
-    };
-  }, []);
-
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
-      if (bottomAnchorFrameRef.current !== null) window.cancelAnimationFrame(bottomAnchorFrameRef.current);
+      historyPageRequest.current?.abort();
+      olderPageRequest.current?.abort();
+      transcriptStore.flush();
       abortControllerRef.current?.abort();
       childAbortControllerRef.current?.abort();
     };
@@ -854,17 +692,6 @@ window.addEventListener("resize", handleResize);
     setFiles((fileResult.items ?? []) as FileItem[]);
   };
 
-  const syncTranscriptFromServer = async (targetSessionId: string) => {
-    const summaryResult = await getSessionSummary(targetSessionId);
-    const summary = (summaryResult.data ?? {}) as {
-      transcript?: TranscriptChatMessage[];
-      elicitation?: ElicitationState;
-    };
-    setTranscriptMessages(fromTranscriptMessages(summary.transcript ?? []));
-    setPendingUserEcho(null);
-    setElicitation((current) => summary.elicitation ? mergeElicitationSnapshot(current, summary.elicitation) : null);
-  };
-
   // 任务完成系统通知: 仅在用户不在场(tab 后台或嵌入式抽屉关闭)且已授权时弹出。
   // 标题用宿主平台名(嵌入式)或 AetherCore,正文为 agent 最后回复(由系统自行截断)。
   // 注意: 必须在 completed 事件到达的同一宏任务内同步发出,
@@ -893,12 +720,15 @@ window.addEventListener("resize", handleResize);
 
   const loadSession = async (
     nextSessionId: string,
+    signal: AbortSignal,
     options?: { preserveSubagents?: boolean; liveRunTarget?: LiveRunRef },
   ) => {
-    const summaryResult = await getSessionSummary(nextSessionId);
+    const summaryResult = await getSessionSummary(nextSessionId, signal);
+    if (signal.aborted || activeViewSessionIdRef.current !== nextSessionId) return null;
     const summary = (summaryResult.data ?? {}) as {
       title?: string;
       transcript?: TranscriptChatMessage[];
+      transcript_page?: WorkbenchTranscriptPage["transcript_page"];
       allow_network?: boolean;
       host_name?: string | null;
       skills?: SkillItem[];
@@ -924,8 +754,25 @@ window.addEventListener("resize", handleResize);
     if (activeSessionIdRef.current === nextSessionId) {
       crossChatInboxRef.current = { sessionId: nextSessionId, cursor: summary.cross_chat_inbox_cursor ?? null };
     }
-    const transcriptMessages = fromTranscriptMessages(summary.transcript ?? []);
-    setTranscriptMessages(transcriptMessages);
+    const activeRun = summary.active_run?.status === "running" ? summary.active_run : null;
+    const page = summary.transcript_page;
+    const previousPage = transcriptPageRef.current;
+    const incoming = summary.transcript ?? [];
+    const rows = fromTranscriptMessages(incoming.filter((row) =>
+      row.role !== "assistant" || !activeRun || row.runId !== activeRun.run_id));
+    const anchor = incoming[0]?.id;
+    const current = transcriptStore.read();
+    const overlap = anchor ? current.findIndex((row) => row.id === anchor) : -1;
+    if (page && previousPage?.revision === page.revision && previousPage.start < page.start && overlap >= 0) {
+      setTranscriptMessages([...current.slice(0, overlap), ...rows]);
+      transcriptPageRef.current = { ...page, start: previousPage.start, next_cursor: previousPage.next_cursor };
+    } else {
+      setTranscriptMessages(rows);
+      transcriptPageRef.current = page ?? null;
+    }
+    setOlderCursor(transcriptPageRef.current?.next_cursor ?? null);
+    setCompactionProgress(activeRun?.compaction_stage === "pruning" ? "正在裁剪历史上下文"
+      : activeRun?.compaction_stage === "summarizing" ? "正在生成任务摘要" : "");
     setPendingUserEcho(null);
     setAllowNetwork(summary.allow_network ?? true);
     hostNameRef.current = summary.host_name || "";
@@ -961,11 +808,45 @@ window.addEventListener("resize", handleResize);
     if (options?.preserveSubagents && summary.title) {
       setActiveSubagentName(summary.title.replace(/^Subagent:\s*/, ""));
     }
-    if (summary.active_run?.status === "running") {
-      restoreActiveRunAssistant(summary.active_run, targetLiveRunRef);
-      return summary.active_run;
+    if (activeRun) {
+      restoreActiveRunAssistant(activeRun, targetLiveRunRef);
+      return activeRun;
     }
     return null;
+  };
+
+  const loadOlderTranscript = async () => {
+    if (!olderCursor || !activeSessionId || olderPageRequest.current || loading) return;
+    if (olderError === "聊天历史已变化，请重新加载会话") {
+      if (!displayedBusy) requestSessionReload(activeSessionId);
+      return;
+    }
+    const request = new AbortController();
+    olderPageRequest.current = request;
+    setLoadingOlder(true);
+    setOlderError("");
+    try {
+      const page = await getOlderTranscript(activeSessionId, olderCursor, request.signal);
+      if (request.signal.aborted || activeViewSessionIdRef.current !== activeSessionId) return;
+      setTranscriptMessages((current) => {
+        const ids = new Set(current.map((item) => item.id));
+        return [...fromTranscriptMessages(page.transcript).filter((item) => !ids.has(item.id)), ...current];
+      });
+      setOlderCursor(page.transcript_page.next_cursor);
+      if (transcriptPageRef.current) {
+        transcriptPageRef.current = { ...transcriptPageRef.current, start: page.transcript_page.start,
+          next_cursor: page.transcript_page.next_cursor };
+      }
+    } catch (error) {
+      if (request.signal.aborted) return;
+      setOlderError(error instanceof TranscriptChangedError ? "聊天历史已变化，请重新加载会话"
+        : error instanceof Error ? error.message : "读取更早消息失败");
+    } finally {
+      if (olderPageRequest.current === request) {
+        olderPageRequest.current = null;
+        setLoadingOlder(false);
+      }
+    }
   };
 
   const refreshSubagents = async (targetSessionId = mainSessionId) => {
@@ -1033,6 +914,10 @@ window.addEventListener("resize", handleResize);
       setLocalSessionId(null);
       newlyCreatedSessionRef.current = null;
       setTranscriptMessages([]);
+      setOlderCursor(null);
+      transcriptPageRef.current = null;
+      setCompactionProgress("");
+      transcriptOwnerRef.current = "";
       setPendingUserEcho(null);
       setSkills([]);
       setFiles([]);
@@ -1060,10 +945,19 @@ window.addEventListener("resize", handleResize);
       return;
     }
 
-    shouldStickToBottomRef.current = true;
-    pendingSessionBottomScrollRef.current = true;
-    loadScrollSettleUntilRef.current = performance.now() + 1200;
-    previousScrollTopRef.current = 0;
+    olderPageRequest.current?.abort();
+    olderPageRequest.current = null;
+    setLoadingOlder(false);
+    setOlderError("");
+    if (transcriptOwnerRef.current !== targetSessionId) {
+      transcriptOwnerRef.current = targetSessionId;
+      setTranscriptMessages([]);
+      setOlderCursor(null);
+      transcriptPageRef.current = null;
+      setCompactionProgress("");
+    }
+    const historyRequest = new AbortController();
+    historyPageRequest.current = historyRequest;
     setLoading(true);
     setError("");
     setConnectionNotice("");
@@ -1071,21 +965,23 @@ window.addEventListener("resize", handleResize);
     const isChildView = Boolean(activeSubagentSessionId);
     if (!isChildView && isStreamingRef.current && returningFromSubagentRef.current) {
       returningFromSubagentRef.current = false;
-      void loadSession(targetSessionId)
-        .catch((loadError) => setError(loadError instanceof Error ? loadError.message : "初始化失败"))
-        .finally(() => setLoading(false));
-      return;
+      void loadSession(targetSessionId, historyRequest.signal)
+        .catch((loadError) => {
+          if (!historyRequest.signal.aborted) setError(loadError instanceof Error ? loadError.message : "初始化失败");
+        })
+        .finally(() => { if (!historyRequest.signal.aborted) setLoading(false); });
+      return () => historyRequest.abort();
     }
     if (!isChildView) {
       returningFromSubagentRef.current = false;
     }
 
-    void loadSession(targetSessionId, {
+    void loadSession(targetSessionId, historyRequest.signal, {
       preserveSubagents: isChildView,
       liveRunTarget: isChildView ? childLiveRunRef : liveRunRef,
     })
       .then((activeRun) => {
-        if (!activeRun || !mountedRef.current) return;
+        if (!activeRun || !mountedRef.current || historyRequest.signal.aborted) return;
         const reconnectAssistantId = activeRun.assistant.id || `live-${activeRun.run_id}`;
         const reconnectAbortController = new AbortController();
         if (isChildView) {
@@ -1139,6 +1035,7 @@ window.addEventListener("resize", handleResize);
           });
       })
       .catch((loadError) => {
+        if (historyRequest.signal.aborted) return;
         if (recovering) {
           setConnectionNotice("暂时无法读取最新进度，当前显示的内容已保留。");
           setReconnectAvailable(true);
@@ -1153,7 +1050,8 @@ window.addEventListener("resize", handleResize);
         setElicitation(null);
         if (!isChildView) setSubagents([]);
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!historyRequest.signal.aborted) setLoading(false); });
+    return () => historyRequest.abort();
   }, [activeSubagentSessionId, sessionId, isNewSession, localSessionId, sessionReload]);
 
   const pendingQuestionId = pendingElicitationRequest?.id;
@@ -1226,13 +1124,14 @@ window.addEventListener("resize", handleResize);
 const composerDisabled = loading || !(sessionId || localSessionId || isNewSession) || Boolean(pendingElicitationRequest?.blocking);
 
   const appendAssistantBlock = (messageId: string, block: AssistantBlock) => {
-    setTranscriptMessages((current) =>
-      current.map((item) => (item.id === messageId && item.role === "assistant" ? { ...item, blocks: [...item.blocks, block] } : item)),
-    );
+    transcriptStore.patch(messageId, (item) => item.role === "assistant" ? { ...item, blocks: [...item.blocks, block] } : item);
   };
 
-  const appendSystemEvent = (eventType: Extract<TranscriptMessage, { role: "system_event" }>["eventType"], payload: Record<string, unknown>) => {
-    setTranscriptMessages((current) => [...current, buildSystemEventMessage(eventType, payload)]);
+  const appendSystemEvent = (eventType: Extract<TranscriptMessage, { role: "system_event" }>["eventType"],
+    payload: Record<string, unknown>, assistantId: string) => {
+    const row = buildSystemEventMessage(eventType, payload);
+    setTranscriptMessages((current) => eventType === "context_compacted" || eventType === "context_recovered"
+      ? insertTranscriptMessageBeforeAssistant(current, row, assistantId) : appendTranscriptMessage(current, row));
   };
 
   const appendAssistantRuntimeNotice = (messageId: string, payload: Record<string, unknown>) => {
@@ -1245,20 +1144,15 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
     );
   };
 
-  const updateAssistantBlock = (messageId: string, blockId: string, updater: (block: AssistantBlock) => AssistantBlock) => {
-    setTranscriptMessages((current) =>
-      current.map((item) =>
-        item.id === messageId && item.role === "assistant"
-          ? { ...item, blocks: item.blocks.map((block) => (block.id === blockId ? updater(block) : block)) }
-          : item,
-      ),
-    );
+  const updateAssistantBlock = (messageId: string, blockId: string, updater: (block: AssistantBlock) => AssistantBlock, defer = false) => {
+    transcriptStore.patch(messageId, (item) => item.role === "assistant"
+      ? { ...item, blocks: item.blocks.map((block) => block.id === blockId ? updater(block) : block) } : item, defer);
   };
 
-  const upsertAssistantBlock = (messageId: string, blockId: string, createBlock: () => AssistantBlock, updater: (block: AssistantBlock) => AssistantBlock) => {
-    setTranscriptMessages((current) =>
-      current.map((item) => {
-        if (item.id !== messageId || item.role !== "assistant") return item;
+  const upsertAssistantBlock = (messageId: string, blockId: string, createBlock: () => AssistantBlock,
+    updater: (block: AssistantBlock) => AssistantBlock, defer = false) => {
+    transcriptStore.patch(messageId, (item) => {
+        if (item.role !== "assistant") return item;
         let found = false;
         const nextBlocks = item.blocks.map((block) => {
           if (block.id !== blockId) return block;
@@ -1269,28 +1163,16 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
           ...item,
           blocks: found ? nextBlocks : [...nextBlocks, createBlock()],
         };
-      }),
-    );
+      }, defer);
   };
 
   const upsertAssistantMessage = (
     messageId: string,
     updater: (message: Extract<TranscriptMessage, { role: "assistant" }> | null) => Extract<TranscriptMessage, { role: "assistant" }>,
   ) => {
-    setTranscriptMessages((current) => {
-      let found = false;
-      const next = current.map((item) => {
-        if (item.id === messageId && item.role === "assistant") {
-          found = true;
-          return updater(item);
-        }
-        return item;
-      });
-      if (found) {
-        return next;
-      }
-      return [...next, updater(null)];
-    });
+    if (!transcriptStore.patch(messageId, (item) => item.role === "assistant" ? updater(item) : item)) {
+      setTranscriptMessages((current) => [...current, updater(null)]);
+    }
   };
 
   const commitPendingMessage = (clientMessageId: string | null, committedMessage: CommittedChatMessage) => {
@@ -1381,6 +1263,9 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
         eventCursorsRef.current.set(key, event.seq);
       }
       const eventType = String(event.type ?? "");
+      if (eventType !== "content_delta" && eventType !== "reasoning_delta" && eventType !== "tool_output_delta") {
+        transcriptStore.flush();
+      }
       const payload = (event.payload ?? {}) as Record<string, unknown>;
       if (eventType === "transport_status") {
         setConnectionNotice(payload.state === "reconnecting" ? "连接暂时中断，正在重新连接并恢复进度…" : "");
@@ -1492,6 +1377,7 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
       }
 
       if (eventType === "aborted") {
+        setCompactionProgress("");
         setContextStatus((current) => current?.state === "compacting"
           ? { ...current, state: "idle", detail: "上下文压缩已取消" } : current);
         const partial = String(payload.partial_content ?? "");
@@ -1524,6 +1410,8 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
 
       if (eventType === "context_compaction_progress") {
         const stage = String(payload.stage);
+        setCompactionProgress(stage === "pruning" ? "正在裁剪历史上下文"
+          : stage === "summarizing" ? "正在生成任务摘要" : "");
         setContextStatus((current) => current && ({
           ...current,
           state: stage === "finished" ? (current.state === "compacting" ? "idle" : current.state) : "compacting",
@@ -1599,7 +1487,7 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
         eventType === "context_recovered" ||
         eventType === "context_blocked"
       ) {
-        appendSystemEvent(eventType as Extract<ChatMessage, { role: "system_event" }>["eventType"], payload);
+        appendSystemEvent(eventType as Extract<ChatMessage, { role: "system_event" }>["eventType"], payload, assistantId);
       }
 
       if (eventType === "reasoning_delta") {
@@ -1615,6 +1503,7 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
         } else {
           updateAssistantBlock(assistantId, refs.activeReasoningId.value, (block) =>
             block.kind === "reasoning" ? { ...block, content: `${block.content}${String(payload.delta ?? "")}` } : block,
+            true,
           );
         }
         return;
@@ -1644,6 +1533,7 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
         } else {
           updateAssistantBlock(assistantId, refs.activeContentId.value, (block) =>
             block.kind === "content" ? { ...block, content: refs.activeContentText.value, status: "streaming" } : block,
+            true,
           );
         }
         onAssistantPreview?.({
@@ -1734,10 +1624,11 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
             block.kind === "tool"
               ? {
                   ...block,
-                  liveOutputText: `${block.liveOutputText ?? ""}${String(payload.text ?? "")}`,
+                  liveOutputText: `${block.liveOutputText ?? ""}${String(payload.text ?? "")}`.slice(-65_536),
                   status: "running",
                 }
               : block,
+          true,
         );
         return;
       }
@@ -1808,6 +1699,7 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
 
       if (eventType === "completed") {
         if (payload.historical_pause) return;
+        setCompactionProgress("");
         setConnectionNotice(payload.subtype === "timeout" ? "提问等待超时，可以发送新消息继续。" : "");
         const elapsedMs = Number(payload.elapsed_ms ?? 0);
         const completionSubtype = String(payload.subtype ?? "");
@@ -1849,6 +1741,7 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
       }
 
       if (eventType === "error") {
+        setCompactionProgress("");
         setConnectionNotice("");
         const message = MODEL_FAILURE_MESSAGES[String(payload.error_code ?? "")]
           ?? "当前服务暂时无法完成请求，已保留已有进度，请稍后继续。";
@@ -1929,11 +1822,11 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
     abortControllerRef.current = abortController;
     pendingAssistantIdRef.current = assistantId;
     isStreamingRef.current = true;
-    shouldStickToBottomRef.current = true;
+    scrollToLatestRef.current?.();
     setBusy(true);
     setError("");
     setPendingUserEcho(
-      skipAddUserBubble && pendingUserBubble
+      userText.trim().toLowerCase() === "/compact" ? null : skipAddUserBubble && pendingUserBubble
         ? {
             id: pendingUserBubble.id,
             role: "user",
@@ -2087,11 +1980,11 @@ const composerDisabled = loading || !(sessionId || localSessionId || isNewSessio
   const rerunFromTimeline = async (messageId: string, promptOverride?: string) => {
     const effectiveSessionId = sessionId || localSessionId;
     if (!effectiveSessionId || isStreamingRef.current) return;
-    const previousTranscript = transcriptMessagesRef.current;
+    const previousTranscript = transcriptStore.read();
 
     setBusy(true);
     setError("");
-    shouldStickToBottomRef.current = true;
+    scrollToLatestRef.current?.();
 
     if (promptOverride !== undefined) {
       setTranscriptMessages((current) => trimTranscriptForRerun(current, messageId, promptOverride));
@@ -2297,7 +2190,7 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
     abortControllerRef.current = abortController;
     pendingAssistantIdRef.current = assistantId;
     isStreamingRef.current = true;
-    shouldStickToBottomRef.current = true;
+    scrollToLatestRef.current?.();
     setBusy(true);
     setElicitationBusy(true);
     setError("");
@@ -2744,10 +2637,20 @@ const handleEditUserMessage = async (messageId: string, editedContent: string) =
           {reconnectAvailable && <button type="button" onClick={() => requestSessionReload(activeSessionId)}>重新连接</button>}
         </div> : null}
         {error ? <div className="error-toast anim-shake">{error}</div> : null}
+        {compactionProgress && contextStatus?.state !== "compacting" &&
+          <div className="connection-notice" role="status">{compactionProgress}</div>}
 
-        <div className="chat-area" ref={historyRef} onScroll={handleHistoryScroll} onWheel={handleHistoryWheel}>
+        <div className="chat-area chat-area--virtual" ref={setHistoryElement}>
           <ChatTimeline
-            contentRef={historyContentRef}
+            key={activeSessionId}
+            sessionId={activeSessionId}
+            scrollElement={historyElement}
+            scrollToLatestRef={scrollToLatestRef}
+            transcriptStore={transcriptStore}
+            hasOlder={Boolean(olderCursor)}
+            loadingOlder={loadingOlder}
+            olderError={olderError}
+            onLoadOlder={() => void loadOlderTranscript()}
             loading={loading}
             messages={messages}
             subagents={subagents}

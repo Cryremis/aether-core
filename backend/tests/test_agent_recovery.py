@@ -224,13 +224,26 @@ def test_manual_compact_large_session_without_model_and_can_continue(monkeypatch
 
     compacted, repeated, continued = asyncio.run(run())
     event = next(event["payload"] for event in compacted if event["type"] == "context_compacted")
+    deltas = [item["payload"]["delta"] for item in compacted if item["type"] == "content_delta"]
+    assert len(deltas) > 1
+    assert "".join(deltas).startswith("上下文已压缩。")
     assert event["tokens_before"] > 300_000
     assert event["tokens_after"] < 30_000
     assert not any(event["type"] == "context_compacted" for event in repeated)
     assert not FakeAsyncClient.post_payloads
     assert continued[-1]["payload"]["subtype"] == "success"
     assert latest in [item["content"] for item in FakeAsyncClient.stream_payloads[0]["messages"]]
+    assert not any("上下文已压缩。" in str(item.get("content")) for item in FakeAsyncClient.stream_payloads[0]["messages"])
     assert history_store.read(session.session_id, message_id=oldest)["items"]
+    from app.services.session_service import session_service
+    session_service._sessions.pop(session.session_id)
+    restored = session_service.get_or_create(session.session_id)
+    marker = next(index for index, item in enumerate(restored.transcript) if item["id"] == event["compaction_id"])
+    assert restored.transcript[marker]["title"] == "上下文已压缩"
+    assert "summary" not in restored.transcript[marker]
+    assistant = restored.transcript[marker + 1]
+    assert assistant["role"] == "assistant"
+    assert assistant["blocks"][0]["content"] == "".join(deltas)
 
 
 @pytest.mark.parametrize("abort", [False, True])

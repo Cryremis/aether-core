@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
@@ -116,8 +116,10 @@ function parseMarkdownWithCodeBlocks(text: string): MarkdownPart[] {
 
 function CodeBlock({ code, language, lineCount, streaming = false }: { code: string; language: string; lineCount: number; streaming?: boolean }) {
     const validLang = hljs.getLanguage(language) ? language : "plaintext";
-    const highlighted = useMemo(() => hljs.highlight(code, { language: validLang }).value, [code, validLang]);
-    const isOpen = streaming || lineCount <= 15;
+    const [expanded, setExpanded] = useState<boolean | null>(null);
+    const isOpen = expanded ?? (streaming || lineCount <= 15);
+    const highlighted = useMemo(() => isOpen && !streaming ? hljs.highlight(code, { language: validLang }).value : null,
+        [code, validLang, isOpen, streaming]);
     const shouldCollapse = !streaming && lineCount > 15;
     const [copyLabel, setCopyLabel] = useState("复制");
     const resetTimerRef = useRef<number | null>(null);
@@ -156,6 +158,9 @@ function CodeBlock({ code, language, lineCount, streaming = false }: { code: str
         <details
             className={`code-block-wrapper ${shouldCollapse ? "collapsible" : ""} ${streaming ? "streaming" : ""}`}
             open={isOpen}
+            onToggle={(event) => {
+                if (event.currentTarget.open !== isOpen) setExpanded(event.currentTarget.open);
+            }}
         >
             <summary className="code-header">
                 <div className="code-header-left">
@@ -170,35 +175,59 @@ function CodeBlock({ code, language, lineCount, streaming = false }: { code: str
                     </button>
                 </div>
             </summary>
-            <div className="code-content-wrapper">
+            {isOpen && <div className="code-content-wrapper">
                 <div className="code-content-inner">
-                    <pre><code className={`hljs language-${validLang}`} dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
+                    {highlighted !== null
+                        ? <pre><code className={`hljs language-${validLang}`} dangerouslySetInnerHTML={{ __html: highlighted }} /></pre>
+                        : <pre><code className={`hljs language-${validLang}`}>{code}</code></pre>}
                 </div>
-            </div>
+            </div>}
         </details>
     );
 }
 
-export function MemoizedMarkdown({ content }: { content?: string }) {
-    const safeContent = content || "";
-    const parts = useMemo(() => parseMarkdownWithCodeBlocks(safeContent), [safeContent]);
+const STREAM_SEGMENT_CHARS = 4_096;
+const STREAM_TAIL_CHARS = 16_384;
 
-    if (parts.length === 0) {
-        return null;
+const MarkdownParts = memo(function MarkdownParts({ content }: { content: string }) {
+    const parts = useMemo(() => parseMarkdownWithCodeBlocks(content), [content]);
+    return parts.map((part, index) => part.type === "code"
+        ? <CodeBlock key={part.key} code={part.code} language={part.language} lineCount={part.lineCount} streaming={part.streaming} />
+        : <div key={`html-${index}`} dangerouslySetInnerHTML={{ __html: part.content }} />);
+});
+
+export const MemoizedMarkdown = memo(function MemoizedMarkdown({ content = "", streaming = false }: { content?: string; streaming?: boolean }) {
+    const deferred = useDeferredValue(content);
+    const text = streaming ? deferred : content;
+    const segmentsRef = useRef({ prefix: "", parts: [] as string[] });
+    if (!streaming || !text.startsWith(segmentsRef.current.prefix)) {
+        segmentsRef.current = { prefix: "", parts: [] };
     }
+    const { prefix, parts } = segmentsRef.current;
+    let tail = text.slice(prefix.length);
+    let stableParts = parts;
+    if (streaming && tail.length >= STREAM_SEGMENT_CHARS && /\n\s*\n/.test(tail)) {
+        // 留下最后两个 Markdown token，等后续分片补齐未闭合的段落、列表或代码。
+        const tokens = marked.lexer(tail.slice(0, STREAM_TAIL_CHARS));
+        const boundary = tokens.slice(0, -2).reduce((length, token) => length + token.raw.length, 0);
+        if (boundary >= STREAM_SEGMENT_CHARS) {
+            const section = tail.slice(0, boundary);
+            stableParts = [...parts, section];
+            segmentsRef.current = { prefix: prefix + section, parts: stableParts };
+            tail = tail.slice(boundary);
+        }
+    }
+    if (!text) return null;
 
     return (
         <div className="markdown-body">
-            {parts.map((part, index) =>
-                part.type === "code" ? (
-                    <CodeBlock key={part.key} code={part.code} language={part.language} lineCount={part.lineCount} streaming={part.streaming} />
-                ) : (
-                    <div key={`html-${index}`} dangerouslySetInnerHTML={{ __html: part.content }} />
-                ),
-            )}
+            {stableParts.map((part, index) => <MarkdownParts key={index} content={part} />)}
+            {streaming && tail.length > STREAM_TAIL_CHARS
+                ? <div className="markdown-stream-tail">{tail}</div>
+                : <MarkdownParts content={tail} />}
         </div>
     );
-}
+});
 
 export function renderAssistantSegments(blocks: AssistantBlock[]): AssistantSegment[] {
     const segments: AssistantSegment[] = [];

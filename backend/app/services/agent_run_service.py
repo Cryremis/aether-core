@@ -815,6 +815,9 @@ class AgentRunService:
             active_view["is_error"] = bool(event.payload.get("is_error"))
 
         payload = event.payload
+        if event.type == "context_compaction_progress":
+            active_view["compaction_stage"] = payload.get("stage")
+            return
         blocks = assistant.setdefault("blocks", [])
         if not isinstance(blocks, list):
             return

@@ -1,16 +1,26 @@
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { MemoizedMarkdown, renderAssistantSegments, formatElapsedMs, formatTimestamp } from "../../pages/workbench/markdown";
 import type { AssistantBlock, ChatMessage } from "../../pages/workbench/types";
 import { useAppPreferences } from "../../i18n";
-import type { SubagentRunSummary } from "../../api/client";
+import { getTranscriptToolDetail, type SubagentRunSummary } from "../../api/client";
+import type { TranscriptStore } from "../../pages/workbench/transcriptStore";
 import { WorkbenchIcons as Icons } from "./WorkbenchIcons";
 
 type ChatTimelineProps = {
   contentRef?: RefObject<HTMLDivElement | null>;
+  scrollElement?: HTMLDivElement | null;
+  scrollToLatestRef?: RefObject<(() => void) | null>;
+  transcriptStore?: TranscriptStore;
+  sessionId?: string;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  olderError?: string;
+  onLoadOlder?: () => void;
   loading: boolean;
   messages: ChatMessage[];
   onForkUserMessage?: (messageId: string) => void;
@@ -105,9 +115,9 @@ function ReasoningBlock({ block, message, hideReasoning }: { block: Extract<Assi
   return (
     <details key={block.id} className="reasoning-block" open={expanded} onToggle={(e) => setExpanded(e.currentTarget.open)}>
       <summary><Icons.Sparkles /> <ReasoningSummary message={message} block={block} /></summary>
-      <div className="reasoning-content">
-        <MemoizedMarkdown content={block.content} />
-      </div>
+      {expanded && <div className="reasoning-content">
+        <MemoizedMarkdown content={block.content} streaming={message.streaming && !block.ended_at} />
+      </div>}
     </details>
   );
 }
@@ -759,11 +769,14 @@ function ToolLivePanel({ text }: { text: string }) {
   );
 }
 
-function ToolResultPanel({ outputText, liveOutputText, status }: { outputText: string; liveOutputText?: string; status: "running" | "done" | "aborted" }) {
+function ToolResultPanel({ outputText, liveOutputText, status, rawPage = false }: {
+  outputText: string; liveOutputText?: string; status: "running" | "done" | "aborted"; rawPage?: boolean;
+}) {
   const [height, setHeight] = useState(180);
-  const result = useMemo(() => summarizeToolOutput(outputText, liveOutputText), [outputText, liveOutputText]);
+  const result = useMemo(() => rawPage ? { primary: outputText, raw: outputText, meta: [] }
+    : summarizeToolOutput(outputText, liveOutputText), [outputText, liveOutputText, rawPage]);
   const primary = result.primary || (status === "running" ? "等待执行结果..." : "");
-  const terminalText = useMemo(() => extractTerminalTextFromOutput(outputText), [outputText]);
+  const terminalText = useMemo(() => rawPage ? outputText : extractTerminalTextFromOutput(outputText), [outputText, rawPage]);
   const handleResizeStart = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const startY = event.clientY;
     const startHeight = height;
@@ -886,7 +899,9 @@ function SubagentToolCard({
   );
 }
 
-function ToolCard({ title, toolName, argumentsText, outputText, liveOutputText, status, subagents, onOpenSubagent }: {
+type ToolDetailRef = { sessionId: string; messageId: string; blockId: string };
+
+function ToolCard({ title, toolName, argumentsText, outputText, liveOutputText, status, subagents, onOpenSubagent, detail }: {
   title: string;
   toolName?: string;
   argumentsText: string;
@@ -895,16 +910,38 @@ function ToolCard({ title, toolName, argumentsText, outputText, liveOutputText, 
   status: "running" | "done" | "aborted";
   subagents?: SubagentRunSummary[];
   onOpenSubagent?: (childSessionId: string) => void;
+  detail?: ToolDetailRef;
 }) {
   const [expanded, setExpanded] = useState(status === "running");
-  const inputSummary = useMemo(() => summarizeToolArguments(argumentsText, title), [argumentsText, title]);
-  const outputSummary = useMemo(() => summarizeToolOutput(outputText, liveOutputText), [outputText, liveOutputText]);
+  const [offsets, setOffsets] = useState([0]);
+  const [detailPage, setDetailPage] = useState<{ text: string; next_offset: number | null } | null>(null);
+  const [detailError, setDetailError] = useState("");
+  const [retry, setRetry] = useState(0);
+  const offset = offsets[offsets.length - 1];
+  const detailSession = detail?.sessionId;
+  const detailMessage = detail?.messageId;
+  const detailBlock = detail?.blockId;
+  const inputSummary = useMemo(() => expanded || !title ? summarizeToolArguments(argumentsText, title) : null,
+    [expanded, argumentsText, title]);
+  const outputSummary = useMemo(() => title ? null : summarizeToolOutput(outputText, liveOutputText),
+    [title, outputText, liveOutputText]);
   const runText = liveOutputText ?? "";
 
   useEffect(() => {
     // Tool cards follow runtime state by default: open while running, collapse once settled.
     setExpanded(status === "running");
   }, [status]);
+
+  useEffect(() => {
+    if (!expanded || !detailSession || !detailMessage || !detailBlock) return;
+    const controller = new AbortController();
+    setDetailPage(null);
+    setDetailError("");
+    void getTranscriptToolDetail(detailSession, detailMessage, detailBlock, offset, controller.signal)
+      .then((page) => { if (!controller.signal.aborted) setDetailPage(page); })
+      .catch((error: Error) => { if (!controller.signal.aborted) setDetailError(error.message); });
+    return () => controller.abort();
+  }, [expanded, detailSession, detailMessage, detailBlock, offset, retry]);
 
   if ((toolName || title) === "subagent_create" || (toolName || title) === "subagent_send_message") {
     const payload = parseSubagentToolPayload(outputText, liveOutputText, argumentsText);
@@ -933,11 +970,11 @@ function ToolCard({ title, toolName, argumentsText, outputText, liveOutputText, 
         <div className="tool-header__summary">
           <div className="tool-header__line">
             <svg className="tool-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-            <span className="tool-title__summary">{title || inputSummary.primary || outputSummary.primary}</span>
+            <span className="tool-title__summary">{title || inputSummary?.primary || outputSummary?.primary}</span>
           </div>
           {expanded ? (
             <div className="tool-summary-metrics">
-              {inputSummary.meta.slice(0, 2).map(([key, value]) => (
+              {inputSummary?.meta.slice(0, 2).map(([key, value]) => (
                 <span key={key} className="tool-metric">{value}</span>
               ))}
             </div>
@@ -946,7 +983,7 @@ function ToolCard({ title, toolName, argumentsText, outputText, liveOutputText, 
         <div className="tool-status">
           {expanded ? (
             <IconPopover label="查看输入 JSON" icon={<Icons.Braces />}>
-              <pre className="code-block tool-json">{inputSummary.raw}</pre>
+              <pre className="code-block tool-json">{inputSummary?.raw}</pre>
             </IconPopover>
           ) : null}
           {status === "running" ? (
@@ -958,14 +995,30 @@ function ToolCard({ title, toolName, argumentsText, outputText, liveOutputText, 
           )}
         </div>
       </summary>
-      <div className="tool-body-wrapper">
+      {expanded && <div className="tool-body-wrapper">
         <div className="tool-body-inner">
           <div className="tool-body">
             {status === "running" ? <ToolLivePanel text={runText} /> : null}
-            {status !== "running" ? <ToolResultPanel outputText={outputText} liveOutputText={liveOutputText} status={status} /> : null}
+            {status !== "running" && !detail && <ToolResultPanel outputText={outputText} liveOutputText={liveOutputText} status={status} />}
+            {status !== "running" && detail && (
+              <div className="tool-history-output">
+                {detailPage ? (
+                  <>
+                    <ToolResultPanel outputText={detailPage.text} status={status} rawPage />
+                    <div className="tool-history-output__navigation">
+                      {offsets.length > 1 && <button type="button" onClick={() => setOffsets(offsets.slice(0, -1))}>上一段</button>}
+                      {detailPage.next_offset !== null && <button type="button"
+                        onClick={() => setOffsets([...offsets, detailPage.next_offset!])}>下一段</button>}
+                    </div>
+                  </>
+                ) : detailError ? (
+                  <div role="status">{detailError} <button type="button" onClick={() => setRetry(retry + 1)}>重试</button></div>
+                ) : <div role="status">正在加载工具输出</div>}
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      </div>}
     </details>
   );
 }
@@ -1036,7 +1089,7 @@ function UserMessageBubble({
   const isEditing = editingMessageId === message.id;
 
   return (
-    <div className="message-row user msg-anim">
+    <div className="message-row user">
       <div className={`bubble user-bubble user-bubble--interactive${isEditing ? " user-bubble--editing" : ""}`}>
         <div className="user-bubble__actions" aria-label="message actions">
           <button
@@ -1105,27 +1158,211 @@ function UserMessageBubble({
   );
 }
 
-export function ChatTimeline({
-  contentRef,
-  loading,
-  messages,
-  onForkUserMessage,
-  onRerunFromMessage,
-  onEditUserMessage,
-  onOpenSubagent,
-  subagents,
-  actionsDisabled = false,
-  showMessageTimestamps = false,
-}: ChatTimelineProps) {
+function CompactionSummary({ content }: { content: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details className="timeline-compaction-summary" onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>查看压缩摘要</summary>
+      {open && <div className="timeline-compaction-summary__body"><MemoizedMarkdown content={content} /></div>}
+    </details>
+  );
+}
+
+type RowProps = Pick<ChatTimelineProps, "onForkUserMessage" | "onRerunFromMessage" | "onEditUserMessage" |
+  "onOpenSubagent" | "subagents" | "sessionId" | "transcriptStore"> & {
+  item: ChatMessage;
+  editingMessageId: string | null;
+  handleStartEdit: (messageId: string, content: string) => void;
+  hideReasoning: boolean;
+  actionsDisabled: boolean;
+  showMessageTimestamps: boolean;
+};
+
+const TimelineRow = memo(function TimelineRow({
+  item, transcriptStore, editingMessageId, handleStartEdit, hideReasoning,
+  onForkUserMessage, onRerunFromMessage, onEditUserMessage, onOpenSubagent,
+  subagents, sessionId, actionsDisabled, showMessageTimestamps,
+}: RowProps) {
+  const subscribe = useCallback((listener: () => void) => transcriptStore?.subscribeRow(item.id, listener) ?? (() => {}), [transcriptStore, item.id]);
+  const getSnapshot = useCallback(() => transcriptStore?.get(item.id) ?? item, [transcriptStore, item]);
+  const message = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return message.role === "user" ? (
+    <UserMessageBubble
+      key={message.id}
+      message={message}
+      actionsDisabled={actionsDisabled}
+      editingMessageId={editingMessageId}
+      onStartEdit={handleStartEdit}
+      onForkUserMessage={onForkUserMessage}
+      onRerunFromMessage={onRerunFromMessage}
+      onEditUserMessage={onEditUserMessage}
+      showTimestamp={showMessageTimestamps}
+    />
+  ) : message.role === "system_event" ? (
+    <div className={`timeline-system-event timeline-system-event--${message.eventType}`} role="status">
+      <div className="timeline-system-event__line" />
+      <div className="timeline-system-event__content">
+        <div className="timeline-system-event__label">{message.title}</div>
+        {showMessageTimestamps && message.timestamp ? <TimestampBadge timestamp={message.timestamp} /> : null}
+        {message.detail ? <div className="timeline-system-event__detail">{message.detail}</div> : null}
+        {message.summary && <CompactionSummary content={message.summary} />}
+      </div>
+      <div className="timeline-system-event__line" />
+    </div>
+  ) : message.role === "elicitation_response" ? (
+    <div key={message.id} className="message-row message-row--elicitation-response">
+      <div className="elicitation-response-bubble">
+        <div className="elicitation-response-bubble__eyebrow">
+          <span className="elicitation-response-bubble__dot" />
+          <span>问题已回复</span>
+        </div>
+        <div className="elicitation-response-bubble__title">{message.title}</div>
+        <div className="elicitation-response-bubble__summary">{message.summary}</div>
+        <div className="elicitation-response-bubble__answers">
+          {message.answers.map((answer) => (
+            <div key={answer.id} className="elicitation-response-bubble__answer">
+              <span>{answer.header}</span>
+              <strong>{answer.value}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  ) : (
+    <div key={message.id} className="message-row assistant">
+      <div className="assistant-content">
+        {renderAssistantSegments(message.blocks).map((segment) =>
+          segment.kind === "tool" ? (
+            <ToolCard
+              key={segment.id}
+              title={segment.block.title}
+              toolName={segment.block.toolName}
+              argumentsText={segment.block.argumentsText}
+              outputText={segment.block.outputText}
+              liveOutputText={segment.block.liveOutputText}
+              status={segment.block.status}
+              subagents={subagents}
+              onOpenSubagent={onOpenSubagent}
+              detail={segment.block.detailAvailable && sessionId ? {
+                sessionId, messageId: message.id, blockId: segment.block.id,
+              } : undefined}
+            />
+          ) : (
+            <div key={segment.id} className="text-bubble">
+              {segment.blocks.map((block) =>
+                block.kind === "reasoning" ? (
+                  <ReasoningBlock key={block.id} block={block} message={message} hideReasoning={hideReasoning} />
+                ) : block.kind === "runtime_notice" ? (
+                  <RuntimeNotice key={block.id} title={block.title} detail={block.detail} />
+                ) : (
+                  <MemoizedMarkdown key={block.id} content={block.content} streaming={block.status === "streaming"} />
+                ),
+              )}
+            </div>
+          ),
+        )}
+      </div>
+      <div className="assistant-sidecar">
+        {showMessageTimestamps && message.timestamp ? (
+          <TimestampBadge timestamp={message.timestamp} />
+        ) : null}
+        {!message.streaming && message.responseStartedAt ? (
+          <TimestampBadge timestamp={message.responseStartedAt} />
+        ) : null}
+        <AssistantStatusBadge message={message} />
+        {message.streaming && message.responseStartedAt ? (
+          <LiveElapsedBadge startTime={message.responseStartedAt} />
+        ) : message.elapsedMs !== null && message.elapsedMs >= 0 ? (
+          <div className="elapsed-badge">{formatElapsedMs(message.elapsedMs)}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+});
+
+export function ChatTimeline(props: ChatTimelineProps) {
+  const {
+    contentRef, scrollElement, scrollToLatestRef, transcriptStore, loading, messages,
+    subagents, sessionId, actionsDisabled = false, showMessageTimestamps = false,
+    hasOlder = false, loadingOlder = false, olderError,
+  } = props;
   const { hideReasoning } = useAppPreferences();
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const handlers = useRef(props);
+  handlers.current = props;
+  const actions = useMemo(() => ({
+    handleStartEdit: (id: string) => setEditingMessageId(id || null),
+    onForkUserMessage: (id: string) => handlers.current.onForkUserMessage?.(id),
+    onRerunFromMessage: (id: string) => handlers.current.onRerunFromMessage?.(id),
+    onEditUserMessage: (id: string, content: string) => handlers.current.onEditUserMessage?.(id, content),
+    onOpenSubagent: (id: string) => handlers.current.onOpenSubagent?.(id),
+  }), []);
+  const virtual = scrollElement !== undefined;
+  const olderRows = hasOlder ? 1 : 0;
+  const editIndex = useMemo(() => editingMessageId ? messages.findIndex((row) => row.id === editingMessageId) : -1,
+    [editingMessageId, messages]);
+  const getScrollElement = useCallback(() => scrollElement ?? null, [scrollElement]);
+  const getItemKey = useCallback((index: number) => index < olderRows ? "older-history" : messages[index - olderRows].id,
+    [messages, olderRows]);
+  const estimateSize = useCallback((index: number) => index < olderRows ? 36 : 120, [olderRows]);
+  const virtualizer = useVirtualizer({
+    count: messages.length + olderRows,
+    enabled: virtual,
+    getScrollElement,
+    getItemKey,
+    estimateSize,
+    gap: 32,
+    paddingStart: 24,
+    paddingEnd: 40,
+    overscan: 5,
+    anchorTo: "end",
+    followOnAppend: "auto",
+    scrollEndThreshold: 80,
+    rangeExtractor: (range) => {
+      const indexes = defaultRangeExtractor(range);
+      const pinned = editIndex + olderRows;
+      return editIndex >= 0 && !indexes.includes(pinned) ? [...indexes, pinned].sort((a, b) => a - b) : indexes;
+    },
+  });
+  const initialized = useRef(false);
+  useLayoutEffect(() => {
+    if (!messages.length) initialized.current = false;
+    if (scrollElement && !loading && !initialized.current && messages.length) {
+      initialized.current = true;
+      virtualizer.scrollToEnd();
+    }
+    if (!scrollToLatestRef) return;
+    scrollToLatestRef.current = () => virtualizer.scrollToEnd();
+    return () => { scrollToLatestRef.current = null; };
+  }, [loading, messages.length, scrollToLatestRef, scrollElement, virtualizer]);
 
-  const handleStartEdit = (messageId: string, content: string) => {
-    setEditingMessageId(messageId || null);
-  };
+  const visibleItems = virtualizer.getVirtualItems();
+  const viewportHeight = virtualizer.scrollRect?.height ?? 0;
+  const contentHeight = virtualizer.getTotalSize();
+  const nearStart = virtualizer.range?.startIndex !== undefined && virtualizer.range.startIndex <= 2;
+  useEffect(() => {
+    if (!scrollElement || !hasOlder || loading || loadingOlder || olderError
+        || !viewportHeight || (!nearStart && contentHeight > viewportHeight)) return;
+    // 初次定位到最新消息后，再用实际布局判断是否需要补历史。
+    const frame = window.requestAnimationFrame(() => {
+      const { clientHeight, scrollHeight, scrollTop } = scrollElement;
+      if (clientHeight > 0 && (scrollHeight <= clientHeight
+          || (scrollTop <= 280 && scrollHeight - clientHeight - scrollTop > 80))) {
+        handlers.current.onLoadOlder?.();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [scrollElement, hasOlder, viewportHeight, contentHeight, nearStart, loading, loadingOlder, olderError]);
+
+  const renderRow = (item: ChatMessage) => (
+    <TimelineRow key={item.id} item={item} {...actions} transcriptStore={transcriptStore}
+      sessionId={sessionId} subagents={subagents} hideReasoning={hideReasoning}
+      editingMessageId={item.id === editingMessageId ? editingMessageId : null}
+      actionsDisabled={actionsDisabled} showMessageTimestamps={showMessageTimestamps} />
+  );
 
   return (
-    <div ref={contentRef} className="chat-container">
+    <div ref={contentRef} className={virtual ? "chat-container chat-container--virtual" : "chat-container"}>
       {loading ? (
         <div className="welcome-screen anim-enter">
           <div className="welcome-icon"><Icons.Sparkles /></div>
@@ -1142,104 +1379,23 @@ export function ChatTimeline({
         </div>
       ) : null}
 
-      {messages.map((message) =>
-        message.role === "user" ? (
-          <UserMessageBubble
-            key={message.id}
-            message={message}
-            actionsDisabled={actionsDisabled}
-            editingMessageId={editingMessageId}
-            onStartEdit={handleStartEdit}
-            onForkUserMessage={onForkUserMessage}
-            onRerunFromMessage={onRerunFromMessage}
-            onEditUserMessage={onEditUserMessage}
-            showTimestamp={showMessageTimestamps}
-          />
-        ) : message.role === "system_event" ? (
-          <div key={message.id} className="timeline-system-event msg-anim" aria-live="polite">
-            <div className="timeline-system-event__line" />
-            <div className="timeline-system-event__content">
-              <div className="timeline-system-event__label">{message.title}</div>
-              {showMessageTimestamps && message.timestamp ? <TimestampBadge timestamp={message.timestamp} /> : null}
-              {message.detail ? <div className="timeline-system-event__detail">{message.detail}</div> : null}
-              {message.summary ? (
-                <details className="timeline-compaction-summary">
-                  <summary>查看压缩摘要</summary>
-                  <div className="timeline-compaction-summary__body">
-                    <MemoizedMarkdown content={message.summary} />
-                  </div>
-                </details>
-              ) : null}
+      {virtual ? (
+        <div className="chat-virtual-list" style={{ height: virtualizer.getTotalSize() }}>
+          {visibleItems.map((row) => (
+            <div key={row.key} ref={virtualizer.measureElement} data-index={row.index}
+              className="chat-virtual-list__row" style={{ transform: `translateY(${row.start}px)` }}>
+              {row.index < olderRows ? (
+                <div className="chat-history-loader">
+                  <button type="button" disabled={loadingOlder} onClick={() => handlers.current.onLoadOlder?.()}>
+                    {loadingOlder ? "正在加载更早消息" : olderError ? "重试加载历史" : "加载更早消息"}
+                  </button>
+                  {olderError && <span role="status">{olderError}</span>}
+                </div>
+              ) : renderRow(messages[row.index - olderRows])}
             </div>
-            <div className="timeline-system-event__line" />
-          </div>
-        ) : message.role === "elicitation_response" ? (
-          <div key={message.id} className="message-row message-row--elicitation-response msg-anim">
-            <div className="elicitation-response-bubble">
-              <div className="elicitation-response-bubble__eyebrow">
-                <span className="elicitation-response-bubble__dot" />
-                <span>问题已回复</span>
-              </div>
-              <div className="elicitation-response-bubble__title">{message.title}</div>
-              <div className="elicitation-response-bubble__summary">{message.summary}</div>
-              <div className="elicitation-response-bubble__answers">
-                {message.answers.map((answer) => (
-                  <div key={answer.id} className="elicitation-response-bubble__answer">
-                    <span>{answer.header}</span>
-                    <strong>{answer.value}</strong>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div key={message.id} className="message-row assistant msg-anim">
-            <div className="assistant-content">
-              {renderAssistantSegments(message.blocks).map((segment) =>
-                segment.kind === "tool" ? (
-                  <ToolCard
-                    key={segment.id}
-                    title={segment.block.title}
-                    toolName={segment.block.toolName}
-                    argumentsText={segment.block.argumentsText}
-                    outputText={segment.block.outputText}
-                    liveOutputText={segment.block.liveOutputText}
-                    status={segment.block.status}
-                    subagents={subagents}
-                    onOpenSubagent={onOpenSubagent}
-                  />
-                ) : (
-                  <div key={segment.id} className="text-bubble">
-                    {segment.blocks.map((block) =>
-                      block.kind === "reasoning" ? (
-                        <ReasoningBlock key={block.id} block={block} message={message} hideReasoning={hideReasoning} />
-                      ) : block.kind === "runtime_notice" ? (
-                        <RuntimeNotice key={block.id} title={block.title} detail={block.detail} />
-                      ) : (
-                        <MemoizedMarkdown key={block.id} content={block.content} />
-                      ),
-                    )}
-                  </div>
-                ),
-              )}
-            </div>
-            <div className="assistant-sidecar">
-              {showMessageTimestamps && message.timestamp ? (
-                <TimestampBadge timestamp={message.timestamp} />
-              ) : null}
-              {!message.streaming && message.responseStartedAt ? (
-                <TimestampBadge timestamp={message.responseStartedAt} />
-              ) : null}
-              <AssistantStatusBadge message={message} />
-              {message.streaming && message.responseStartedAt ? (
-                <LiveElapsedBadge startTime={message.responseStartedAt} />
-              ) : message.elapsedMs !== null && message.elapsedMs >= 0 ? (
-                <div className="elapsed-badge">{formatElapsedMs(message.elapsedMs)}</div>
-              ) : null}
-            </div>
-          </div>
-        ),
-      )}
+          ))}
+        </div>
+      ) : messages.map(renderRow)}
     </div>
   );
 }

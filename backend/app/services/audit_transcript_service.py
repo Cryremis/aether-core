@@ -15,7 +15,7 @@ from app.services.transcript_service import transcript_service
 
 class AuditTranscriptService:
     # 展示投影规则改变时提升版本，已有索引会按需自动重建。
-    FORMAT_VERSION = 1
+    FORMAT_VERSION = 2
 
     def _source(self, conn, session_id: str) -> tuple[str, dict[str, Any]] | None:
         row = conn.execute("""SELECT a.*, s.revision AS current_revision

@@ -91,6 +91,7 @@ class AgentEngine:
         provider_payload: dict[str, Any] | None = None,
         attempt_id: str | None = None,
         status: str = "completed",
+        presentation_only: bool = False,
     ) -> None:
         active = session.get_run(run_id) if run_id else None
         if active and attempt_id is None:
@@ -111,9 +112,9 @@ class AgentEngine:
         )
         if not visible_in_transcript:
             message["visible_in_transcript"] = False
-        if projection_only:
+        if projection_only or presentation_only:
             message["projection_only"] = True
-        elif active and active.message_id:
+        if not projection_only and active and active.message_id:
             message["message_id"] = active.message_id
         if active and active.continuation_of:
             message["continuation_of"] = active.continuation_of
@@ -135,6 +136,8 @@ class AgentEngine:
                     blocks=blocks,
                     elapsed_ms=None,
                     streaming=False,
+                    timestamp=message.get("timestamp"),
+                    run_id=run_id,
                 ),
             )
         await session_service.persist_async(session)
@@ -159,6 +162,10 @@ class AgentEngine:
         return max(int(message.get("turn_index", 0)) for message in session.messages) + 1
 
     def _emit_context_event(self, session: AgentSession, event_type: ContextEventType, payload: dict[str, Any]):
+        if event_type == ContextEventType.Compacted and payload.get("compaction_id") and session.compaction_audit:
+            record = session.compaction_audit[-1]
+            if record["id"] == payload["compaction_id"]:
+                session.transcript = transcript_service.append_item(session.transcript, transcript_service.compaction_item(record))
         return make_event(session, event_type.value, **payload)
 
     def _blocked_context_events(self, session, error, turn_count, started_at):
@@ -439,6 +446,7 @@ class AgentEngine:
         from app.services.skill_tools import visible_schemas
 
         run = session.begin_run(run_id)
+        run.message_id = f"live-{run_id}"
         self._recover_interrupted_tool_calls(session)
         conversation = store_service.get_conversation_by_session(session.session_id) or {}
         config = await self._await_operation(
@@ -491,19 +499,27 @@ class AgentEngine:
                 yield self._emit_context_event(session, event.type, event.payload)
             plan = prepared.plan
             detail = prepared.events[0].payload
-            reply = (f"上下文已压缩，估算输入从 {plan.estimated_tokens_before:,} 降到 {plan.estimated_tokens_after:,} tokens，"
-                     f"处理了 {plan.messages_affected} 条历史记录。")
+            reply = (f"上下文已压缩。\n\n"
+                     f"- 估算输入从 **{plan.estimated_tokens_before:,}** 降到 **{plan.estimated_tokens_after:,}** tokens。\n"
+                     f"- 处理了 **{plan.messages_affected}** 条历史记录。")
             if detail.get("degraded"):
-                reply += "模型摘要未完成，已用本地压缩保留任务交接和原文归档。"
+                reply += "\n- 模型摘要未完成，已用本地压缩保留任务交接和原文归档。"
                 error_code = detail.get("error_code")
         finally:
             await self._cancel_wait_tasks(operation, next_stage)
         yield make_event(session, "context_compaction_progress", stage="finished", error_code=error_code)
-        yield make_event(session, "content_delta", delta=reply)
-        yield make_event(session, "content_completed")
+        part_id = f"{run.message_id}-compact"
+        yield make_event(session, "assistant_visible_started")
+        for paragraph in reply.splitlines(keepends=True):
+            yield make_event(session, "content_delta", part_id=part_id, delta=paragraph)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        await self._persist_assistant_round(session, turn_index=run.turn_index, content=reply, run_id=run_id,
+            blocks=[{"id": part_id, "kind": "content", "content": reply, "status": "done"},
+                    {"kind": "elapsed", "elapsed_ms": elapsed_ms}], presentation_only=True)
+        yield make_event(session, "content_completed", part_id=part_id)
         yield make_event(session, "result", subtype="success", is_error=False, result=reply,
                          **({"compaction_error_code": error_code} if error_code else {}))
-        yield make_event(session, "completed", subtype="success", elapsed_ms=int((time.perf_counter() - started) * 1000))
+        yield make_event(session, "completed", subtype="success", elapsed_ms=elapsed_ms)
         session.finish_run(run_id)
 
     async def _stream_chat(

@@ -48,6 +48,42 @@ def headers():
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_workbench_pages_visible_history_and_large_tool_output(tmp_path):
+    session, _, _ = setup_session(tmp_path)
+    output = "日志" * 40_000
+    latest = adapter.make_assistant_message(content=None, turn_index=9, blocks=[{
+        "id": "large-output", "kind": "tool", "toolName": "sandbox_shell", "title": "执行命令",
+        "outputText": output, "status": "done",
+    }])
+    session.messages.append(latest)
+    session_service.persist(session)
+    session_service._sessions.pop(session.session_id)
+    client = TestClient(app)
+    path = f"/api/v1/agent/sessions/{session.session_id}"
+    auth = headers()
+    assert client.get(f"{path}/transcript").status_code == 401
+    result = client.get(path, params={"transcript_limit": 4}, headers=auth).json()["data"]
+    assert "messages" not in result
+    assert result["message_count"] == 17
+    assert len(result["transcript"]) == 4
+    block = result["transcript"][-1]["blocks"][0]
+    assert block["detailAvailable"] and block["outputText"] == output[:2048]
+    cursor = result["transcript_page"]["next_cursor"]
+    older = client.get(f"{path}/transcript", params={"before": cursor, "limit": 4}, headers=auth).json()["data"]
+    assert older["transcript_page"]["end"] == result["transcript_page"]["start"]
+    assert not ({item["id"] for item in older["transcript"]} & {item["id"] for item in result["transcript"]})
+    detail_path = f"{path}/transcript/{latest['message_id']}/tools/large-output"
+    detail = client.get(detail_path, headers=auth).json()["data"]
+    assert detail["text"] == output[:32768] and detail["next_offset"] == 32768
+    last = client.get(detail_path, params={"offset": 65536}, headers=auth).json()["data"]
+    assert last == {"text": output[65536:], "next_offset": None}
+    restored = session_service.get_or_create(session.session_id)
+    restored.context_state["timeline"] = {"revision": 1}
+    assert client.get(f"{path}/transcript", params={"before": cursor}, headers=auth).status_code == 409
+    legacy = client.get(path, headers=auth).json()["data"]
+    assert len(legacy["transcript"]) == 17 and "messages" in legacy
+
+
 def test_multiple_compactions_keep_full_user_history_and_audit_summaries_after_reload(tmp_path):
     session, _, pipeline = setup_session(tmp_path)
     original_users = [m["content"] for m in session.messages if m["role"] == "user"]

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+from bisect import bisect_right
 from typing import Any
 
 from app.services.tool_display_service import tool_display_service
@@ -9,9 +12,67 @@ from app.services.tool_display_service import tool_display_service
 class TranscriptService:
     """Manage persisted UI transcript projections."""
 
+    _WORKBENCH_PAGE_BYTES = 512 * 1024
+    _TOOL_PREVIEW_CHARS = 2_048
+    _TOOL_DETAIL_CHARS = 32_768
+
+    def workbench_page(self, session, *, limit: int, before: str | None = None) -> dict[str, Any]:
+        # 会话装载/收尾维护展示投影。热读只访问当前页，无需再次展开模型归档。
+        revision = (session.context_state.get("timeline") or {}).get("revision", 0)
+        transcript = session.transcript
+        end = len(transcript)
+        if before:
+            try:
+                cursor_revision, index, anchor_id = json.loads(base64.urlsafe_b64decode(before))
+                if type(index) is not int or index < 1 or not isinstance(anchor_id, str):
+                    raise ValueError("invalid history cursor")
+            except (TypeError, ValueError, binascii.Error) as exc:
+                raise ValueError("invalid history cursor") from exc
+            if cursor_revision != revision or index >= end or transcript[index]["id"] != anchor_id:
+                raise LookupError("stale history cursor")
+            end = index
+        rows, size = [], 0
+        for item in reversed(transcript[max(0, end - limit):end]):
+            row = self._workbench_preview(item)
+            size += len(json.dumps(row, ensure_ascii=False).encode("utf-8"))
+            if rows and size > self._WORKBENCH_PAGE_BYTES:
+                break
+            rows.append(row)
+        start = end - len(rows)
+        next_cursor = base64.urlsafe_b64encode(json.dumps([revision, start, transcript[start]["id"]]).encode()).decode() if start else None
+        return {"transcript": list(reversed(rows)), "transcript_page": {
+            "total": len(transcript), "start": start, "end": end, "has_more": start > 0,
+            "next_cursor": next_cursor, "revision": revision,
+        }}
+
+    def _workbench_preview(self, item: dict[str, Any]) -> dict[str, Any]:
+        if item.get("role") != "assistant":
+            return item
+        blocks = []
+        for block in item.get("blocks") or []:
+            if block.get("kind") == "tool" and block.get("toolName") not in {"subagent_create", "subagent_send_message"}:
+                output = str(block.get("outputText") or "")
+                live_output = str(block.get("liveOutputText") or "")
+                if len(output or live_output) > self._TOOL_PREVIEW_CHARS:
+                    block = {**block, "outputText": (output or live_output)[:self._TOOL_PREVIEW_CHARS],
+                             "liveOutputText": "", "detailAvailable": True}
+            blocks.append(block)
+        return {**item, "blocks": blocks}
+
+    def workbench_tool_detail(self, session, message_id: str, block_id: str, offset: int) -> dict[str, Any] | None:
+        for item in reversed(session.transcript):
+            if item.get("id") != message_id or item.get("role") != "assistant":
+                continue
+            for block in item.get("blocks") or []:
+                if block.get("id") == block_id and block.get("kind") == "tool":
+                    output = str(block.get("outputText") or block.get("liveOutputText") or "")
+                    end = min(len(output), offset + self._TOOL_DETAIL_CHARS)
+                    return {"text": output[offset:end], "next_offset": end if end < len(output) else None}
+            break
+        return None
+
     def build_session_transcript(self, session) -> list[dict[str, Any]]:
-        from app.services.context.history_store import history_store
-        return self.build_persisted_transcript(history_store.expand_history(session.session_id, session.messages))
+        return self._build_transcript_with_compactions(session, audit=False)
 
     def visible_session_messages(self, session) -> list[dict[str, Any]]:
         from app.services.context.history_store import history_store
@@ -19,31 +80,43 @@ class TranscriptService:
                 if self._is_visible(message)]
 
     def build_audit_transcript(self, session) -> list[dict[str, Any]]:
+        return self._build_transcript_with_compactions(session, audit=True)
+
+    def _build_transcript_with_compactions(self, session, *, audit: bool) -> list[dict[str, Any]]:
         from app.services.context.history_store import history_store
         expanded = history_store.expand_history(session.session_id, session.messages)
-        positions = {message.get("message_id"): index for index, message in enumerate(expanded)}
         transcript = self.build_persisted_transcript(expanded)
+        if not session.compaction_audit:
+            return transcript
+        positions = {message.get("message_id"): index for index, message in enumerate(expanded)}
+        row_positions = [positions.get(item["id"], -1) for item in transcript]
         # 用原消息锚点定位，不能把摘要放到模型检查点的头部替换位置。
         events: dict[int, list[dict[str, Any]]] = {}
         for record in session.compaction_audit:
             anchor = positions.get(record.get("after_message_id"))
             if anchor is None:
                 continue  # 被编辑/重跑丢弃的分支不回流到当前审计时间线。
-            slot = next((index for index, item in enumerate(transcript)
-                         if positions.get(item.get("id"), -1) > anchor), len(transcript))
-            detail = (f"策略：{record['strategy']}；原因：{record['cause']}；"
-                      f"输入估算：{record['tokens_before']} → {record['tokens_after']} tokens。")
-            events.setdefault(slot, []).append({
-                "id": record["id"], "role": "system_event", "eventType": "context_compacted",
-                "title": "上下文压缩（仅审计可见）", "detail": detail, "summary": record["summary"],
-                "timestamp": record["timestamp"],
-            })
+            slot = bisect_right(row_positions, anchor)
+            item = self.compaction_item(record)
+            if audit:
+                item.update(title="上下文压缩（仅审计可见）", summary=record["summary"],
+                            detail=f"策略：{record['strategy']}；原因：{record['cause']}；{item['detail']}")
+            events.setdefault(slot, []).append(item)
         result = []
         for index in range(len(transcript) + 1):
             result.extend(events.get(index, []))
             if index < len(transcript):
                 result.append(transcript[index])
         return result
+
+    @staticmethod
+    def compaction_item(record: dict[str, Any]) -> dict[str, Any]:
+        before, after = int(record["tokens_before"]), int(record["tokens_after"])
+        return {
+            "id": record["id"], "role": "system_event", "eventType": "context_compacted",
+            "title": "上下文已压缩", "detail": f"输入估算 {before:,} → {after:,} tokens",
+            "timestamp": record["timestamp"],
+        }
 
     _SYSTEM_EVENT_TITLES: dict[str, str] = {
         "context_compacted": "上下文已压缩",
@@ -203,6 +276,7 @@ class TranscriptService:
         streaming: bool = False,
         response_started_at: str | None = None,
         timestamp: str | None = None,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         normalized_blocks: list[dict[str, Any]] = []
         normalized_elapsed = elapsed_ms
@@ -281,6 +355,7 @@ class TranscriptService:
             "streaming": streaming,
             "responseStartedAt": response_started_at or normalized_started_at,
             "timestamp": timestamp,
+            **({"runId": run_id} if run_id else {}),
         }
 
     def system_event_item(
@@ -431,6 +506,7 @@ class TranscriptService:
             "streaming": False,
             "responseStartedAt": started_at,
             "timestamp": self._message_timestamp(message),
+            **({"runId": message["run_id"]} if message.get("run_id") else {}),
         }
 
     def _message_timestamp(self, message: dict[str, Any]) -> str | None:
