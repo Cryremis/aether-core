@@ -190,7 +190,7 @@
 .chat-container.chat-container--virtual { padding-block: 0; }
 .chat-virtual-list { position: relative; width: 100%; }
 .chat-virtual-list__row { position: absolute; inset: 0 0 auto; }
-.chat-history-loader { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.chat-history-loader { position: absolute; inset: 24px 0 auto; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .chat-history-loader button, .tool-history-output__navigation button {
   color: inherit;
   background: transparent;

@@ -1298,21 +1298,19 @@ export function ChatTimeline(props: ChatTimelineProps) {
     onOpenSubagent: (id: string) => handlers.current.onOpenSubagent?.(id),
   }), []);
   const virtual = scrollElement !== undefined;
-  const olderRows = hasOlder ? 1 : 0;
   const editIndex = useMemo(() => editingMessageId ? messages.findIndex((row) => row.id === editingMessageId) : -1,
     [editingMessageId, messages]);
   const getScrollElement = useCallback(() => scrollElement ?? null, [scrollElement]);
-  const getItemKey = useCallback((index: number) => index < olderRows ? "older-history" : messages[index - olderRows].id,
-    [messages, olderRows]);
-  const estimateSize = useCallback((index: number) => index < olderRows ? 36 : 120, [olderRows]);
+  const getItemKey = useCallback((index: number) => messages[index].id, [messages]);
+  const estimateSize = useCallback(() => 120, []);
   const virtualizer = useVirtualizer({
-    count: messages.length + olderRows,
+    count: messages.length,
     enabled: virtual,
     getScrollElement,
     getItemKey,
     estimateSize,
     gap: 32,
-    paddingStart: 24,
+    paddingStart: hasOlder ? 92 : 24,
     paddingEnd: 40,
     overscan: 5,
     anchorTo: "end",
@@ -1320,8 +1318,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     scrollEndThreshold: 80,
     rangeExtractor: (range) => {
       const indexes = defaultRangeExtractor(range);
-      const pinned = editIndex + olderRows;
-      return editIndex >= 0 && !indexes.includes(pinned) ? [...indexes, pinned].sort((a, b) => a - b) : indexes;
+      return editIndex >= 0 && !indexes.includes(editIndex) ? [...indexes, editIndex].sort((a, b) => a - b) : indexes;
     },
   });
   const initialized = useRef(false);
@@ -1381,17 +1378,18 @@ export function ChatTimeline(props: ChatTimelineProps) {
 
       {virtual ? (
         <div className="chat-virtual-list" style={{ height: virtualizer.getTotalSize() }}>
+          {hasOlder && nearStart && (
+            <div className="chat-history-loader">
+              <button type="button" disabled={loadingOlder} onClick={() => handlers.current.onLoadOlder?.()}>
+                {loadingOlder ? "正在加载更早消息" : olderError ? "重试加载历史" : "加载更早消息"}
+              </button>
+              {olderError && <span role="status">{olderError}</span>}
+            </div>
+          )}
           {visibleItems.map((row) => (
             <div key={row.key} ref={virtualizer.measureElement} data-index={row.index}
               className="chat-virtual-list__row" style={{ transform: `translateY(${row.start}px)` }}>
-              {row.index < olderRows ? (
-                <div className="chat-history-loader">
-                  <button type="button" disabled={loadingOlder} onClick={() => handlers.current.onLoadOlder?.()}>
-                    {loadingOlder ? "正在加载更早消息" : olderError ? "重试加载历史" : "加载更早消息"}
-                  </button>
-                  {olderError && <span role="status">{olderError}</span>}
-                </div>
-              ) : renderRow(messages[row.index - olderRows])}
+              {renderRow(messages[row.index])}
             </div>
           ))}
         </div>

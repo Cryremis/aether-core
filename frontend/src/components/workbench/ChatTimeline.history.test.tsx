@@ -30,6 +30,8 @@ it("requests an older page when 40 messages do not fill a tall viewport", async 
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     });
     expect(onLoadOlder).toHaveBeenCalledTimes(1);
+    expect(viewport.querySelector(".chat-history-loader")?.closest(".chat-virtual-list__row")).toBeNull();
+    expect(viewport.querySelector('[data-index="0"]')?.textContent).toContain("短消息");
     await act(async () => render(true, true));
     await act(async () => render(false));
     expect(onLoadOlder).toHaveBeenCalledTimes(1);
