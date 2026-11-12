@@ -9,6 +9,7 @@ from typing import Any
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.core.config import settings
+from app.services.sqlite_resilience import retry_sqlite
 from app.services.store import store_service, utcnow_iso
 
 
@@ -28,6 +29,7 @@ class SecretStoreService:
         key = base64.urlsafe_b64encode(hashlib.sha256(source.encode("utf-8")).digest())
         return Fernet(key)
 
+    @retry_sqlite
     def put(self, payload: dict[str, Any], secret_id: str | None = None) -> str:
         secret_id = secret_id or f"sec_{uuid.uuid4().hex}"
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -41,6 +43,7 @@ class SecretStoreService:
             )
         return secret_id
 
+    @retry_sqlite
     def get(self, secret_id: str | None) -> dict[str, Any]:
         if not secret_id:
             return {}
@@ -57,6 +60,7 @@ class SecretStoreService:
             raise SecretStoreError("能力凭据无法解密，请重新配置") from exc
         return value if isinstance(value, dict) else {}
 
+    @retry_sqlite
     def delete(self, secret_id: str | None) -> bool:
         if not secret_id:
             return False

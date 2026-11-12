@@ -1,6 +1,9 @@
 """模型服务异常与用户可见错误分离。"""
 from __future__ import annotations
 
+import asyncio
+import re
+
 import httpx
 
 
@@ -20,10 +23,32 @@ def public_run_error() -> str:
     return "当前服务暂时无法完成请求，已保留已有进度，请稍后继续。"
 
 
-def retryable_model_error(exc: Exception) -> bool:
+def exception_leaves(exc: BaseException):
+    if isinstance(exc, BaseExceptionGroup):
+        for child in exc.exceptions:
+            yield from exception_leaves(child)
+    else:
+        yield exc
+
+
+def cancelled_model_error(exc: BaseException) -> bool:
+    return any(isinstance(leaf, asyncio.CancelledError) for leaf in exception_leaves(exc))
+
+
+def retryable_stream_error(exc: BaseException) -> bool:
+    # 混合异常组必须全部可恢复；不能用其中一个连接错误掩盖程序错误或取消。
+    return all(isinstance(leaf, (httpx.TransportError, ModelStreamError)) or (
+        isinstance(leaf, RuntimeError) and re.fullmatch(
+            r"File descriptor \d+ is used by transport(?:\s.*)?", str(leaf), re.DOTALL)
+    ) for leaf in exception_leaves(exc))
+
+
+def retryable_model_error(exc: BaseException) -> bool:
+    if isinstance(exc, BaseExceptionGroup):
+        return all(retryable_model_error(child) for child in exc.exceptions)
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in {408, 425, 429, 500, 502, 503, 504, 529}
-    return isinstance(exc, (httpx.TransportError, ModelStreamError))
+    return retryable_stream_error(exc)
 
 
 def public_run_error_code(exc: Exception) -> str:

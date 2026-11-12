@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
-from app.core.model_errors import ModelStreamError
+from app.core.model_errors import ModelStreamError, cancelled_model_error, retryable_stream_error
 from app.runtime.event_protocol import make_event
 from app.services.context.context_pipeline import context_pipeline
 from app.services.context.message_adapter import context_message_adapter
@@ -1127,7 +1127,19 @@ class AgentEngine:
                         await self._await_operation(session, run_id, asyncio.sleep(delay))
                         continue
                 raise RuntimeError(error_message) from exc
-            except (httpx.TransportError, ModelStreamError) as exc:
+            except (httpx.TransportError, ModelStreamError, RuntimeError, ExceptionGroup) as exc:
+                if cancelled_model_error(exc):
+                    raise asyncio.CancelledError() from exc
+                if not retryable_stream_error(exc):
+                    await durable_io(history_store.save_attempt, session.session_id, attempt_id,
+                        {"content": assistant_content, "reasoning_content": assistant_reasoning,
+                         "provider_payload": provider_payload, "tool_calls": tool_calls}, "incomplete")
+                    if assistant_content or assistant_reasoning:
+                        await self._persist_assistant_round(session, turn_index=request_turn_index,
+                            content=assistant_content, blocks=persisted_assistant_blocks, run_id=run_id,
+                            reasoning_content=assistant_reasoning, provider_payload=provider_payload,
+                            attempt_id=attempt_id, status="incomplete")
+                    raise
                 # 保留已发布片段后续写；当前生成的工具尚未执行，不能把残缺参数当成调用。
                 await durable_io(history_store.save_attempt, session.session_id, attempt_id,
                     {"content": assistant_content, "reasoning_content": assistant_reasoning,
@@ -1156,7 +1168,7 @@ class AgentEngine:
                         round=turn_count,
                         attempt=llm_retry_count,
                         delay=delay,
-                        reason="transport" if isinstance(exc, httpx.TransportError) else "protocol_recovery",
+                        reason="protocol_recovery" if isinstance(exc, ModelStreamError) else "transport",
                     )
                     await self._await_operation(session, run_id, asyncio.sleep(delay))
                     continue
@@ -1165,6 +1177,10 @@ class AgentEngine:
                     last_stop_reason = "stream_interrupted"
                 else:
                     raise
+            except BaseExceptionGroup as exc:
+                if cancelled_model_error(exc):
+                    raise asyncio.CancelledError() from exc
+                raise
             except Exception:
                 # SSE 格式错误等非传输错误也必须保存已发布片段，不能等用户下一轮才恢复。
                 await durable_io(history_store.save_attempt, session.session_id, attempt_id,

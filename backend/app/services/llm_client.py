@@ -11,7 +11,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.llm_protocol import RUNTIME_CONTROL_FIELDS
-from app.core.model_errors import ModelOutputLimitError, ModelStreamError
+from app.core.model_errors import ModelOutputLimitError, ModelStreamError, retryable_stream_error
 from app.services.llm_config_service import RuntimeLlmConfig
 from app.services.context.provider_adapters import NativeStream, native_message, native_request
 
@@ -425,31 +425,37 @@ class LlmClient:
         config: RuntimeLlmConfig,
         payload: dict[str, Any],
     ) -> AsyncGenerator[dict[str, Any], None]:
-        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
-            async with client.stream("POST", self._endpoint(config), headers=self._headers(config), json=payload) as response:
-                if response.is_error:
-                    await response.aread()
-                    self._raise_for_status_with_detail(response)
-                finished = False
-                try:
-                    async for data in self._sse_frames(response):
-                        if data == "[DONE]":
-                            if not finished:
-                                raise httpx.RemoteProtocolError("模型发送 DONE 前没有有效结束原因")
+        finished = False
+        try:
+            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds, verify=settings.llm_ssl_verify) as client:
+                async with client.stream("POST", self._endpoint(config), headers=self._headers(config), json=payload) as response:
+                    if response.is_error:
+                        await response.aread()
+                        self._raise_for_status_with_detail(response)
+                    try:
+                        async for data in self._sse_frames(response):
+                            if data == "[DONE]":
+                                if not finished:
+                                    raise httpx.RemoteProtocolError("模型发送 DONE 前没有有效结束原因")
+                                return
+                            parsed = self._decode_frame(data)
+                            finished = finished or self._is_terminal_frame(parsed)
+                            yield parsed
+                            if finished and (config.api_format != "openai-compatible" or parsed.get("usage") is not None
+                                or not (payload.get("stream_options") or {}).get("include_usage")):
+                                return
+                    except (httpx.TransportError, RuntimeError, ValueError):
+                        # 有效终态已提交时，HTTP 尾部中断不能把完整生成重新标成部分输出。
+                        if finished:
                             return
-                        parsed = self._decode_frame(data)
-                        finished = finished or self._is_terminal_frame(parsed)
-                        yield parsed
-                        if finished and (config.api_format != "openai-compatible" or parsed.get("usage") is not None
-                            or not (payload.get("stream_options") or {}).get("include_usage")):
-                            return
-                except (httpx.TransportError, RuntimeError, ValueError):
-                    # 有效终态已提交时，HTTP 尾部中断不能把完整生成重新标成部分输出。
-                    if finished:
-                        return
-                    raise
-                if not finished:
-                    raise httpx.RemoteProtocolError("模型流在有效终止事件前结束")
+                        raise
+                    if not finished:
+                        raise httpx.RemoteProtocolError("模型流在有效终止事件前结束")
+        except BaseException as exc:
+            # HTTP context manager 退出阶段的传输故障也不能重放已完整生成的响应。
+            if finished and retryable_stream_error(exc):
+                return
+            raise
 
     async def _sse_frames(self, response):
         from app.services.context.stream_parser import SseDataDecoder

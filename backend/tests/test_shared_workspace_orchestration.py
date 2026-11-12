@@ -212,6 +212,7 @@ def test_runtime_rebuild_is_blocked_while_commands_execute(tmp_path):
 
 def test_workspace_runtime_executes_commands_concurrently(tmp_path, monkeypatch):
     initialize_runtime(tmp_path)
+    monkeypatch.setattr(workspace_runtime_service, "_require_docker_binary", lambda: "/mock/docker")
     parent = session_service.get_or_create("sess_concurrent_parent")
     upsert_runtime(
         parent.workspace_id,

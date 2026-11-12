@@ -1122,6 +1122,10 @@ class WorkspaceRuntimeService:
                     "destroy_reason": "command_timeout",
                 },
             ) from None
+        except BaseException:
+            if process is not None:
+                await self._terminate_process(process, container_name=container_name)
+            raise
         duration_ms = int((time.perf_counter() - started_at) * 1000)
         stdout_text = self._decode_output(stdout_bytes)
         stderr_text = self._decode_output(stderr_bytes)
@@ -1246,25 +1250,14 @@ class WorkspaceRuntimeService:
                 except OSError:
                     break
 
-        await asyncio.gather(
-            read_stream(process.stdout, stdout_chunks, "stdout"),
-            read_stream(process.stderr, stderr_chunks, "stderr"),
-        )
-        await process.wait()
-
-        pty_pipe = getattr(process, "_pty_pipe", None)
-        if pty_pipe is not None:
-            try:
-                pty_pipe.close()
-            except OSError:
-                pass
-
-        pty_master_fd = getattr(process, "_pty_master_fd", None)
-        if pty_master_fd is not None:
-            try:
-                os.close(pty_master_fd)
-            except OSError:
-                pass
+        try:
+            await asyncio.gather(
+                read_stream(process.stdout, stdout_chunks, "stdout"),
+                read_stream(process.stderr, stderr_chunks, "stderr"),
+            )
+            await process.wait()
+        finally:
+            self._close_exec_pty(process)
 
         return b"".join(stdout_chunks), b"".join(stderr_chunks)
 
@@ -1304,6 +1297,7 @@ class WorkspaceRuntimeService:
         master_fd = None
         slave_fd = None
         pipe = None
+        transport = None
 
         try:
             master_fd, slave_fd = pty.openpty()
@@ -1325,7 +1319,7 @@ class WorkspaceRuntimeService:
                 stderr=slave_fd,
                 **self._subprocess_kwargs(),
             )
-        except Exception:
+        except BaseException:
             if master_fd is not None:
                 try:
                     os.close(master_fd)
@@ -1342,11 +1336,15 @@ class WorkspaceRuntimeService:
         try:
             loop = asyncio.get_running_loop()
             pipe = os.fdopen(master_fd, "rb", buffering=0)
+            # fdopen 成功后所有权交给文件对象，禁止再按旧数字 fd 关闭。
+            master_fd = None
             reader = asyncio.StreamReader()
             protocol = asyncio.StreamReaderProtocol(reader)
-            await loop.connect_read_pipe(lambda: protocol, pipe)
-        except Exception:
-            if pipe is not None:
+            transport, _ = await loop.connect_read_pipe(lambda: protocol, pipe)
+        except BaseException:
+            if transport is not None:
+                transport.close()
+            elif pipe is not None:
                 try:
                     pipe.close()
                 except OSError:
@@ -1356,13 +1354,23 @@ class WorkspaceRuntimeService:
                     os.close(master_fd)
                 except OSError:
                     pass
+            # 管道绑定失败或被取消时也必须回收已经启动的 docker exec。
+            await self._terminate_process(process, container_name=container_name)
             raise
 
         process.stdout = reader  # type: ignore[attr-defined]
         process.stderr = None  # type: ignore[attr-defined]
-        process._pty_master_fd = master_fd  # type: ignore[attr-defined]
-        process._pty_pipe = pipe  # type: ignore[attr-defined]
+        process._pty_transport = transport  # type: ignore[attr-defined]
+        process._exec_pty = True  # type: ignore[attr-defined]
         return process
+
+    @staticmethod
+    def _close_exec_pty(process: asyncio.subprocess.Process) -> None:
+        # 先取走引用，使正常结束、超时和取消共用的清理可重复调用。
+        transport = getattr(process, "_pty_transport", None)
+        process._pty_transport = None  # type: ignore[attr-defined]
+        if transport is not None:
+            transport.close()
 
     async def _terminate_process(
         self,
@@ -1370,15 +1378,26 @@ class WorkspaceRuntimeService:
         *,
         container_name: str | None = None,
     ) -> None:
+        try:
+            await self._terminate_exec_process(process, container_name)
+        finally:
+            self._close_exec_pty(process)
+
+    async def _terminate_exec_process(
+        self, process: asyncio.subprocess.Process, container_name: str | None,
+    ) -> None:
         if process.returncode is not None:
             return
 
-        pty_pipe = getattr(process, "_pty_pipe", None)
-        pty_master_fd = getattr(process, "_pty_master_fd", None)
+        has_pty = bool(getattr(process, "_exec_pty", False))
 
-        process.terminate()
         try:
-            if pty_pipe is None and process.stdout is not None:
+            process.terminate()
+        except ProcessLookupError:
+            await process.wait()
+            return
+        try:
+            if not has_pty and process.stdout is not None:
                 await asyncio.wait_for(process.communicate(), timeout=settings.sandbox_cancel_grace_seconds)
             else:
                 await asyncio.wait_for(process.wait(), timeout=settings.sandbox_cancel_grace_seconds)
@@ -1387,10 +1406,13 @@ class WorkspaceRuntimeService:
             pass
 
         if process.returncode is None:
-            process.kill()
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
 
         try:
-            if pty_pipe is None and process.stdout is not None:
+            if not has_pty and process.stdout is not None:
                 await asyncio.wait_for(process.communicate(), timeout=settings.sandbox_force_kill_grace_seconds)
             else:
                 await asyncio.wait_for(process.wait(), timeout=settings.sandbox_force_kill_grace_seconds)
@@ -1408,18 +1430,6 @@ class WorkspaceRuntimeService:
                         **self._subprocess_kwargs(),
                     )
                     await forced.communicate()
-
-        if pty_pipe is not None:
-            try:
-                pty_pipe.close()
-            except OSError:
-                pass
-
-        if pty_master_fd is not None:
-            try:
-                os.close(pty_master_fd)
-            except OSError:
-                pass
 
     def _runtime_dns_servers(self) -> list[str]:
         configured = [item.strip() for item in settings.sandbox_docker_dns_servers if item.strip()]

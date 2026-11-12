@@ -20,6 +20,7 @@ docs/
 !/docs/context-runtime-operations.md
 !/docs/context-runtime-audit.md
 !/docs/context-compaction.md
+!/docs/infrastructure-recovery.md
 .DS_Store
 Thumbs.db
 storage/sessions/

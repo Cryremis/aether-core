@@ -10,6 +10,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.capability_service import capability_service
+from app.services.sqlite_resilience import retry_sqlite
 from app.services.store import store_service, utcnow_iso
 
 
@@ -26,6 +27,7 @@ class ExtensionStoreService:
         LEFT JOIN platform_external_users p ON p.platform_id=e.platform_id
             AND p.external_user_id=e.submitter_external_user_id"""
 
+    @retry_sqlite
     def list_entries(self, platform_id: int | None = None) -> list[dict[str, Any]]:
         with store_service._connect() as conn:
             rows = conn.execute(
@@ -117,6 +119,7 @@ class ExtensionStoreService:
             conn.execute("INSERT INTO extension_audit_events (entry_id,actor,action,revision,detail_json,created_at) VALUES (?,?,'publish',?,?,?)", (entry_id, author_key, existing["revision"] + 1 if existing else 1, json.dumps({"version": version, "base_version": base_version, "maintenance_policy": maintenance_policy, "publisher": publisher}, ensure_ascii=False), now))
         return next(item for item in self.list_entries(platform_id) if item["entry_id"] == entry_id)
 
+    @retry_sqlite
     def inspect(self, entry_id: str, platform_id: int | None, version: str | None = None) -> dict[str, Any]:
         with store_service._connect() as conn:
             entry = conn.execute(self._ENTRY_QUERY + " WHERE e.entry_id=? AND e.platform_id IS ? AND e.status='active'", (entry_id, platform_id)).fetchone()
@@ -130,6 +133,7 @@ class ExtensionStoreService:
         result.update(versions=versions, artifact_path=artifact["artifact_path"], version=version or entry["current_version"])
         return result
 
+    @retry_sqlite
     def manage(self, entry_id: str, platform_id: int, actor: str, expected_revision: int, *, maintenance_policy: str | None = None, status: str | None = None) -> dict[str, Any]:
         if maintenance_policy is not None and maintenance_policy not in {"creator_only", "platform_members"}:
             raise ValueError("维护方式无效")

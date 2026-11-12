@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sqlite3
 import threading
@@ -12,6 +13,7 @@ from typing import Any, Callable, Iterator
 
 from app.core.config import settings
 from app.services.password_service import password_service
+from app.services.sqlite_resilience import ThreadConnection, current_operation, note_commit, retry_sqlite
 
 
 def utcnow_iso() -> str:
@@ -43,23 +45,82 @@ class StoreService:
         self._lock = threading.RLock()
         self._db_path = settings.metadata_db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._connections = threading.local()
+
+    def _new_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, timeout=5.0, check_same_thread=True)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=5000")
+            return conn
+        except BaseException:
+            conn.close()
+            raise
+
+    def close_thread_connection(self) -> None:
+        holder = getattr(self._connections, "holder", None)
+        if holder is not None:
+            if holder.depth:
+                raise RuntimeError("Cannot close an active database transaction")
+            holder.close()
+            del self._connections.holder
 
     @contextmanager
     def _connect(self, *, independent: bool = False) -> Iterator[sqlite3.Connection]:
         with (nullcontext() if independent else self._lock):
-            conn = sqlite3.connect(self._db_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
+            holder = getattr(self._connections, "holder", None)
+            key = (os.getpid(), str(self._db_path.resolve()))
+            temporary = bool(holder and holder.depth)
+            phase = "connect"
+            conn = None
             try:
+                if temporary:
+                    # 旧代码有少量嵌套读取，不能提交或回滚外层连接。
+                    conn = self._new_connection()
+                else:
+                    if holder is not None and (holder.key != key or holder.connection is None):
+                        holder.close()
+                        holder = None
+                    if holder is None:
+                        holder = ThreadConnection(key, self._new_connection())
+                        self._connections.holder = holder
+                    conn = holder.connection
+                    holder.depth += 1
+                before = conn.total_changes
+                phase = "execute"
                 yield conn
+                phase = "commit"
                 conn.commit()
+                if conn.total_changes != before:
+                    note_commit()
+            except BaseException as exc:
+                active = bool(conn and conn.in_transaction)
+                rolled_back = conn is None
+                if conn is not None:
+                    try:
+                        conn.rollback()
+                        rolled_back = True
+                    except sqlite3.Error:
+                        pass
+                if isinstance(exc, sqlite3.Error):
+                    exc._retry_defer = temporary
+                    exc._retry_phase = "commit_unknown" if phase == "commit" and not active else phase
+                    exc._retry_rolled_back = rolled_back and not (phase == "commit" and not active)
+                    # I/O 异常后的连接不再交给下一次操作，避免复用损坏的 WAL 状态。
+                    if not temporary and holder is not None:
+                        holder.close()
+                raise
             finally:
-                conn.close()
+                if temporary and conn is not None:
+                    conn.close()
+                elif holder is not None and holder.depth:
+                    holder.depth -= 1
 
     def initialize(self) -> None:
         # WAL 模式:读写不互斥。默认 journal 模式下 agent 持续写库会阻塞所有读请求
         # (含 admin 审计查询),是生产环境接口偶发卡死的根因。WAL 为 DB 级持久属性。
         with self._lock:
-            wal_conn = sqlite3.connect(self._db_path)
+            wal_conn = self._new_connection()
             try:
                 wal_conn.execute("PRAGMA journal_mode=WAL")
                 wal_conn.execute("PRAGMA synchronous=NORMAL")
@@ -617,6 +678,7 @@ class StoreService:
             return
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
 
+    @retry_sqlite
     def sync_external_user(self, platform_id: int, external_user_id: str, user: dict[str, Any]) -> None:
         name, account = (str(user[key]).strip()[:256] if isinstance(user.get(key), str) else ""
                          for key in ("name", "username"))
@@ -923,6 +985,7 @@ class StoreService:
             assigned_by=admin.user_id,
         )
 
+    @retry_sqlite
     def ensure_local_user(self, *, username: str, password: str, full_name: str, role: str) -> StoreUser:
         existing = self.get_user_by_username(username)
         now = utcnow_iso()
@@ -968,16 +1031,19 @@ class StoreService:
             raise RuntimeError("Failed to initialize seeded user")
         return user
 
+    @retry_sqlite
     def get_user_by_username(self, username: str) -> StoreUser | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
         return self._row_to_user(row)
 
+    @retry_sqlite
     def get_user_by_id(self, user_id: int) -> StoreUser | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         return self._row_to_user(row)
 
+    @retry_sqlite
     def get_users_by_ids(self, user_ids: list[int]) -> dict[int, StoreUser]:
         normalized_ids = sorted({int(user_id) for user_id in user_ids if int(user_id) > 0})
         if not normalized_ids:
@@ -992,6 +1058,7 @@ class StoreService:
                 users[user.user_id] = user
         return users
 
+    @retry_sqlite
     def get_user_by_provider(self, provider: str, provider_user_id: str) -> StoreUser | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1000,6 +1067,7 @@ class StoreService:
             ).fetchone()
         return self._row_to_user(row)
 
+    @retry_sqlite
     def update_user_login_metadata(self, user_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -1007,6 +1075,7 @@ class StoreService:
                 (utcnow_iso(), utcnow_iso(), user_id),
             )
 
+    @retry_sqlite
     def create_or_update_oauth_user(
         self,
         *,
@@ -1058,6 +1127,7 @@ class StoreService:
             raise RuntimeError("Failed to create OAuth user")
         return created
 
+    @retry_sqlite
     def list_users(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM users ORDER BY user_id ASC").fetchall()
@@ -1073,6 +1143,7 @@ class StoreService:
             )
         return items
 
+    @retry_sqlite
     def update_user_role(self, *, user_id: int, role: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -1080,11 +1151,13 @@ class StoreService:
                 (role, utcnow_iso(), user_id),
             )
 
+    @retry_sqlite
     def count_users_with_role(self, role: str) -> int:
         with self._connect() as conn:
             row = conn.execute("SELECT COUNT(*) AS count FROM users WHERE role = ?", (role,)).fetchone()
         return int(row["count"]) if row else 0
 
+    @retry_sqlite
     def create_platform(
         self,
         *,
@@ -1126,6 +1199,7 @@ class StoreService:
             )
         return dict(platform)
 
+    @retry_sqlite
     def update_platform_basics(
         self,
         *,
@@ -1144,6 +1218,7 @@ class StoreService:
                 (display_name, host_type, description, utcnow_iso(), platform_key),
             )
 
+    @retry_sqlite
     def update_platform_owner(self, *, platform_id: int, owner_user_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -1162,6 +1237,7 @@ class StoreService:
                 (platform_id, owner_user_id, utcnow_iso(), utcnow_iso()),
             )
 
+    @retry_sqlite
     def add_platform_admin(
         self,
         *,
@@ -1184,6 +1260,7 @@ class StoreService:
                 (platform_id, user_id, assigned_by, 1 if is_primary else 0, now, now),
             )
 
+    @retry_sqlite
     def remove_platform_admin(self, *, platform_id: int, user_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -1191,6 +1268,7 @@ class StoreService:
                 (platform_id, user_id),
             )
 
+    @retry_sqlite
     def list_platform_admins(self, platform_id: int) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -1214,6 +1292,7 @@ class StoreService:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @retry_sqlite
     def list_platform_admins_for_platforms(self, platform_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
         normalized_ids = sorted({int(platform_id) for platform_id in platform_ids if int(platform_id) > 0})
         if not normalized_ids:
@@ -1244,6 +1323,7 @@ class StoreService:
             grouped.setdefault(int(row["platform_id"]), []).append(dict(row))
         return grouped
 
+    @retry_sqlite
     def list_managed_platform_ids(self, user_id: int) -> list[int]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -1252,26 +1332,31 @@ class StoreService:
             ).fetchall()
         return [int(row["platform_id"]) for row in rows]
 
+    @retry_sqlite
     def get_platform_by_key(self, platform_key: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM platforms WHERE platform_key = ?", (platform_key,)).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def get_platform_by_id(self, platform_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM platforms WHERE platform_id = ?", (platform_id,)).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def get_platform_by_secret(self, host_secret: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM platforms WHERE host_secret = ?", (host_secret,)).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def list_platforms(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM platforms ORDER BY platform_id DESC").fetchall()
         return [dict(row) for row in rows]
 
+    @retry_sqlite
     def update_platform_sandbox_image(self, *, platform_id: int, image: str | None) -> dict[str, Any] | None:
         normalized = image.strip() if image else None
         now = utcnow_iso()
@@ -1286,6 +1371,7 @@ class StoreService:
             )
         return self.get_platform_by_id(platform_id)
 
+    @retry_sqlite
     def update_platform_sandbox_proxy_config(
         self,
         *,
@@ -1326,6 +1412,7 @@ class StoreService:
             )
         return self.get_platform_by_id(platform_id)
 
+    @retry_sqlite
     def clear_platform_sandbox_proxy_config(self, *, platform_id: int) -> dict[str, Any] | None:
         now = utcnow_iso()
         with self._connect() as conn:
@@ -1346,6 +1433,7 @@ class StoreService:
             )
         return self.get_platform_by_id(platform_id)
 
+    @retry_sqlite
     def is_platform_admin(self, *, platform_id: int, user_id: int) -> bool:
         with self._connect() as conn:
             row = conn.execute(
@@ -1354,6 +1442,7 @@ class StoreService:
             ).fetchone()
         return row is not None
 
+    @retry_sqlite
     def create_platform_registration_request(
         self,
         *,
@@ -1379,6 +1468,7 @@ class StoreService:
             ).fetchone()
         return self._inflate_platform_request(dict(row)) if row else {}
 
+    @retry_sqlite
     def list_platform_registration_requests(self, *, applicant_user_id: int | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
             if applicant_user_id is None:
@@ -1396,6 +1486,7 @@ class StoreService:
                 ).fetchall()
         return [self._inflate_platform_request(dict(row)) for row in rows]
 
+    @retry_sqlite
     def get_platform_registration_request(self, request_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1404,6 +1495,7 @@ class StoreService:
             ).fetchone()
         return self._inflate_platform_request(dict(row)) if row else None
 
+    @retry_sqlite
     def update_platform_registration_request_status(
         self,
         *,
@@ -1429,16 +1521,19 @@ class StoreService:
             ).fetchone()
         return self._inflate_platform_request(dict(row)) if row else None
 
+    @retry_sqlite
     def get_platform_llm_config(self, platform_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM platform_llm_configs WHERE platform_id = ?", (platform_id,)).fetchone()
         return self._row_to_llm_config(row)
 
+    @retry_sqlite
     def get_platform_prompt_config(self, platform_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM platform_prompt_configs WHERE platform_id = ?", (platform_id,)).fetchone()
         return self._row_to_prompt_config(row)
 
+    @retry_sqlite
     def upsert_platform_prompt_config(
         self,
         *,
@@ -1472,10 +1567,12 @@ class StoreService:
             raise RuntimeError("Failed to save platform prompt config")
         return row
 
+    @retry_sqlite
     def delete_platform_prompt_config(self, platform_id: int) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM platform_prompt_configs WHERE platform_id = ?", (platform_id,))
 
+    @retry_sqlite
     def upsert_platform_llm_config(
         self,
         *,
@@ -1534,15 +1631,18 @@ class StoreService:
             raise RuntimeError("Failed to save platform LLM config")
         return row
 
+    @retry_sqlite
     def delete_platform_llm_config(self, platform_id: int) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM platform_llm_configs WHERE platform_id = ?", (platform_id,))
 
+    @retry_sqlite
     def get_user_llm_config(self, user_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM user_llm_configs WHERE user_id = ?", (user_id,)).fetchone()
         return self._row_to_llm_config(row)
 
+    @retry_sqlite
     def get_embed_user_llm_config(self, platform_id: int, external_user_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1551,6 +1651,7 @@ class StoreService:
             ).fetchone()
         return self._row_to_llm_config(row)
 
+    @retry_sqlite
     def upsert_user_llm_config(
         self,
         *,
@@ -1609,6 +1710,7 @@ class StoreService:
             raise RuntimeError("Failed to save user LLM config")
         return row
 
+    @retry_sqlite
     def upsert_embed_user_llm_config(
         self,
         *,
@@ -1669,10 +1771,12 @@ class StoreService:
             raise RuntimeError("Failed to save embed user LLM config")
         return row
 
+    @retry_sqlite
     def delete_user_llm_config(self, user_id: int) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM user_llm_configs WHERE user_id = ?", (user_id,))
 
+    @retry_sqlite
     def delete_embed_user_llm_config(self, platform_id: int, external_user_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -1680,6 +1784,7 @@ class StoreService:
                 (platform_id, external_user_id),
             )
 
+    @retry_sqlite
     def create_conversation(
         self,
         *,
@@ -1754,6 +1859,7 @@ class StoreService:
                 )
         return dict(row) if row else {}
 
+    @retry_sqlite
     def create_workspace(
         self,
         *,
@@ -1783,6 +1889,7 @@ class StoreService:
             )
         return self.get_workspace(workspace_id) or {}
 
+    @retry_sqlite
     def get_workspace(self, workspace_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1791,6 +1898,7 @@ class StoreService:
             ).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def get_workspace_by_session(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1803,6 +1911,7 @@ class StoreService:
             ).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def get_workspace_member(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -1811,6 +1920,7 @@ class StoreService:
             ).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def attach_workspace_session(
         self,
         *,
@@ -1847,6 +1957,7 @@ class StoreService:
             )
         return self.get_workspace_member(session_id) or {}
 
+    @retry_sqlite
     def update_workspace(
         self,
         workspace_id: str,
@@ -1868,6 +1979,7 @@ class StoreService:
                 )
         return self.get_workspace(workspace_id)
 
+    @retry_sqlite
     def touch_workspace_session(self, session_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -1875,6 +1987,7 @@ class StoreService:
                 (utcnow_iso(), session_id),
             )
 
+    @retry_sqlite
     def list_workspace_members(self, workspace_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -1889,6 +2002,7 @@ class StoreService:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @retry_sqlite
     def count_workspace_members(self, workspace_id: str) -> int:
         with self._connect() as conn:
             row = conn.execute(
@@ -1897,6 +2011,7 @@ class StoreService:
             ).fetchone()
         return int(row["count"])
 
+    @retry_sqlite
     def delete_workspace_session(self, session_id: str) -> bool:
         with self._connect() as conn:
             result = conn.execute(
@@ -1905,6 +2020,7 @@ class StoreService:
             )
             return result.rowcount > 0
 
+    @retry_sqlite
     def workspace_has_active_work(self, workspace_id: str) -> bool:
         with self._connect() as conn:
             run = conn.execute(
@@ -1930,6 +2046,7 @@ class StoreService:
             ).fetchone()
             return subagent is not None
 
+    @retry_sqlite
     def upsert_workspace_migration_journal(
         self,
         *,
@@ -1969,6 +2086,7 @@ class StoreService:
                 ),
             )
 
+    @retry_sqlite
     def list_workspace_migration_journal(self, *, only_pending: bool = False) -> list[dict[str, Any]]:
         with self._connect() as conn:
             if only_pending:
@@ -1981,6 +2099,7 @@ class StoreService:
                 ).fetchall()
         return [dict(row) for row in rows]
 
+    @retry_sqlite
     def mark_workspace_deleted(self, workspace_id: str) -> bool:
         with self._connect() as conn:
             result = conn.execute(
@@ -1989,16 +2108,19 @@ class StoreService:
             )
             return result.rowcount > 0
 
+    @retry_sqlite
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM conversations WHERE conversation_id = ?", (conversation_id,)).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def get_conversation_by_session(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM conversations WHERE session_id = ?", (session_id,)).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def find_host_conversation(
         self,
         *,
@@ -2038,6 +2160,7 @@ class StoreService:
                 ).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def list_conversations_for_user(
         self,
         user_id: int,
@@ -2064,6 +2187,7 @@ class StoreService:
     def list_conversations_for_admin(self, user_id: int) -> list[dict[str, Any]]:
         return self.list_conversations_for_user(user_id)
 
+    @retry_sqlite
     def list_conversations_for_host_user(
         self,
         *,
@@ -2093,11 +2217,13 @@ class StoreService:
             rows = self._execute_conversation_page(conn, clauses, parameters, limit=limit, offset=offset)
         return [dict(row) for row in rows]
 
+    @retry_sqlite
     def list_all_conversations(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM conversations ORDER BY updated_at DESC, created_at DESC").fetchall()
         return [dict(row) for row in rows]
 
+    @retry_sqlite
     def query_audit_conversations(
         self, *, platform_ids: list[int] | None = None, query: str = "",
         sort_by: str = "last_message_at", sort_order: str = "desc",
@@ -2144,6 +2270,7 @@ class StoreService:
             rows = conn.execute(sql, parameters).fetchall()
         return {"items": [dict(row) for row in rows], "total": int(total), "limit": limit, "offset": offset}
 
+    @retry_sqlite
     def list_conversations_for_platform_ids(self, platform_ids: list[int]) -> list[dict[str, Any]]:
         normalized = sorted({int(item) for item in platform_ids})
         if not normalized:
@@ -2160,6 +2287,7 @@ class StoreService:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @retry_sqlite
     def touch_conversation(self, session_id: str, *, title: str | None = None, message_count: int | None = None) -> None:
         current = self.get_conversation_by_session(session_id)
         if current is None:
@@ -2181,6 +2309,7 @@ class StoreService:
                 ),
             )
 
+    @retry_sqlite
     def delete_conversation(self, session_id: str) -> bool:
         with self._connect() as conn:
             conn.execute("""
@@ -2191,6 +2320,7 @@ class StoreService:
             result = conn.execute("DELETE FROM conversations WHERE session_id = ?", (session_id,))
             return result.rowcount > 0
 
+    @retry_sqlite
     def update_conversation_title(self, session_id: str, title: str) -> bool:
         now = utcnow_iso()
         with self._connect() as conn:
@@ -2235,6 +2365,7 @@ class StoreService:
             parameters.extend((max(1, int(limit)), max(0, int(offset))))
         return list(conn.execute(sql, tuple(parameters)).fetchall())
 
+    @retry_sqlite
     def update_conversation(
         self,
         conversation_id: str,
@@ -2280,6 +2411,7 @@ class StoreService:
             )
         return self.get_conversation(conversation_id)
 
+    @retry_sqlite
     def soft_delete_conversation(self, conversation_id: str) -> bool:
         with self._connect() as conn:
             result = conn.execute(
@@ -2292,6 +2424,7 @@ class StoreService:
             )
             return result.rowcount > 0
 
+    @retry_sqlite
     def set_conversation_last_run(self, conversation_id: str, run_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -2299,6 +2432,7 @@ class StoreService:
                 (run_id, conversation_id),
             )
 
+    @retry_sqlite
     def create_agent_run(
         self,
         *,
@@ -2354,6 +2488,7 @@ class StoreService:
                 raise
         return self.get_agent_run(run_id) or {}
 
+    @retry_sqlite
     def recover_interrupted_agent_runs(self) -> int:
         # waiting_input 已完成执行并持久化提问，重启后可继续回答，不属于中断任务。
         active_statuses = ("queued", "running")
@@ -2434,6 +2569,7 @@ class StoreService:
                 )
         return len(rows)
 
+    @retry_sqlite
     def get_active_agent_run_for_session(self, session_id: str) -> dict[str, Any] | None:
         placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
         with self._connect() as conn:
@@ -2448,6 +2584,7 @@ class StoreService:
             ).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def find_agent_run_by_idempotency(self, conversation_id: str, idempotency_key: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -2460,11 +2597,13 @@ class StoreService:
             ).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def get_agent_run(self, run_id: str) -> dict[str, Any] | None:
         with self._connect(independent=True) as conn:
             row = conn.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def cancel_orphan_agent_run(self, run_id: str, *, waiting_only: bool = False) -> dict[str, Any] | None:
         """取消已无内存 worker 的 active run，并原子写入终态事件。"""
         now = utcnow_iso()
@@ -2519,6 +2658,7 @@ class StoreService:
                 )
         return self.get_agent_run(run_id)
 
+    @retry_sqlite
     def find_expired_waiting_agent_runs(self, timeout_seconds: int) -> list[dict[str, Any]]:
         """查找超过等待时限的 waiting_input run，等待起点取最后一次事件时间。"""
         cutoff = (
@@ -2544,6 +2684,7 @@ class StoreService:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @retry_sqlite
     def timeout_waiting_agent_run(self, run_id: str, *, timeout_seconds: int) -> dict[str, Any] | None:
         """将超时等待用户输入的 run 原子收敛为 cancelled。"""
         now = utcnow_iso()
@@ -2603,6 +2744,7 @@ class StoreService:
             )
         return self.get_agent_run(run_id)
 
+    @retry_sqlite
     def resume_waiting_agent_run(self, run_id: str, *, timeout_seconds: int) -> dict[str, Any] | None:
         """原子恢复等待用户输入的 run，避免与超时回收或重复应答竞争。"""
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(1, timeout_seconds))).isoformat()
@@ -2621,6 +2763,7 @@ class StoreService:
                 return None
         return self.get_agent_run(run_id)
 
+    @retry_sqlite
     def fail_agent_run(self, run_id: str, *, message: str, interrupt_point: str = "run_finalize_failed") -> dict[str, Any] | None:
         """兜底收敛 active run，用于正常事件发布失败时的终态保障。"""
         placeholders = ",".join("?" for _ in self.ACTIVE_AGENT_RUN_STATUSES)
@@ -2668,6 +2811,7 @@ class StoreService:
             )
         return self.get_agent_run(run_id)
 
+    @retry_sqlite
     def get_agent_runs(self, run_ids: list[str]) -> list[dict[str, Any]]:
         normalized = [str(item) for item in dict.fromkeys(run_ids) if item]
         if not normalized:
@@ -2680,6 +2824,7 @@ class StoreService:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    @retry_sqlite(reconcile_commit=True)
     def append_agent_run_event(
         self,
         *,
@@ -2691,7 +2836,12 @@ class StoreService:
         result: Any | None = None,
         error: Any | None = None,
     ) -> int:
-        now = utcnow_iso()
+        operation = current_operation()
+        pending = operation.memo if operation is not None else {}
+        if operation is not None and not operation.uncertain_commit:
+            # 已确认回滚时无需保留旧 seq，其他写线程可能已占用该位置。
+            pending.pop("seq", None)
+        now = pending.setdefault("created_at", utcnow_iso())
         payload_json = json.dumps(payload, ensure_ascii=False)
         result_json = json.dumps(result, ensure_ascii=False) if result is not None else None
         error_json = json.dumps(error, ensure_ascii=False) if error is not None else None
@@ -2703,7 +2853,17 @@ class StoreService:
             ).fetchone()
             if row is None:
                 raise ValueError("run does not exist")
-            seq = int(row["event_cursor"]) + 1
+            retrying = "seq" in pending
+            seq = pending.setdefault("seq", int(row["event_cursor"]) + 1)
+            # COMMIT 报错但实际已提交时，确认原事件，不分配新 seq、更不再次发布。
+            existing = conn.execute("SELECT type,payload_json,visibility,created_at FROM run_events WHERE run_id=? AND seq=?",
+                                    (run_id, seq)).fetchone() if retrying else None
+            if existing is not None:
+                if tuple(existing) != (event_type, payload_json, visibility, now):
+                    raise RuntimeError("Run event retry conflicts with a committed event")
+                return seq
+            if int(row["event_cursor"]) != seq - 1:
+                raise RuntimeError("Run event cursor changed during retry")
             conn.execute(
                 """
                 INSERT INTO run_events(run_id, seq, type, payload_json, visibility, created_at)
@@ -2734,6 +2894,7 @@ class StoreService:
             )
         return seq
 
+    @retry_sqlite
     def list_agent_run_events(
         self,
         run_id: str,
@@ -2757,6 +2918,7 @@ class StoreService:
             result.append(item)
         return result
 
+    @retry_sqlite
     def create_subagent(
         self,
         *,
@@ -2793,6 +2955,7 @@ class StoreService:
             )
         return self.get_subagent(subagent_id) or {}
 
+    @retry_sqlite
     def get_subagent(self, subagent_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -2801,6 +2964,7 @@ class StoreService:
             ).fetchone()
         return dict(row) if row else None
 
+    @retry_sqlite
     def update_subagent(
         self,
         subagent_id: str,
@@ -2831,6 +2995,7 @@ class StoreService:
             )
         return self.get_subagent(subagent_id)
 
+    @retry_sqlite
     def set_subagent_latest_run(self, subagent_id: str, latest_run_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -2842,6 +3007,7 @@ class StoreService:
                 (latest_run_id, utcnow_iso(), subagent_id),
             )
 
+    @retry_sqlite
     def mark_subagent_cancel_requested(self, subagent_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             conn.execute(
@@ -2854,6 +3020,7 @@ class StoreService:
             )
         return self.get_subagent(subagent_id)
 
+    @retry_sqlite
     def mark_subagent_destroyed(
         self,
         subagent_id: str,
@@ -2876,6 +3043,7 @@ class StoreService:
             )
         return self.get_subagent(subagent_id)
 
+    @retry_sqlite
     def list_subagents_for_session(self, session_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -2900,6 +3068,7 @@ class StoreService:
     def _row_to_schedule_run(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return dict(row) if row is not None else None
 
+    @retry_sqlite
     def create_schedule_task(self, task: dict[str, Any]) -> dict[str, Any]:
         columns = [
             "task_id", "title", "owner_user_id", "platform_id", "external_user_id",
@@ -2922,6 +3091,7 @@ class StoreService:
             raise RuntimeError("定时任务保存失败")
         return result
 
+    @retry_sqlite
     def get_schedule_task(self, task_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -2929,6 +3099,7 @@ class StoreService:
             ).fetchone()
         return self._row_to_schedule_task(row)
 
+    @retry_sqlite
     def list_schedule_tasks(
         self,
         *,
@@ -2967,6 +3138,7 @@ class StoreService:
             ).fetchall()
         return [self._row_to_schedule_task(row) or {} for row in rows]
 
+    @retry_sqlite
     def count_schedule_tasks(
         self,
         *,
@@ -2993,6 +3165,7 @@ class StoreService:
             ).fetchone()
         return int(row["total"])
 
+    @retry_sqlite
     def update_schedule_task(
         self,
         task_id: str,
@@ -3044,6 +3217,7 @@ class StoreService:
             expected_revision=int(current["revision"]),
         )
 
+    @retry_sqlite
     def materialize_due_schedule_tasks(
         self,
         *,
@@ -3129,6 +3303,7 @@ class StoreService:
                 raise
         return created
 
+    @retry_sqlite
     def create_schedule_run(
         self,
         *,
@@ -3153,6 +3328,7 @@ class StoreService:
             raise RuntimeError("定时任务执行记录保存失败")
         return run
 
+    @retry_sqlite
     def get_schedule_run(self, run_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -3160,6 +3336,7 @@ class StoreService:
             ).fetchone()
         return self._row_to_schedule_run(row)
 
+    @retry_sqlite
     def list_schedule_task_runs(
         self,
         task_id: str,
@@ -3178,6 +3355,7 @@ class StoreService:
             ).fetchall()
         return [self._row_to_schedule_run(row) or {} for row in rows]
 
+    @retry_sqlite
     def claim_next_schedule_run(
         self,
         *,
@@ -3221,6 +3399,7 @@ class StoreService:
         task = self.get_schedule_task(str(run["task_id"]))
         return {**run, "task": task}
 
+    @retry_sqlite
     def finish_schedule_run(
         self,
         run_id: str,
@@ -3310,6 +3489,7 @@ class StoreService:
                 )
         return self.get_schedule_run(run_id)
 
+    @retry_sqlite
     def recover_expired_schedule_run_leases(self) -> int:
         now = utcnow_iso()
         with self._connect() as conn:
@@ -3352,6 +3532,7 @@ class StoreService:
                 )
             return cursor.rowcount
 
+    @retry_sqlite
     def list_destroyed_subagent_ids_for_session(self, session_id: str) -> set[str]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -3363,6 +3544,7 @@ class StoreService:
             ).fetchall()
         return {str(row["subagent_id"]) for row in rows}
 
+    @retry_sqlite
     def backfill_conversation_metadata(self, session_id: str, updates: dict[str, Any]) -> bool:
         """补全会话 metadata 中缺失的字段,已有非空值不会被覆盖。
 
@@ -3387,6 +3569,7 @@ class StoreService:
             )
         return True
 
+    @retry_sqlite
     def get_workspace_runtime(self, workspace_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -3407,6 +3590,7 @@ class StoreService:
             ).fetchone()
         return self._row_to_workspace_runtime(row)
 
+    @retry_sqlite
     def list_workspace_runtimes(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -3426,6 +3610,7 @@ class StoreService:
             ).fetchall()
         return [self._row_to_workspace_runtime(row) for row in rows if row is not None]
 
+    @retry_sqlite
     def get_system_audit_overview(self) -> dict[str, Any]:
         with self._connect() as conn:
             platform_rows = conn.execute(
@@ -3565,6 +3750,7 @@ class StoreService:
             "platforms": platforms,
         }
 
+    @retry_sqlite
     def get_audit_trends(self, days: int = 30, platform_id: int | None = None, breakdown: bool = False) -> dict[str, Any]:
         """按天聚合审计趋势:日增用户/会话/消息 + 累计曲线。
 
@@ -3677,6 +3863,7 @@ class StoreService:
             result["platform_series"] = self._audit_platform_series(conn_days=days, start_iso=start_iso, start_date=start_date)
         return result
 
+    @retry_sqlite
     def _audit_platform_series(self, *, conn_days: int, start_iso: str, start_date) -> list[dict[str, Any]]:
         """按平台 × 天聚合会话/消息/用户(当日活跃去重),并逐日累计算累计值。"""
         with self._connect() as conn:
@@ -3730,6 +3917,7 @@ class StoreService:
         series.sort(key=lambda item: -item["points"][-1]["total_messages"])
         return series
 
+    @retry_sqlite
     def upsert_workspace_runtime(
         self,
         *,
@@ -3827,6 +4015,7 @@ class StoreService:
             raise RuntimeError("Failed to persist workspace runtime")
         return runtime
 
+    @retry_sqlite
     def delete_workspace_runtime(self, workspace_id: str) -> bool:
         with self._connect() as conn:
             result = conn.execute("DELETE FROM workspace_runtimes WHERE workspace_id = ?", (workspace_id,))

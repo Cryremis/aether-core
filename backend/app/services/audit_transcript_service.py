@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.services.context.history_store import history_store
 from app.services.session_identity import identity_updates
 from app.services.session_service import session_service
+from app.services.sqlite_resilience import retry_sqlite
 from app.services.store import store_service
 from app.services.transcript_service import transcript_service
 
@@ -47,6 +48,7 @@ class AuditTranscriptService:
         ]).encode()).hexdigest()
         return key, metadata
 
+    @retry_sqlite
     def _bootstrap_source(self, conversation: dict[str, Any]) -> None:
         session_id = conversation["session_id"]
         payload = history_store.snapshot(session_id)
@@ -78,6 +80,7 @@ class AuditTranscriptService:
         return {"transcript": [history_store._decode(row["payload"]) for row in rows],
                 "transcript_page": {"total": total, "start": start, "end": end, "has_more": start > 0}}
 
+    @retry_sqlite
     def _cached_page(self, conversation: dict[str, Any], *, limit: int, before: int | None):
         session_id = conversation["session_id"]
         with store_service._connect() as conn:
@@ -92,6 +95,7 @@ class AuditTranscriptService:
             page = self._page(conn, session_id, source_key, limit=limit, before=before)
             return source, {**page, "metadata": metadata} if page is not None else None
 
+    @retry_sqlite
     def read_page(self, conversation: dict[str, Any], *, limit: int, before: int | None = None) -> dict[str, Any]:
         session_id = conversation["session_id"]
         with store_service._connect() as conn:
