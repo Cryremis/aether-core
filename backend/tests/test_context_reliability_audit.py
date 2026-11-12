@@ -237,6 +237,7 @@ def test_summary_uses_single_bounded_request_independent_of_output_schema(monkey
         assert config.extra_body["max_completion_tokens"] == config.sampling["max_output_tokens"]
         assert not tools
         assert config.sampling.get("stop") is None
+        assert config.sampling.get("reasoning_effort") is None
         assert len(messages[1]["content"]) < 1000
         return {"content": labels}
 
@@ -246,6 +247,34 @@ def test_summary_uses_single_bounded_request_independent_of_output_schema(monkey
     assert all(label in result for label in ("【目标】", "【待办与疑问】"))
     assert len(result) < 300
     assert len(seen) == 1
+
+
+@pytest.mark.parametrize(("api_format", "extra_body", "expected"), [
+    ("openai-compatible", {"chat_template_kwargs": {"enable_thinking": True}},
+     {"chat_template_kwargs": {"enable_thinking": True}}),
+    ("openai-responses", {"reasoning": {"effort": "high"}},
+     {"reasoning": {"effort": "high"}}),
+    ("anthropic-messages", {"thinking": {"type": "adaptive"}, "output_config": {
+        "effort": "high", "format": {"type": "json_schema", "schema": {"type": "object"}}}},
+     {"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}}),
+])
+def test_summary_preserves_provider_thinking_parameters(monkeypatch, api_format, extra_body, expected):
+    from app.services.context.summarizer import compaction_summarizer
+    from app.services.llm_client import llm_client
+
+    requests = []
+
+    async def summarize(config, messages, tools):
+        payload, _ = llm_client.compile_request(config, messages, tools, stream=False)
+        requests.append(payload)
+        return {"content": "【目标】任务【约束与事实】事实【已完成与证据】完成【待办与疑问】待办"}
+
+    monkeypatch.setattr(llm_client, "create_chat_completion", summarize)
+    config = replace(make_runtime_config(extra_body=extra_body), api_format=api_format)
+    if api_format == "openai-compatible":
+        config = replace(config, model="deepseek-v4.1-flash")
+    asyncio.run(compaction_summarizer.summarize([{"role": "user", "content": "任务"}], config))
+    assert {key: requests[0].get(key) for key in expected} == expected
 
 
 def test_compaction_does_not_reintroduce_filtered_subagent_data(monkeypatch, checkpoint_model):
@@ -425,8 +454,8 @@ def test_summary_requests_are_traced_but_never_recovered_as_conversation(monkeyp
                      trace_context={"session_id": "summary_trace", "purpose": "compaction"})
     assert asyncio.run(compaction_summarizer.summarize([{"role": "user", "content": "task"}], config)) == labels
     assert FakeAsyncClient.post_payloads[0]["max_tokens"] == 32000
-    assert FakeAsyncClient.post_payloads[0]["thinking"] == {"type": "disabled"}
-    assert "reasoning_effort" not in FakeAsyncClient.post_payloads[0]
+    assert FakeAsyncClient.post_payloads[0]["thinking"] == {"type": "enabled"}
+    assert FakeAsyncClient.post_payloads[0]["reasoning_effort"] == "high"
     with store_service._connect() as conn:
         row = conn.execute("SELECT manifest,response FROM context_attempts WHERE session_id='summary_trace'").fetchone()
         assert json.loads(row["manifest"])["purpose"] == "compaction"

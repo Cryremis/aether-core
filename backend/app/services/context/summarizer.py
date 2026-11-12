@@ -10,7 +10,7 @@ import httpx
 
 from app.core.model_errors import ModelOutputLimitError, ModelStreamError, retryable_model_error
 from app.services.context.context_budget import calibrated_tokens, input_budget
-from app.services.context.model_profile import deployment_profile, recover_optional_parameter, resolve_model_profile
+from app.services.context.model_profile import deployment_profile, recover_optional_parameter
 from app.services.context.token_estimation import TokenEstimator
 
 
@@ -27,20 +27,14 @@ class CompactionSummarizer:
         excluded = {"tools", "tool_stream", "max_tokens", "max_output_tokens", "max_completion_tokens",
                     "response_format", "text", "instructions", "system", "stop", "stop_token_ids",
                     "guided_json", "guided_regex", "guided_grammar", "structured_outputs", "prediction",
-                    "reasoning", "reasoning_effort", "thinking", "output_config", "stream_options"}
+                    "stream_options"}
         options = {key: value for key, value in runtime.extra_body.items() if key not in excluded}
-        profile = resolve_model_profile(runtime)
-        effort = None
-        if runtime.api_format == "openai-compatible" and profile.profile_id == "deepseek-thinking/v1":
-            if deployment_profile(runtime).get("service_kind") in {"vllm", "sglang"} or "chat_template_kwargs" in options:
-                options["chat_template_kwargs"] = {**options.get("chat_template_kwargs", {}), "enable_thinking": False}
-            else:
-                options["thinking"] = {"type": "disabled"}
-        elif runtime.api_format == "anthropic-messages":
-            options["thinking"] = {"type": "disabled"}
-        elif profile.effort_options or runtime.reasoning_effort_options:
-            efforts = profile.effort_options or runtime.reasoning_effort_options
-            effort = next((item for item in ("none", "minimal", "low") if item in efforts), None)
+        # 摘要要求 Markdown 正文，沿用部署的思考配置，只移除原任务的结构化格式。
+        if isinstance(options.get("output_config"), dict):
+            output_config = {key: value for key, value in options.pop("output_config").items() if key != "format"}
+            if output_config:
+                options["output_config"] = output_config
+        sampling = {**runtime.sampling, "stop": None, "parallel_tool_calls": None}
         window = llm_client.context_window(runtime)
         deployment_max = deployment_profile(runtime).get("max_output_tokens") or runtime.discovered_output_limit
         maximum = min(deployment_max or llm_client.output_limit(runtime), window - 4_256)
@@ -68,8 +62,7 @@ class CompactionSummarizer:
                 request_options["max_completion_tokens"] = output
             config = replace(runtime, extra_body=request_options, token_calibration_factor=calibration,
                 trace_context={**runtime.trace_context, "summary_attempt": attempt + 1},
-                sampling={**runtime.sampling, "reasoning_effort": effort, "max_output_tokens": output,
-                          "stop": None, "parallel_tool_calls": None})
+                sampling={**sampling, "max_output_tokens": output})
             budget = min(16_000, output * 2, input_budget(window, output)) // fraction
             selected, estimated = [], estimator.rough_token_count(system) + 128
             for line in lines:
@@ -101,7 +94,8 @@ class CompactionSummarizer:
             except httpx.HTTPStatusError as exc:
                 negotiated = recover_optional_parameter(config, str(exc)) if exc.response.status_code in {400, 422} else None
                 if negotiated:
-                    effort = None
+                    negotiated_config, _ = negotiated
+                    sampling, options = negotiated_config.sampling, negotiated_config.extra_body
                 elif attempt == 0 and retryable_model_error(exc):
                     code = "COMPACTION_SUMMARY_UNAVAILABLE"
                 else:

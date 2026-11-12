@@ -253,8 +253,9 @@ def test_manual_compact_recovers_reasoning_only_length_or_aborts(monkeypatch, tm
     from app.services.llm_client import llm_client
 
     initialize_store(tmp_path)
-    config = replace(make_runtime_config(), model="deepseek-v4.1-flash", sampling={
+    config = replace(make_runtime_config(extra_body={"thinking": {"type": "enabled"}}), model="deepseek-v4.1-flash", sampling={
         "context_window": 409600, "max_output_tokens": 32000,
+        "reasoning_effort": "high",
         "compaction_max_output_tokens": 8192,
         "deployment_profile": {"max_output_tokens": 32000},
     })
@@ -293,7 +294,8 @@ def test_manual_compact_recovers_reasoning_only_length_or_aborts(monkeypatch, tm
         assert output_limits == [8192]
     else:
         assert output_limits == [8192, 16384, 16384]
-        assert all(payload["thinking"] == {"type": "disabled"} for payload in FakeAsyncClient.post_payloads)
+        assert all(payload["thinking"] == {"type": "enabled"} and payload["reasoning_effort"] == "high"
+                   for payload in FakeAsyncClient.post_payloads)
         payload = next(event["payload"] for event in events if event["type"] == "context_compacted")
         assert payload["error_code"] == "COMPACTION_OUTPUT_TRUNCATED"
         assert payload["tokens_after"] <= tail_tokens + 450
